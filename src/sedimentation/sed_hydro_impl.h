@@ -54,10 +54,11 @@ inline DISPATCH_MACRO void sedimentation_donor_impl(
   T ke = T(0.5) * (w[IVX * ncells + cell] * v1 + w[IVY * ncells + cell] * v2 +
                    w[IVZ * ncells + cell] * v3);
 
-  T eta = (T(5) / T(16)) * sqrt(pi * kboltz) * sqrt(gas_mass) * sqrt(temp) *
-          pow(kboltz / gas_epsilon_lj * temp, T(0.16)) /
-          (pi * gas_diameter * gas_diameter * T(1.22));
-  T lambda = (eta * sqrt(pi * kboltz * temp)) / (pres * sqrt(T(2) * gas_mass));
+  // eta and lambda are computed on the Stokes branch only, once per cell
+  T eta = T(0), lambda = T(0);
+  bool have_eta = false;
+  // with these, a Stokes vsed has the sign of its drive term (or is NaN)
+  bool drive_sign = pres > T(0) && temp > T(0) && !(upper_limit < T(0));
 
   for (int p = 0; p < nparticle; ++p) {
     int hydro_id = static_cast<int>(hydro_ids[p]);
@@ -70,9 +71,22 @@ inline DISPATCH_MACRO void sedimentation_donor_impl(
       vsed = const_vsed[p];
     } else {
       T r = radius[p];
+      T drive = T(2) * r * r * grav * (density[p] - rho);
+      // skip a particle moving away from this face before evaluating its vsed
+      if (drive_sign && r > T(0) &&
+          (rising ? !(drive > T(0)) : !(drive < T(0))))
+        continue;
+      if (!have_eta) {
+        eta = (T(5) / T(16)) * sqrt(pi * kboltz) * sqrt(gas_mass) * sqrt(temp) *
+              pow(kboltz / gas_epsilon_lj * temp, T(0.16)) /
+              (pi * gas_diameter * gas_diameter * T(1.22));
+        lambda =
+            (eta * sqrt(pi * kboltz * temp)) / (pres * sqrt(T(2) * gas_mass));
+        have_eta = true;
+      }
       T kn = lambda / r;
       T beta = T(1) + kn * (T(1.256) + T(0.4) * exp(-T(1.1) / kn));
-      vsed = beta / (T(9) * eta) * (T(2) * r * r * grav * (density[p] - rho));
+      vsed = beta / (T(9) * eta) * drive;
     }
     if (vsed < -upper_limit) vsed = -upper_limit;
     if (vsed > upper_limit) vsed = upper_limit;
