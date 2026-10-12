@@ -422,21 +422,55 @@ torch::Tensor CoordinateImpl::center_distance3() const {
   return dx3v.unsqueeze(1).unsqueeze(2);
 }
 
+// grid-only geometry is built once and rebuilt only when its inputs change
+torch::Tensor CoordinateImpl::cached_geometry_(
+    GeomCache& c, std::function<torch::Tensor()> const& build) const {
+  auto version = [](torch::Tensor const& t) {
+    return t.is_inference() ? int64_t(0) : int64_t(t._version());
+  };
+  // same dx1f/dx2f/dx3f objects, device, dtype and versions; value unedited
+  if (!c.value.defined() || c.device != dx1f.device() ||
+      c.dtype != dx1f.scalar_type() || !c.dx1.is_same(dx1f) ||
+      !c.dx2.is_same(dx2f) || !c.dx3.is_same(dx3f) || c.v1 != version(dx1f) ||
+      c.v2 != version(dx2f) || c.v3 != version(dx3f) ||
+      c.vv != version(c.value)) {
+    c.value = build();
+    c.device = dx1f.device();
+    c.dtype = dx1f.scalar_type();
+    c.dx1 = dx1f;
+    c.dx2 = dx2f;
+    c.dx3 = dx3f;
+    c.v1 = version(dx1f);
+    c.v2 = version(dx2f);
+    c.v3 = version(dx3f);
+    c.vv = version(c.value);
+  }
+  return c.value;
+}
+
 torch::Tensor CoordinateImpl::face_area1() const {
-  return dx3f.outer(dx2f).unsqueeze(2).expand({-1, -1, x1f.size(0)});
+  return cached_geometry_(_area1_cache, [&] {
+    return dx3f.outer(dx2f).unsqueeze(2).expand({-1, -1, x1f.size(0)});
+  });
 }
 
 torch::Tensor CoordinateImpl::face_area2() const {
-  return dx3f.outer(dx1f).unsqueeze(1).expand({-1, x2f.size(0), -1});
+  return cached_geometry_(_area2_cache, [&] {
+    return dx3f.outer(dx1f).unsqueeze(1).expand({-1, x2f.size(0), -1});
+  });
 }
 
 torch::Tensor CoordinateImpl::face_area3() const {
-  return dx2f.outer(dx1f).unsqueeze(0).expand({x3f.size(0), -1, -1});
+  return cached_geometry_(_area3_cache, [&] {
+    return dx2f.outer(dx1f).unsqueeze(0).expand({x3f.size(0), -1, -1});
+  });
 }
 
 torch::Tensor CoordinateImpl::cell_volume() const {
-  return torch::einsum("km,mji->kji",
-                       {dx3f.unsqueeze(1), dx2f.outer(dx1f).unsqueeze(0)});
+  return cached_geometry_(_vol_cache, [&] {
+    return torch::einsum("km,mji->kji",
+                         {dx3f.unsqueeze(1), dx2f.outer(dx1f).unsqueeze(0)});
+  });
 }
 
 torch::Tensor CoordinateImpl::face_moment2_x1() const {
