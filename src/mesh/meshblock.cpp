@@ -757,7 +757,10 @@ void MeshBlockImpl::advance_local(Variables &vars, double dt, int stage) {
 
   // -------- (4) multi-stage averaging --------
   hydro_u.set_(pintg->forward(stage, _hydro_u0, hydro_u, fut_hydro_du));
-  phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
+  // skipped dry and scalar-free before the last stage: next U->W applies it
+  if (hydro_u.size(0) > ICY || pscalar->nvar() > 0 ||
+      stage + 1 == static_cast<int>(pintg->stages.size()))
+    phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
 
   if (options->verbose()) {
     auto end = std::chrono::high_resolution_clock::now();
