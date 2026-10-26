@@ -195,8 +195,9 @@ void vic_redistribute_cuda(at::TensorIterator &iter, double /*dt*/,
 
     // Component B: the constituent column pass is serial per column (prefix sum
     // + sequential availability clamp); one thread per column, matching the
-    // ForwardSweep pattern. Writes only mass_fix, so the cell-parallel
-    // redistribution below stays race-free.
+    // ForwardSweep pattern. Writes only mass_fix and, for the partial matrix,
+    // the tangential momenta of du, which the cell-parallel redistribution
+    // below does not touch for N == 3, so it stays race-free.
     at::native::launch_legacy_kernel<128, 1>(ncol, [=] __device__(int col) {
       auto offsets = offset_calc.get(col);
       auto du = reinterpret_cast<scalar_t *>(data[0] + offsets[0]);
@@ -216,6 +217,11 @@ void vic_redistribute_cuda(at::TensorIterator &iter, double /*dt*/,
         vic_constituent_column<scalar_t, N>(
             du + lo * stride2, w + lo * stride2, mass_fix + lo * stride2,
             delta + lo, vol + lo * stride2, hi - lo, dir, ny, stride1, stride2);
+        if constexpr (N == 3)
+          vic_tangential_momentum_column(du + lo * stride2, w + lo * stride2,
+                                         mass_fix + lo * stride2,
+                                         vol + lo * stride2, hi - lo, dir,
+                                         stride1, stride2);
         lo = hi;
       }
     });

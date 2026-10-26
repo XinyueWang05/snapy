@@ -207,6 +207,11 @@ void vic_redistribute_cpu(at::TensorIterator& iter, double /*dt*/,
                   du + lo * stride2, w + lo * stride2, mass_fix + lo * stride2,
                   delta + lo, vol + lo * stride2, hi - lo, dir, ny, stride1,
                   stride2);
+              if constexpr (N == 3)
+                vic_tangential_momentum_column(
+                    du + lo * stride2, w + lo * stride2,
+                    mass_fix + lo * stride2, vol + lo * stride2, hi - lo, dir,
+                    stride1, stride2);
               for (int i = lo; i < hi; ++i)
                 vic_redistribute_cell(du, mass_fix, delta, i, dir, ny, stride1,
                                       stride2);
