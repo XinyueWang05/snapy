@@ -160,6 +160,31 @@ void DISPATCH_MACRO vic_constituent_column(T* du, T* w, T* mass_fix,
   }
 }
 
+// Partial matrix only (N == 3): the solve has no tangential-momentum rows, so
+// the face mass transfers of vic_constituent_column would otherwise move mass
+// without its tangential momentum and change the tangential velocity of both
+// cells. Carry it along at the donor (upwind) cell's velocity: every face's
+// momentum leaves one cell and enters its neighbour, so the column sum of
+// each tangential momentum is unchanged. Reads the TOTAL clamped transfer
+// MASS(IVX+(dir+2)%3, i+1) of the face between cells i and i+1; must run
+// after vic_constituent_column. A zero transfer leaves DU untouched (bitwise).
+template <typename T>
+void DISPATCH_MACRO vic_tangential_momentum_column(T* du, T* w, T* mass_fix,
+                                                   T* vol, int nlayer, int dir,
+                                                   int stride1, int stride2) {
+  for (int i = 0; i + 1 < nlayer; ++i) {
+    T q = MASS(IVX + (dir + 2) % 3, i + 1);
+    int donor = q > 0 ? i : i + 1;
+    for (int t = 1; t < 3; ++t) {
+      int m = IVX + (dir + t) % 3;
+      T p = q * W(m, donor);
+      if (p == 0) continue;
+      DU(m, i) -= p / VOL(i);
+      DU(m, i + 1) += p / VOL(i + 1);
+    }
+  }
+}
+
 // Per-cell MS-VIC redistribution map. Reads delta and the precomputed
 // constituent increments from mass_fix, then writes the final tendencies DU.
 template <typename T, int N>

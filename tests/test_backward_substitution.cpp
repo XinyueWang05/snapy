@@ -305,6 +305,68 @@ TEST(vic_redistribution, a_drained_float_species_donor_stays_non_negative) {
   drain_a_species_donor<float>();
 }
 
+// Partial matrix: the face mass transfers carry the donor cell's tangential
+// momentum, so a uniform tangential wind stays uniform and the column sum of
+// each tangential momentum is unchanged; a wind-free column is untouched.
+TEST(vic_redistribution, tangential_momentum_follows_the_face_mass) {
+  constexpr int nlayer = 4;
+  constexpr int ny = 0;
+  constexpr int nhydro = snap::ICY;
+  constexpr int stride1 = nlayer;
+  constexpr int stride2 = 1;
+  double const v2 = 400., v3 = -30.;
+
+  for (bool wind : {true, false}) {
+    std::vector<double> du(nhydro * nlayer, 0.);
+    std::vector<double> w(nhydro * nlayer, 0.);
+    std::vector<double> vol = {1.0, 2.0, 1.5, 0.5};
+    std::vector<double> rho = {3.0, 2.5, 4.0, 1.8};
+    std::vector<double> corr = {0.4, -0.2, 0.1, -0.3};
+    std::vector<double> mass_fix(nhydro * nlayer, 0.);
+    std::vector<Eigen::Matrix<double, 3, 1>> delta(nlayer);
+    for (int i = 0; i < nlayer; ++i) {
+      w[snap::IDN * stride1 + i] = rho[i];
+      w[snap::IVY * stride1 + i] = wind ? v2 : 0.;
+      w[snap::IVZ * stride1 + i] = wind ? v3 : 0.;
+      du[snap::IVY * stride1 + i] = -0.;  // a signed zero must survive
+      delta[i] << corr[i], 0., 0.;
+    }
+
+    auto original = du;
+    snap::vic_constituent_column<double, 3>(
+        du.data(), w.data(), mass_fix.data(), delta.data(), vol.data(), nlayer,
+        0, ny, stride1, stride2);
+    snap::vic_tangential_momentum_column(du.data(), w.data(), mass_fix.data(),
+                                         vol.data(), nlayer, 0, stride1,
+                                         stride2);
+    for (int i = 0; i < nlayer; ++i)
+      snap::vic_redistribute_cell<double, 3>(du.data(), mass_fix.data(),
+                                             delta.data(), i, 0, ny, stride1,
+                                             stride2);
+
+    if (!wind) {
+      for (int n : {snap::IVY, snap::IVZ})
+        for (int i = 0; i < nlayer; ++i) {
+          EXPECT_EQ(du[n * stride1 + i], original[n * stride1 + i]);
+          EXPECT_EQ(std::signbit(du[n * stride1 + i]),
+                    std::signbit(original[n * stride1 + i]));
+        }
+      continue;
+    }
+    for (int n : {snap::IVY, snap::IVZ})
+      EXPECT_NEAR(column_integral(du, vol, n, stride1, 0, nlayer - 1), 0.,
+                  1.e-12);
+    for (int i = 0; i < nlayer; ++i) {
+      double rho1 = rho[i] + du[snap::IDN * stride1 + i];
+      EXPECT_NE(du[snap::IDN * stride1 + i], 0.);
+      EXPECT_NEAR((rho[i] * v2 + du[snap::IVY * stride1 + i]) / rho1, v2,
+                  1.e-12);
+      EXPECT_NEAR((rho[i] * v3 + du[snap::IVZ * stride1 + i]) / rho1, v3,
+                  1.e-12);
+    }
+  }
+}
+
 TEST(implicit_options, parses_implicit_scheme_bits) {
   auto partial = snap::ImplicitOptionsImpl::from_yaml(YAML::Load("1"));
   ASSERT_TRUE(partial);
