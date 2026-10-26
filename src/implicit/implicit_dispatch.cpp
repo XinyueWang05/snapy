@@ -34,10 +34,13 @@ void vic_assemble_partial_cpu(at::TensorIterator& iter, double dt, double grav,
     bool last_block = true;
 
     using Matrix = Eigen::Matrix<scalar_t, 3, 3>;
+    using Vector = Eigen::Matrix<scalar_t, 3, 1>;
 
     iter.for_each(
         [&](char** data, const int64_t* strides, int64_t n) {
           for (int64_t col = 0; col < n; ++col) {
+            auto du = reinterpret_cast<scalar_t*>(data[0] + col * strides[0]);
+            auto delta = reinterpret_cast<Vector*>(data[9] + col * strides[9]);
             auto w = reinterpret_cast<scalar_t*>(data[2] + col * strides[2]);
             auto gamma =
                 reinterpret_cast<scalar_t*>(data[3] + col * strides[3]);
@@ -59,6 +62,7 @@ void vic_assemble_partial_cpu(at::TensorIterator& iter, double dt, double grav,
                 a[i] /= dt;
                 b[i].setZero();
                 c[i].setZero();
+                delta[i].setZero();  // no m_t right-hand-side correction
                 continue;
               }
               bool lower = i > 0 && solid[(i - 1) * stride2] != 0;
@@ -66,7 +70,7 @@ void vic_assemble_partial_cpu(at::TensorIterator& iter, double dt, double grav,
               vic_assemble_partial_impl(a, b, c, w, gamma, area, vol, work_lo,
                                         work_hi, i, 0, nlayer - 1, dt, grav,
                                         dir, ny, stride1, stride2, first_block,
-                                        last_block, lower, upper);
+                                        last_block, lower, upper, du, delta);
             }
           }
         },
@@ -156,8 +160,10 @@ void vic_solve_cpu(at::TensorIterator& iter, double dt, double grav, int dir) {
             auto c = reinterpret_cast<Matrix*>(data[8] + col * strides[8]);
             auto delta = reinterpret_cast<Vector*>(data[9] + col * strides[9]);
 
+            // partial: delta holds the assembly's m_t right-hand-side term
             if (!ForwardSweep(a, b, c, delta, du, dt, 0, nlayer - 1, dir, ny,
-                              stride1, stride2, first_block, last_block))
+                              stride1, stride2, first_block, last_block,
+                              N == 3))
               continue;
             vic_backward_substitute(a, delta, 0, nlayer - 1);
           }

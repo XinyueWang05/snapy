@@ -44,6 +44,7 @@ void vic_assemble_partial_cuda(at::TensorIterator &iter, double dt, double grav,
     bool last_block = true;
 
     using Matrix = Eigen::Matrix<scalar_t, 3, 3>;
+    using Vector = Eigen::Matrix<scalar_t, 3, 1>;
 
     int64_t ncol = iter.numel();
     auto offset_calc = ::make_offset_calculator<13>(iter);
@@ -55,6 +56,8 @@ void vic_assemble_partial_cuda(at::TensorIterator &iter, double dt, double grav,
       int col = idx / nlayer;
       int i = idx % nlayer;
       auto offsets = offset_calc.get(col);
+      auto du = reinterpret_cast<scalar_t *>(data[0] + offsets[0]);
+      auto delta = reinterpret_cast<Vector *>(data[9] + offsets[9]);
       auto w = reinterpret_cast<scalar_t *>(data[2] + offsets[2]);
       auto gamma = reinterpret_cast<scalar_t *>(data[3] + offsets[3]);
       auto area = reinterpret_cast<scalar_t *>(data[4] + offsets[4]);
@@ -70,6 +73,7 @@ void vic_assemble_partial_cuda(at::TensorIterator &iter, double dt, double grav,
         a[i] /= dt;
         b[i].setZero();
         c[i].setZero();
+        delta[i].setZero();  // no m_t right-hand-side correction
         return;
       }
       bool lower = i > 0 && solid[(i - 1) * stride2] != 0;
@@ -77,7 +81,8 @@ void vic_assemble_partial_cuda(at::TensorIterator &iter, double dt, double grav,
 
       vic_assemble_partial_impl(a, b, c, w, gamma, area, vol, work_lo, work_hi,
                                 i, 0, nlayer - 1, dt, grav, dir, ny, stride1,
-                                stride2, first_block, last_block, lower, upper);
+                                stride2, first_block, last_block, lower, upper,
+                                du, delta);
     });
   });
 }
@@ -162,8 +167,9 @@ void vic_solve_cuda(at::TensorIterator &iter, double dt, double grav, int dir) {
           auto c = reinterpret_cast<Matrix *>(data[8] + strides[8]);
           auto delta = reinterpret_cast<Vector *>(data[9] + strides[9]);
 
+          // partial: delta holds the assembly's m_t right-hand-side term
           if (!ForwardSweep(a, b, c, delta, du, dt, 0, nlayer - 1, dir, ny,
-                            stride1, stride2, first_block, last_block))
+                            stride1, stride2, first_block, last_block, N == 3))
             return;
           vic_backward_substitute(a, delta, 0, nlayer - 1);
         });
