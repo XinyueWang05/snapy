@@ -1,0 +1,2 @@
+arm,solver,u,dx_km,T0,mach,u_over_dx,rms_w_0d,rms_w_1d,rms_w_2d,rms_w_3d,max_w,growth_per_s,efold_h,growth_window_d,growth_factor,lambda_dx,lambda_dx_d1,level_km,t_last_d,status,wall_s_per_model_h
+lmars_u400_dx5,lmars,400.0,5.0,100.0,0.5388476977004467,0.08,0.0,0.02630312,8.348014,5.341898,78.82872,0.00011281429230722021,2.462256972027291,0.25-1.75,1001220.486890179,21.333333333333332,12.8,249.75,3.0,completed,157.70747222834163

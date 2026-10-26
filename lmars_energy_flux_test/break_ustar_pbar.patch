@@ -1,0 +1,42 @@
+From 6bc5eda8f777e3c123b8017bb9d56e255dd03aad Mon Sep 17 00:00:00 2001
+From: Xinyue Wang <xinyuewa@umich.edu>
+Date: Sun, 25 Oct 2026 20:47:27 -0400
+Subject: [PATCH] lmars break test: energy-flux pressure work u* pbar (not
+ upwind p)
+
+Diagnostic only, not a proposed fix: replaces F_E = u* (rho h)_upwind at
+lmars_impl.h:61/76 by u* (rho e + rho K)_upwind + u* pbar, the same face
+pressure the normal-momentum flux uses (:58/:73).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/riemann/lmars_impl.h | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/riemann/lmars_impl.h b/src/riemann/lmars_impl.h
+index 144d144..a04df4d 100644
+--- a/src/riemann/lmars_impl.h
++++ b/src/riemann/lmars_impl.h
+@@ -58,7 +58,8 @@ void DISPATCH_MACRO lmars_impl(T *flx, T *wl, T *wr, T hl, T hr, T gammal,
+     FLX(ivx) = ubar * wli[IDN] * wli[IVX] + pbar;
+     FLX(ivy) = ubar * wli[IDN] * wli[IVY];
+     FLX(ivz) = ubar * wli[IDN] * wli[IVZ];
+-    FLX(IPR) = ubar * wli[IDN] * hl;
++    // break test: consistent pressure work u* pbar, as in the momentum flux
++    FLX(IPR) = ubar * (wli[IDN] * hl - wli[IPR]) + ubar * pbar;
+   } else {
+     // Right side flux
+     for (int n = 0; n < ny; n++) {
+@@ -73,7 +74,8 @@ void DISPATCH_MACRO lmars_impl(T *flx, T *wl, T *wr, T hl, T hr, T gammal,
+     FLX(ivx) = ubar * wri[IDN] * wri[IVX] + pbar;
+     FLX(ivy) = ubar * wri[IDN] * wri[IVY];
+     FLX(ivz) = ubar * wri[IDN] * wri[IVZ];
+-    FLX(IPR) = ubar * wri[IDN] * hr;
++    // break test: consistent pressure work u* pbar, as in the momentum flux
++    FLX(IPR) = ubar * (wri[IDN] * hr - wri[IPR]) + ubar * pbar;
+   }
+ }
+ 
+-- 
+2.52.0
+
