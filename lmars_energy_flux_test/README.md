@@ -132,3 +132,71 @@ scheme under strong horizontal wind, not to the LMARS energy flux. The modes
 are smooth, 9-13 dx at 1 d, not few-dx. Because the brief made the growth-rate
 figure conditional on the pressure-work term being the cause, the png is not
 committed here; `plot_growth.py` regenerates it.
+
+## Courant-number analysis (follow-up, Xi ts 1792989268)
+
+No new runs; `courant.py` re-fits the same arms. For each arm: dt is
+`dt_max` from summary.json, the step of the unperturbed flow; it equals
+cfl*dx/(|u|+c_s) (horizontal acoustic CFL; the vertical is implicit). Courant
+numbers are u*dt/dx and c_s*dt/dz with c_s = 742.3 m/s, dz = 4.5 km
+(100 K) and c_s = 2875.0 m/s, dz = 25.7 km (1500 K). Rate: ln(rms w) fit in
+1/day. Growing arms are fitted from the minimum after 6 h to the first sample
+two decades below saturation. Others are fitted over 1-3 d (0.25-1 d for the
+1-day diagnostics) and labelled 'decays' (R^2 >= 0.5) or 'no trend'.
+
+```bash
+$PYTHON $T/courant.py runs $T/results/courant.md $T/results/courant.csv \
+  matrix hj break hj_break diag_scheme0 hj_diag_scheme0
+$PYTHON $T/courant.py runs $T/results/courant_gates.md $T/results/courant_gates.csv gate hj_gate
+$PYTHON $T/plot_courant.py $T/results/courant.csv $T/results/growth_vs_courant.png
+```
+
+Because dt = cfl*dx/(|u|+c_s), u*dt/dx = cfl*M/(1+M) depends only on the Mach
+number, and c_s*dt/dz = cfl*(dx/dz)/(1+M) scales with dx. In these arms dx
+and c_s*dt/dz therefore cannot be separated; a dt ladder at fixed dx can.
+
+Growing arms (all others: decay or no trend, -2.9 to +0.01 /day):
+
+| deck | u | dx km | Mach | dt s | u dt/dx | c_s dt/dz | lmars /day (R^2) | hllc /day (R^2) | lambda/dx 1 d |
+|---|---|---|---|---|---|---|---|---|---|
+| 100 K | 250 | 5 | 0.34 | 1.51 | 0.076 | 0.25 | 5.17 (0.997) | 5.18 (0.997) | 12.8 |
+| 100 K | 400 | 5 | 0.54 | 1.31 | 0.105 | 0.22 | 10.6 (0.994) | 10.4 (0.995) | 12.8 |
+| 1500 K | 3000 | 100 | 1.04 | 5.11 | 0.153 | 0.57 | 9.14 (0.995) | 9.11 (0.997) | 9.1 |
+| 1500 K | 5000 | 100 | 1.74 | 3.81 | 0.191 | 0.43 | 15.2 (0.999) | 15.3 (0.998) | 10.7 |
+
+u* pbar break tests: 10.5 /day (100 K) and 15.3 /day (1500 K). Explicit
+vertical (scheme 0, 1 d): decays at -1.8 /day (100 K) and -1.2 /day (1500 K).
+
+- vs u (fixed dx): 100 K dx 5 km: -2.9 (u 50), +5.2 (250), +10.5 (400);
+  1500 K dx 100 km: -0.37 (1000), +9.1 (3000), +15.2 (5000).
+- vs dx (fixed u): growth only at the finest dx of each deck; 100 K u 400:
+  +10.5 at dx 5 km, -0.15 to -0.21 at dx 50-400 km; 1500 K u 5000: +15.2 at
+  dx 100 km, about 0 (-0.07/+0.01, R^2 < 0.06) at dx 400 km.
+- vs u*dt/dx: does not collapse. The same 0.105 grows at dx 5 km and does not
+  at dx 50-400 km, and 0.191 grows at dx 100 km but not at dx 400 km.
+- vs c_s*dt/dz: does not collapse the rate, but separates the classes. All arms
+  with c_s*dt/dz >= 0.87 (40 arms) do not grow, at any u up to Mach 1.74. All
+  growing arms have c_s*dt/dz <= 0.57, and among c_s*dt/dz <= 0.57 only
+  u*dt/dx >= 0.076 grows (u = 50, dx = 5 km, 0.019, decays).
+- Within the growing arms the rate rises with u*dt/dx (5.2, 10.5, 9.1, 15.2
+  /day at 0.076, 0.105, 0.153, 0.191); the 0.153 arm, below trend, has the
+  largest c_s*dt/dz (0.57). Neither number alone collapses the rate, and
+  rate*dt does not either (1.6e-4 vs 6.7e-4 per step at the two fastest arms).
+
+Hypothesis (not tested by these arms): the growth needs a small vertical
+acoustic Courant number and a large horizontal one. A large c_s*dt/dz damps
+it, possibly through the implicit solve's damping of vertically propagating
+acoustic modes. This would also explain why halving cfl reduces the rate in
+Jiheng's leg: it halves u*dt/dx. Separating dt from dx is Jiheng's dt ladder.
+
+GCM regime (scheme 9, u 250/400, dx 50-400 km, 100 K deck): no arm grows.
+hllc at u = 250, dx = 400 km (dt 121 s, u*dt/dx 0.076, c_s*dt/dz 19.9):
+rms w 3.3e-7 / 3.5e-7 / 3.4e-7 m/s at 1/2/3 d, fit -0.064 /day (R^2 0.11,
+no trend), max |w| 4.0e-6 m/s.
+
+Note: the u = 400, dx = 5 km rate here (10.5 /day) is below Jiheng's
+16.9 /day for nominally the same arm. That deck (jihenghu/snapy d14b4c9,
+results/raw/b_lmars_u400.deck.yaml) uses `ideal-gas` with weight 0.0023
+(Rd 3615) and weno5 `shock: false`. This one uses the jupiter_crm_dry
+`ideal-moist` EOS (Rd 3936) with `shock: true`. Hypothesis, untested: the
+WENO shock flag and/or Rd account for the difference.
