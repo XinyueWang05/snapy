@@ -1,0 +1,4 @@
+box_dx100_u400_s1 --scheme 1 --dx 100e3 --u0 400
+box_dx100_u0_s1 --scheme 1 --dx 100e3 --u0 0
+box_dx100_u0_s1_nonoise --scheme 1 --dx 100e3 --u0 0 --noise 0
+box_dx100_u400_s9 --scheme 9 --dx 100e3 --u0 400
