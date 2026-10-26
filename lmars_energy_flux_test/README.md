@@ -175,7 +175,7 @@ vertical (scheme 0, 1 d): decays at -1.8 /day (100 K) and -1.2 /day (1500 K).
 - vs u*dt/dx: does not collapse. The same 0.105 grows at dx 5 km and does not
   at dx 50-400 km, and 0.191 grows at dx 100 km but not at dx 400 km.
 - vs c_s*dt/dz: does not collapse the rate, but separates the classes. All arms
-  with c_s*dt/dz >= 0.87 (40 arms) do not grow, at any u up to Mach 1.74. All
+  with c_s*dt/dz >= 0.866 (44 of 56 arms) do not grow, at any u up to Mach 1.74. All
   growing arms have c_s*dt/dz <= 0.57, and among c_s*dt/dz <= 0.57 only
   u*dt/dx >= 0.076 grows (u = 50, dx = 5 km, 0.019, decays).
 - Within the growing arms the rate rises with u*dt/dx (5.2, 10.5, 9.1, 15.2
