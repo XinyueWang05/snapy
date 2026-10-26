@@ -29,8 +29,15 @@ bool DISPATCH_MACRO ForwardSweep(Eigen::Matrix<T, N, N>* a,
                                  Eigen::Matrix<T, N, 1>* delta, T* du,
                                  double dt, int il, int iu, int dir, int ny,
                                  int stride1, int stride2, bool first_block,
-                                 bool last_block) {
+                                 bool last_block, bool rhs_in_delta = false) {
   Eigen::Matrix<T, N, 1> rhs;
+  // partial matrix: the assembly left the m_t right-hand-side correction in
+  // delta[i] (vic_assemble_partial_impl); read it before delta[i] is solved
+  auto correct = [&](int i) {
+    if (rhs_in_delta)
+      for (int row = 0; row < N; ++row)
+        if (delta[i](row) != 0) rhs(row) -= delta[i](row);
+  };
 
   if constexpr (N == 3) {  // partial matrix
     rhs(0) = DU(IDN, il);
@@ -38,6 +45,7 @@ bool DISPATCH_MACRO ForwardSweep(Eigen::Matrix<T, N, N>* a,
     rhs(0) /= dt;
     rhs(1) = DU(IVX + dir, il) / dt;
     rhs(2) = DU(IPR, il) / dt;
+    correct(il);
   } else {  // full matrix
     rhs(0) = DU(IDN, il);
     for (int n = 0; n < ny; ++n) rhs(0) += DU(ICY + n, il);
@@ -93,6 +101,7 @@ bool DISPATCH_MACRO ForwardSweep(Eigen::Matrix<T, N, N>* a,
       rhs(0) /= dt;
       rhs(1) = DU(IVX + dir, i) / dt;
       rhs(2) = DU(IPR, i) / dt;
+      correct(i);
     } else {
       rhs(0) = DU(IDN, i);
       for (int n = 0; n < ny; ++n) rhs(0) += DU(ICY + n, i);
