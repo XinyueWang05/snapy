@@ -1,0 +1,34 @@
+x_dx75_u110_s0 --scheme 0 --dx 75e3 --u0 110
+x_dx75_u150_s0 --scheme 0 --dx 75e3 --u0 150
+x_dx75_u250_s0 --scheme 0 --dx 75e3 --u0 250
+x_dx75_u400_s0 --scheme 0 --dx 75e3 --u0 400
+x_dx100_u110_s0 --scheme 0 --dx 100e3 --u0 110
+x_dx100_u150_s0 --scheme 0 --dx 100e3 --u0 150
+x_dx100_u250_s0 --scheme 0 --dx 100e3 --u0 250
+x_dx100_u400_s0 --scheme 0 --dx 100e3 --u0 400
+x_dx125_u110_s0 --scheme 0 --dx 125e3 --u0 110
+x_dx125_u150_s0 --scheme 0 --dx 125e3 --u0 150
+x_dx125_u250_s0 --scheme 0 --dx 125e3 --u0 250
+x_dx125_u400_s0 --scheme 0 --dx 125e3 --u0 400
+x_dx150_u110_s0 --scheme 0 --dx 150e3 --u0 110
+x_dx150_u150_s0 --scheme 0 --dx 150e3 --u0 150
+x_dx150_u250_s0 --scheme 0 --dx 150e3 --u0 250
+x_dx150_u400_s0 --scheme 0 --dx 150e3 --u0 400
+x_dx100_u0_s0_nonoise --scheme 0 --dx 100e3 --u0 0 --noise 0
+box_dx100_u400_s9 --scheme 9 --dx 100e3 --u0 400
+box_dx100_u400_s1 --scheme 1 --dx 100e3 --u0 400
+col_u0_s0 --scheme 0 --dx 100e3 --nx2 4 --uniform-x2 --u0 0
+col_u100_s0 --scheme 0 --dx 100e3 --nx2 4 --uniform-x2 --u0 100
+col_u200_s0 --scheme 0 --dx 100e3 --nx2 4 --uniform-x2 --u0 200
+col_u260_s0 --scheme 0 --dx 100e3 --nx2 4 --uniform-x2 --u0 260
+col_u400_s0 --scheme 0 --dx 100e3 --nx2 4 --uniform-x2 --u0 400
+col_u0_s1 --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --u0 0
+col_u100_s1 --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --u0 100
+col_u200_s1 --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --u0 200
+col_u260_s1 --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --u0 260
+col_u400_s1 --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --u0 400
+col_u0_s9 --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --u0 0
+col_u100_s9 --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --u0 100
+col_u200_s9 --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --u0 200
+col_u260_s9 --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --u0 260
+col_u400_s9 --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --u0 400

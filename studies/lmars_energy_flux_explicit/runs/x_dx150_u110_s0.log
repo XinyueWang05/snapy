@@ -1,0 +1,8 @@
+{"out": "/data00/ai_workspace/worker1/lmx/snapy/studies/lmars_energy_flux_explicit/runs/x_dx150_u110_s0", "dx": 150000.0, "nx2": 64, "u0": 110.0, "scheme": 0, "riemann": "lmars", "cfl": 0.3, "days": 3.0, "noise": 1e-06, "uniform_x2": false, "seed": 20261026, "diag_dt": 600.0, "wmax_stop": 200.0, "status": "finished", "t_end": 259200.0, "t_end_days": 3.0, "steps": 142530, "redos": 0, "dt_min": 0.7668389352038503, "dt_max": 1.8185719422534528, "dt_median": 1.8185718934215926, "cs": 742.3407135477262, "mach": 0.148179936776333, "hcour": 0.0013336193885091678, "vcour": 0.2999999904445388, "dz": 4500.0, "rd": 3936.2123927896237, "balance_err": 5.800919777723826e-11, "lam_dx_end": 21.333333333333332, "lam_dx_mid": null, "wall_s": 2993.921012878418, "snapy_version": "2.11.16", "torch_version": "2.10.0+cu128"}
+[HydroOptions] -- constant gravity options --
+* grav1 = -8.87
+* grav2 = 0
+* grav3 = 0
+* non-hydrostatic = 1
+* gravity-work = face
+* gravity-work-fixer = 0
