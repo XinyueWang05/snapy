@@ -664,9 +664,17 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
     if (keep_v) _hevi_v[j] = inner(du) - _hevi_h[j];
   };
   // implicit vertical stage from predictor R: Q = R + D, dt V = D / g
+  // a state the next forward reads gets its ghosts the way a stage of
+  // advance_local leaves them: exchange, then the physical boundaries
+  // (apply_boundaries closes every rk stage; without it the reflecting-wall
+  // ghosts of the predictors and stage states stay those of u^n)
+  auto refresh_ghosts = [&]() {
+    exchange_ghost_zones(vars);
+    apply_boundaries(vars, hydro_u, torch::Tensor());
+  };
   auto implicit_stage = [&](int j, torch::Tensor const &R) {
     hydro_u.copy_(R);
-    exchange_ghost_zones(vars);
+    refresh_ghosts();
     phydro->hevi_mode = 2;
     auto D = inner(phydro->forward(g * dt, hydro_u, vars));
     // further corrections towards Q = R + g dt V(Q), with the Jacobian at
@@ -674,7 +682,7 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
     int const niter = phydro->picorr->options->integrator_iterations();
     for (int it = 1; it < niter; ++it) {
       hydro_u.copy_(R + D);
-      exchange_ghost_zones(vars);
+      refresh_ghosts();
       phydro->hevi_rhs_offset = D;
       D = D + inner(phydro->forward(g * dt, hydro_u, vars));
       phydro->hevi_rhs_offset = torch::Tensor();
@@ -684,6 +692,7 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
     _hevi_v[j] = D / g;
     hydro_u.add_(D);
     phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
+    apply_boundaries(vars, hydro_u, torch::Tensor());
   };
 
   if (stage == 0) {
@@ -708,6 +717,7 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
     hydro_u.copy_(_hydro_u0 + (1. - g) * (_hevi_h[1] + _hevi_v[1]) +
                   g * (_hevi_h[2] + _hevi_v[2]));
     phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
+    apply_boundaries(vars, hydro_u, torch::Tensor());
   }
 }
 
