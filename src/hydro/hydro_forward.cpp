@@ -1172,13 +1172,22 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     // u = 400 m/s box grows at 7/day at cfl 0.3). The horizontal flux
     // increment bypasses the solve and is added back after it. Entries
     // where it is exactly zero are left alone, so a horizontally uniform
-    // state is unchanged bit for bit. All grids: only the flux divergence
-    // bypasses; the coordinate source terms stay in the increment the solve
-    // filters.
+    // state is unchanged bit for bit. All grids. On a curvilinear grid the
+    // lateral pressure flux in the horizontal momentum rows is balanced by
+    // those rows' metric sources (gnomonic src2/src3: to 1.5e-16 of their
+    // 0.08 size on a rest column), so the two bypass together: the rows
+    // IVY/IVZ of the non-flux terms, divergence(F1, F2, F3) - _div, go with
+    // the horizontal flux divergence. The radial-row source stays in the
+    // solve, where it balances the vertical pressure gradient with gravity.
+    // Cartesian grids have no source terms and skip that subtraction.
     torch::Tensor du_horizontal;
     if ((picorr->options->scheme() >> 3) & 1 &&
         (_flux2.defined() || _flux3.defined())) {
       auto div_h = pmb->pcoord->divergence(torch::Tensor(), _flux2, _flux3);
+      if (pmb->pcoord->options->type() != "cartesian") {
+        auto src = pmb->pcoord->divergence(_flux1, _flux2, _flux3) - _div;
+        div_h.narrow(0, IVY, 2) -= src.narrow(0, IVY, 2);
+      }
       du_horizontal = torch::zeros_like(du);
       du_horizontal.index(interior) = -dt * div_h.index(interior);
       if (other.count("solid"))
