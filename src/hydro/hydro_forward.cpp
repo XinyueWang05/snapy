@@ -1164,7 +1164,29 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       du[IPR].slice(-1, is, ie) += gravity_energy_correction;
       gravity_energy_correction = torch::Tensor();
     }
+    // vic-full: the vertical operator acts on the vertical increment only.
+    // Handing it the explicit horizontal flux increment too filters that
+    // increment through (I + b dt J)^-1, a cross term b dt^2 J H that is not
+    // in the explicit scheme; with horizontal advection it drives a growing
+    // mode at small vertical acoustic Courant number (the 100 K, dx 5 km,
+    // u = 400 m/s box grows at 7/day at cfl 0.3). The horizontal flux
+    // increment bypasses the solve and is added back after it. Entries
+    // where it is exactly zero are left alone, so a horizontally uniform
+    // state is unchanged bit for bit.
+    torch::Tensor du_horizontal;
+    if ((picorr->options->scheme() >> 3) & 1 &&
+        (_flux2.defined() || _flux3.defined())) {
+      auto div_h = pmb->pcoord->divergence(torch::Tensor(), _flux2, _flux3);
+      du_horizontal = torch::zeros_like(du);
+      du_horizontal.index(interior) = -dt * div_h.index(interior);
+      if (other.count("solid"))
+        du_horizontal.masked_fill_(
+            other.at("solid").unsqueeze(0).expand_as(du_horizontal), 0.0);
+      du.copy_(torch::where(du_horizontal != 0, du - du_horizontal, du));
+    }
     _apply_implicit_correction(du, w, dt_corr, other);
+    if (du_horizontal.defined())
+      du.copy_(torch::where(du_horizontal != 0, du + du_horizontal, du));
     if (gwfix_stage.defined()) gwfix_stage = gwfix_stage + epe(du) - epe0;
 
     if (options->verbose()) {

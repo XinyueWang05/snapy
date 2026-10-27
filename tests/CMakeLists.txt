@@ -254,6 +254,8 @@ snapy_add_python_test(test_implicit_gravity_tall_column_cubed SCRIPT test_implic
 # #299: the runner above fails when a ladder child dies or prints an incomplete ladder
 snapy_add_python_test(test_tall_column_runner_child_failure TIMEOUT 120 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_implicit_face_work_operator TIMEOUT 300 LABELS "python;hydro;implicit;gravity")
+# vic-full keeps the horizontal flux increment out of the vertical solve
+snapy_add_python_test(test_implicit_horizontal_bypass TIMEOUT 120 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_implicit_stratified_solid TIMEOUT 300 LABELS "python;hydro;implicit;gravity")
 # the same two tests with the corrected-PE work on (#296): they detect the switch and
 # measure E + P; the tall column runs both arms itself
