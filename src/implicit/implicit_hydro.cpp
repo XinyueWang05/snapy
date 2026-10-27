@@ -28,7 +28,8 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
   auto intg = config["integration"];
   // pyharp's integrator reads this block too, so its keys are listed by name
   check_keys(intg, "integration",
-             {"implicit-scheme", "implicit-advection-cfl", "shear-cfl"},
+             {"implicit-scheme", "implicit-advection-cfl", "shear-cfl",
+              "implicit-integrator"},
              "pyharp",
              {"type", "cfl", "tlim", "nlim", "ncycle_out", "verbose"});
   auto op =
@@ -61,6 +62,16 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
                 "integration/implicit-advection-cfl must be > 0, got ",
                 op->advection_cfl(), " (use a large value to relax the bound)");
     op->shear_cfl(read_finite("shear-cfl", 0.0));
+    if (intg["implicit-integrator"]) {
+      auto name = intg["implicit-integrator"].as<std::string>();
+      TORCH_CHECK(name == "rk" || name == "hevi-ark2",
+                  "integration/implicit-integrator must be rk or hevi-ark2, "
+                  "got '", name, "'");
+      TORCH_CHECK(name == "rk" || ((op->scheme() >> 3) & 1),
+                  "integration/implicit-integrator hevi-ark2 needs "
+                  "implicit-scheme 9 (vic-full)");
+      op->integrator(name);
+    }
     TORCH_CHECK(op->shear_cfl() >= 0.,
                 "integration/shear-cfl must be >= 0, got ", op->shear_cfl(),
                 " (0 switches the bound off)");

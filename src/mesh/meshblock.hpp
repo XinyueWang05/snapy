@@ -194,6 +194,8 @@ class MeshBlockImpl : public torch::nn::Cloneable<MeshBlockImpl> {
    */
   void forward(Variables& vars, double dt, int stage);
   void advance_local(Variables& vars, double dt, int stage);
+  //! implicit-integrator hevi-ark2: one stage of the ARK2 HEVI step
+  void advance_hevi_ark2(Variables& vars, double dt, int stage);
 
   //! gravity-work-fixer: this block's {E+PE defect D, mass M} (CPU, double),
   //! and the step-end fix from the global sums
@@ -297,6 +299,8 @@ class MeshBlockImpl : public torch::nn::Cloneable<MeshBlockImpl> {
 
   //! stage registers
   torch::Tensor _hydro_u0;
+  //! hevi-ark2: dt * H_j and dt * V_j of the stages so far
+  torch::Tensor _hevi_h[3], _hevi_v[3];
   torch::Tensor _scalar_s0;
 };
 

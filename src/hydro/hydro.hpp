@@ -231,6 +231,16 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! directly, outside the stage loop, and must keep working.
   int rk_stage = -1;
 
+  //! HEVI stage mode (set by MeshBlock under implicit-integrator hevi-ark2):
+  //! 0 the plain stage; 1 explicit, no implicit solve: forward returns
+  //! dt * (H + V) and leaves dt * H in hevi_horizontal; 2 implicit vertical:
+  //! forward returns (I + dt J)^-1 dt V, the full dt handed to the solve
+  int hevi_mode = 0;
+  //! dt * H of the last forward in a HEVI mode: the horizontal flux
+  //! divergence, with the horizontal momentum rows' metric sources on a
+  //! curvilinear grid (they balance the lateral pressure flux)
+  torch::Tensor hevi_horizontal;
+
  protected:
   void _revise_x1inner_ghost(torch::Tensor const& w);
   void _revise_x1outer_ghost(torch::Tensor const& w);

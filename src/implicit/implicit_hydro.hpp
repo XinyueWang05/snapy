@@ -28,7 +28,8 @@ struct ImplicitOptionsImpl {
     os << "* type = " << type() << "\n"
        << "* scheme = " << scheme() << "\n"
        << "* advection_cfl = " << advection_cfl() << "\n"
-       << "* shear_cfl = " << shear_cfl() << "\n";
+       << "* shear_cfl = " << shear_cfl() << "\n"
+       << "* integrator = " << integrator() << "\n";
   }
 
   int size() const {
@@ -43,6 +44,10 @@ struct ImplicitOptionsImpl {
   ADD_ARG(int, scheme) = 0;
   ADD_ARG(double, advection_cfl) = 1.0;
   ADD_ARG(double, shear_cfl) = 0.0;
+  //! "rk": the implicit correction inside each stage of the RK integrator.
+  //! "hevi-ark2": vic-full only; MeshBlock advances the step with the
+  //! ARK2 HEVI tableau (explicit horizontal, linearly implicit vertical)
+  ADD_ARG(std::string, integrator) = "rk";
 };
 using ImplicitOptions = std::shared_ptr<ImplicitOptionsImpl>;
 
