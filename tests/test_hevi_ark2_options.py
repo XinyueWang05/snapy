@@ -2,7 +2,10 @@
 """integration/implicit-integrator: rk (default) or hevi-ark2, the latter only with vic-full.
 
   * hevi-ark2 with implicit-scheme 9 builds a block and runs one step on a rest column;
-  * hevi-ark2 with implicit-scheme 1 and an unknown name are rejected at construction.
+  * hevi-ark2 with implicit-scheme 1 and an unknown name are rejected at construction;
+  * without implicit-integrator-iterations, hevi-ark2 runs 3 stage iterations: a step is
+    bitwise the step with the key set to 3 and differs from the key set to 1;
+    implicit-integrator-iterations 0 is rejected.
 
   python test_hevi_ark2_options.py
 """
@@ -14,7 +17,7 @@ import torch
 import yaml
 
 
-def config(scheme, integrator):
+def config(scheme, integrator, iterations=None):
     return {
         "geometry": {"type": "cartesian",
                      "bounds": {"x1min": 0., "x1max": 1.e4, "x2min": 0., "x2max": 4.e3, "x3min": 0., "x3max": 1.e3},
@@ -27,16 +30,17 @@ def config(scheme, integrator):
                                             "x2-inner": "periodic", "x2-outer": "periodic",
                                             "x3-inner": "periodic", "x3-outer": "periodic"}},
         "integration": {"type": "rk3", "cfl": 0.3, "implicit-scheme": scheme, "nlim": -1, "tlim": 1.e9,
-                        "implicit-integrator": integrator},
+                        "implicit-integrator": integrator,
+                        **({} if iterations is None else {"implicit-integrator-iterations": iterations})},
         "forcing": {"const-gravity": {"grav1": -9.8}},
     }
 
 
-def build(scheme, integrator, tmp):
+def build(scheme, integrator, tmp, iterations=None):
     from snapy import MeshBlock, MeshBlockOptions
     p = os.path.join(tmp, "deck.yaml")
     with open(p, "w") as f:
-        yaml.safe_dump(config(scheme, integrator), f)
+        yaml.safe_dump(config(scheme, integrator, iterations), f)
     return MeshBlock(MeshBlockOptions.from_yaml(p))
 
 
@@ -54,6 +58,28 @@ def main():
             b.forward(bv, 0.1, s)
         if not torch.isfinite(bv["hydro_u"]).all():
             fails.append("hevi-ark2 step not finite")
+        # default iterations: one step of a column out of balance (uniform rho, p
+        # under gravity), so every stage iteration changes the result
+        def step(iterations):
+            blk = build(9, "hevi-ark2", tmp, iterations)
+            blk.to(torch.device("cpu"))
+            w0 = dict(blk.named_buffers())["hydro.D"].clone().zero_()
+            w0[kIDN], w0[kIPR] = 1.0, 1.0e5
+            v, _ = blk.initialize({"hydro_w": w0})
+            for st in range(len(blk.module("intg").stages)):
+                blk.forward(v, 5.0, st)
+            return v["hydro_u"].clone()
+        u_default, u3, u1 = step(None), step(3), step(1)
+        same3, diff1 = torch.equal(u_default, u3), not torch.equal(u_default, u1)
+        print("default iterations: bitwise = 3: %s; differs from 1: %s (max |u3 - u1| %.3e)"
+              % (same3, diff1, (u3 - u1).abs().max().item()))
+        if not (same3 and diff1):
+            fails.append("hevi-ark2 default is not 3 stage iterations")
+        try:
+            build(9, "hevi-ark2", tmp, 0)
+            fails.append("accepted implicit-integrator-iterations 0")
+        except Exception as e:
+            print("rejected iterations 0: %s" % str(e).splitlines()[0][:100])
         for scheme, name in ((1, "hevi-ark2"), (9, "ark-unknown")):
             try:
                 build(scheme, name, tmp)
