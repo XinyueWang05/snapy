@@ -1172,14 +1172,11 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     // u = 400 m/s box grows at 7/day at cfl 0.3). The horizontal flux
     // increment bypasses the solve and is added back after it. Entries
     // where it is exactly zero are left alone, so a horizontally uniform
-    // state is unchanged bit for bit. Cartesian only: there the divergence
-    // is the whole operator. Curvilinear coordinates add metric sources to
-    // the horizontal momentum rows that balance the lateral pressure flux
-    // (gnomonic src2/src3), and a flux-only split would leave them
-    // unbalanced inside the solve; those geometries keep the full du.
+    // state is unchanged bit for bit. All grids: only the flux divergence
+    // bypasses; the coordinate source terms stay in the increment the solve
+    // filters.
     torch::Tensor du_horizontal;
     if ((picorr->options->scheme() >> 3) & 1 &&
-        pmb->pcoord->options->type() == "cartesian" &&
         (_flux2.defined() || _flux3.defined())) {
       auto div_h = pmb->pcoord->divergence(torch::Tensor(), _flux2, _flux3);
       du_horizontal = torch::zeros_like(du);
