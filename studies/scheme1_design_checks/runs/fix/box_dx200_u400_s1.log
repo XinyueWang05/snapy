@@ -1,0 +1,8 @@
+{"out": "/data00/ai_workspace/worker1/lmx/snapy-fix/studies/scheme1_design_checks/runs/fix/box_dx200_u400_s1", "dx": 200000.0, "nx2": 64, "u0": 400.0, "scheme": 1, "riemann": "lmars", "cfl": 0.3, "days": 3.0, "noise": 1e-06, "uniform_x2": false, "shear": false, "moist": false, "prof_days": [1.0, 2.0, 3.0], "seed": 20261026, "diag_dt": 600.0, "wmax_stop": 200.0, "status": "finished", "t_end": 259200.0, "t_end_days": 3.0, "steps": 4935, "redos": 0, "dt_min": 47.91426999607938, "dt_max": 52.523734025653674, "dt_median": 52.52373030662724, "cs": 742.3407135477262, "mach": 0.53883613373212, "hcour": 0.10504746061325448, "vcour": 8.664556318668888, "dz": 4500.0, "rd": 3936.2123927896237, "balance_err": 5.800919777723826e-11, "lam_dx_end": 16.0, "lam_dx_mid": null, "wall_s": 177.07755160331726, "snapy_version": "2.11.17.dev6+gba2b28c", "torch_version": "2.10.0+cu128", "snapy_file": "/data00/ai_workspace/worker1/lmx/site-fix/snapy/__init__.py", "state_sha256": "d6c35cf550b19aa9568b243af8a6bb53e99173b6f6c724532c6339f999fcbf5e"}
+[HydroOptions] -- constant gravity options --
+* grav1 = -8.87
+* grav2 = 0
+* grav3 = 0
+* non-hydrostatic = 1
+* gravity-work = face
+* gravity-work-fixer = 0

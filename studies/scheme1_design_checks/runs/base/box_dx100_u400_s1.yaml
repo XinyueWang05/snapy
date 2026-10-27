@@ -1,0 +1,60 @@
+reference-state:
+  Tref: 0.0
+  Pref: 100000.0
+species:
+- name: dry
+  composition:
+    H: 1.5
+    He: 0.15
+  cv_R: 2.5
+geometry:
+  type: cartesian
+  bounds:
+    x1min: 0.0
+    x1max: 450000.0
+    x2min: 0.0
+    x2max: 6400000.0
+    x3min: 0.0
+    x3max: 100000.0
+  cells:
+    nx1: 100
+    nx2: 64
+    nx3: 1
+    nghost: 3
+dynamics:
+  equation-of-state:
+    type: ideal-moist
+    density-floor: 1.0e-10
+    pressure-floor: 1.0e-10
+    limiter: true
+    max-iter: 10
+    ftol: 1.0e-06
+  reconstruct:
+    vertical:
+      type: weno5
+      scale: true
+      shock: true
+    horizontal:
+      type: weno5
+      scale: true
+      shock: true
+  riemann-solver:
+    type: lmars
+boundary-condition:
+  external:
+    x1-inner: reflecting
+    x1-outer: reflecting
+    x2-inner: periodic
+    x2-outer: periodic
+    x3-inner: periodic
+    x3-outer: periodic
+integration:
+  type: rk3
+  cfl: 0.3
+  implicit-scheme: 1
+  nlim: -1
+  tlim: 259200.0
+  ncycle_out: 1000000
+forcing:
+  const-gravity:
+    grav1: -8.87

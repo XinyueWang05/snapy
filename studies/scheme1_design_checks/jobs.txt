@@ -1,0 +1,8 @@
+box_dx100_u400_s1 --scheme 1 --dx 100e3 --u0 400
+box_dx100_u400_s9 --scheme 9 --dx 100e3 --u0 400
+shear_u400_s1 --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --shear --u0 400
+shear_u400_s9 --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --shear --u0 400
+col_u400_s1 --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --u0 400
+col_u400_s9 --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --u0 400
+moist_u400_s1 --moist --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --u0 400
+moist_u400_s9 --moist --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --u0 400

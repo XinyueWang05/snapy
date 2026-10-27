@@ -1,0 +1,8 @@
+box_dx50_u400_s1 --scheme 1 --dx 50e3 --u0 400
+box_dx200_u400_s1 --scheme 1 --dx 200e3 --u0 400
+shearn2_u400_s1 --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --shear --u0 400 --noise 1e-2
+shearn2_u400_s9 --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --shear --u0 400 --noise 1e-2
+coln2_u400_s1 --scheme 1 --dx 100e3 --nx2 4 --uniform-x2 --u0 400 --noise 1e-2
+coln2_u400_s9 --scheme 9 --dx 100e3 --nx2 4 --uniform-x2 --u0 400 --noise 1e-2
+shearbox_dx100_u400_s1 --scheme 1 --dx 100e3 --shear --u0 400
+shearbox_dx100_u400_s9 --scheme 9 --dx 100e3 --shear --u0 400
