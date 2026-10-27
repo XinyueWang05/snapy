@@ -1187,6 +1187,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // the solve sees the vertical increment only, linearised about the
       // state it is handed (the stage's explicit predictor)
       du.sub_(hevi_horizontal);
+      if (hevi_rhs_offset.defined()) du.sub_(hevi_rhs_offset);
       _apply_implicit_correction(du, w, dt_corr, other);
     } else if (hevi_mode == 0) {
       _apply_implicit_correction(du, w, dt_corr, other);

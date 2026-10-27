@@ -240,6 +240,9 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! divergence, with the horizontal momentum rows' metric sources on a
   //! curvilinear grid (they balance the lateral pressure flux)
   torch::Tensor hevi_horizontal;
+  //! mode 2: subtracted from the vertical increment before the solve
+  //! (the current stage increment of an iterated implicit stage)
+  torch::Tensor hevi_rhs_offset;
 
  protected:
   void _revise_x1inner_ghost(torch::Tensor const& w);
