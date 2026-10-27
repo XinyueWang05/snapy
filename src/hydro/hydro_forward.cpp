@@ -1126,7 +1126,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     // Applied only for the 3-stage integrator, matching the behaviour
     // already in production; generalising would change rk1/rk2 results.
     double dt_corr = dt;
-    if (pmb->pintg->stages.size() == 3) {
+    if (pmb->pintg->stages.size() == 3 && hevi_mode == 0) {
       if (rk_stage >= 0 && rk_stage < pmb->pintg->stages.size()) {
         dt_corr *= pmb->pintg->stages[rk_stage].wght2();
       } else {
@@ -1164,7 +1164,33 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       du[IPR].slice(-1, is, ie) += gravity_energy_correction;
       gravity_energy_correction = torch::Tensor();
     }
-    _apply_implicit_correction(du, w, dt_corr, other);
+    if (hevi_mode != 0) {
+      // the horizontal part H of the increment: the x2/x3 flux divergence
+      // and, on a curvilinear grid, the metric sources of the horizontal
+      // momentum rows (divergence(F1, F2, F3) - _div, rows IVY/IVZ), which
+      // balance the lateral pressure flux. The radial-row source and the
+      // forcings stay in the vertical part V = du - H.
+      hevi_horizontal = torch::zeros_like(du);
+      if (_flux2.defined() || _flux3.defined()) {
+        auto div_h = pmb->pcoord->divergence(torch::Tensor(), _flux2, _flux3);
+        if (pmb->pcoord->options->type() != "cartesian") {
+          auto src = pmb->pcoord->divergence(_flux1, _flux2, _flux3) - _div;
+          div_h.narrow(0, IVY, 2) -= src.narrow(0, IVY, 2);
+        }
+        hevi_horizontal.index(interior) = -dt * div_h.index(interior);
+        if (other.count("solid"))
+          hevi_horizontal.masked_fill_(
+              other.at("solid").unsqueeze(0).expand_as(hevi_horizontal), 0.0);
+      }
+    }
+    if (hevi_mode == 2) {
+      // the solve sees the vertical increment only, linearised about the
+      // state it is handed (the stage's explicit predictor)
+      du.sub_(hevi_horizontal);
+      _apply_implicit_correction(du, w, dt_corr, other);
+    } else if (hevi_mode == 0) {
+      _apply_implicit_correction(du, w, dt_corr, other);
+    }
     if (gwfix_stage.defined()) gwfix_stage = gwfix_stage + epe(du) - epe0;
 
     if (options->verbose()) {

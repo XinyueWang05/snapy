@@ -54,7 +54,9 @@ def config(geometry="cartesian", cell_work=False):
         "boundary-condition": {"external": {"x1-inner": "reflecting", "x1-outer": "reflecting",
                                             "x2-inner": "periodic", "x2-outer": "periodic",
                                             "x3-inner": "periodic", "x3-outer": "periodic"}},
-        "integration": {"type": "rk3", "cfl": 0.5, "implicit-scheme": 9, "nlim": -1, "tlim": 1.e9},
+        "integration": {"type": "rk3", "cfl": 0.5, "implicit-scheme": 9, "nlim": -1, "tlim": 1.e9,
+                        # the _hevi ctest entries run the ladder with hevi-ark2
+                        "implicit-integrator": os.environ.get("SNAP_TEST_IMPLICIT_INTEGRATOR", "rk")},
         "forcing": {"const-gravity": {"grav1": -GRAV, "gravity-work": "face",
                                           "gravity-work-fixer": False}},
     }
