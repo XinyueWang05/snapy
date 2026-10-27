@@ -46,6 +46,10 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
                 "implicit-scheme 9 (vic-full), got ",
                 intg["implicit-scheme"] ? "implicit-scheme 0"
                                         : "no implicit-scheme");
+    TORCH_CHECK(!intg["implicit-integrator-iterations"],
+                "integration/implicit-integrator-iterations applies only to "
+                "implicit-integrator hevi-ark2 (implicit-scheme 9); remove it "
+                "under rk");
     return nullptr;
   }
   {
@@ -81,6 +85,11 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
       op->integrator(name);
     }
     if (intg["implicit-integrator-iterations"]) {
+      // rk does not read it: a deck that sets it under rk would run unchanged
+      TORCH_CHECK(op->integrator() == "hevi-ark2",
+                  "integration/implicit-integrator-iterations applies only to "
+                  "implicit-integrator hevi-ark2, got implicit-integrator ",
+                  op->integrator(), "; remove it under rk");
       int n = intg["implicit-integrator-iterations"].as<int>();
       TORCH_CHECK(n >= 1, "integration/implicit-integrator-iterations must be "
                   ">= 1, got ", n);

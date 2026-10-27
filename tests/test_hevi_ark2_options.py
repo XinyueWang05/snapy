@@ -6,7 +6,9 @@
     construction;
   * without implicit-integrator-iterations, hevi-ark2 runs 3 stage iterations: a step is
     bitwise the step with the key set to 3 and differs from the key set to 1;
-    implicit-integrator-iterations 0 is rejected.
+    implicit-integrator-iterations 0 is rejected;
+  * implicit-integrator-iterations under rk (named or default, implicit-scheme 9, 0 or
+    absent) is rejected at construction.
 
   python test_hevi_ark2_options.py
 """
@@ -92,6 +94,19 @@ def main():
                 print("rejected scheme %s, %s: %s" % (scheme, name, msg[:160]))
                 if not msg:
                     fails.append("scheme %s with %s rejected without naming %s" % (scheme, name, name))
+        # implicit-integrator-iterations only reaches hevi-ark2: under rk (named or
+        # by default, with or without an implicit scheme) it is rejected
+        key = "implicit-integrator-iterations"
+        for scheme, name in ((9, "rk"), (9, None), (0, None), (None, "rk")):
+            try:
+                build(scheme, name, tmp, 3)
+                fails.append("accepted %s 3 with scheme %s, %s" % (key, scheme, name))
+            except Exception as e:
+                msg = next((l for l in str(e).splitlines() if key in l), "")
+                print("rejected %s 3 with scheme %s, %s: %s" % (key, scheme, name, msg[:160]))
+                if not msg:
+                    fails.append("%s 3 with scheme %s, %s rejected without naming %s"
+                                 % (key, scheme, name, key))
     if fails:
         print("FAILED:", "; ".join(fails))
         return 1
