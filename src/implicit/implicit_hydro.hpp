@@ -51,8 +51,16 @@ struct ImplicitOptionsImpl {
   ADD_ARG(std::string, integrator) = "rk";
   //! hevi-ark2: solves per implicit stage. 1: one linearised solve about
   //! the predictor; n > 1: n - 1 further corrections towards the stage's
-  //! implicit solution, D <- D + (I + g dt J)^-1 (g dt V(R + D) - D)
-  ADD_ARG(int, integrator_iterations) = 1;
+  //! implicit solution, D <- D + (I + g dt J)^-1 (g dt V(R + D) - D).
+  //! 0 (default): hevi-ark2 uses kHeviDefaultIterations; one linearised
+  //! solve grows on a rest column at vertical acoustic Courant >= 4
+ public:
+  static constexpr int kHeviDefaultIterations = 3;
+  int hevi_iterations() const {
+    return integrator_iterations() > 0 ? integrator_iterations()
+                                       : kHeviDefaultIterations;
+  }
+  ADD_ARG(int, integrator_iterations) = 0;
 };
 using ImplicitOptions = std::shared_ptr<ImplicitOptionsImpl>;
 
