@@ -611,19 +611,24 @@ struct DeferVaporCheck {
 };
 }  // namespace
 
-// ARK2 HEVI step (Giraldo, Kelly & Constantinescu 2013, SISC 35(5), "ARK2"):
-// horizontal tendency H explicit, vertical tendency V linearly implicit.
+// HEVI step with the ARS(2,3,2) pair (Ascher, Ruuth & Spiteri 1997, Appl.
+// Numer. Math. 25, sec. 2.5): horizontal tendency H explicit, vertical
+// tendency V linearly implicit, second order.
 //   Q1 = u^n
 //   Q_i = R_i + D_i,  R_i = u^n + dt sum_{j<i} (ae_ij H_j + ai_ij V_j),
 //        (I + g dt J(R_i)) D_i = g dt V(R_i),  V_i = D_i / (g dt)   (i = 2, 3)
 //   u^{n+1} = u^n + dt sum_j b_j (H_j + V_j)
-// g = 1 - 1/sqrt2, d = 1/(2 sqrt2), a = (3 + 2 sqrt2)/6; ae21 = 2g,
-// ae31 = 1 - a, ae32 = a; ai21 = g, ai31 = ai32 = d; b = (d, d, g).
-// H enters each stage once and is never filtered by the vertical operator;
-// the solve is linearised about the explicit predictor R_i. The three calls
-// of the rk3 stage loop carry it: stage 0 builds Q2, stage 1 Q3, stage 2 the
-// update. Each stage spends one explicit forward (H, and V at Q1) and, in
-// stages 0 and 1, one implicit-vertical forward at R_i.
+// g = 1 - 1/sqrt2, d = -2 sqrt2 / 3; ae21 = g, ae31 = d, ae32 = 1 - d;
+// ai22 = g, ai32 = 1 - g, ai33 = g (first column zero); b = (0, 1 - g, g).
+// H enters each stage once and is never filtered by the vertical operator,
+// and V(u^n) is never taken explicitly: the solve is linearised about the
+// explicit predictor R_i. The implicit tableau is stiffly accurate and the
+// explicit one has the rk3 linear stability polynomial. (The ARK2 tableau
+// of Giraldo, Kelly & Constantinescu 2013 takes V(u^n) explicitly in its
+// first stage and grew on a rest column at vertical acoustic Courant
+// >= 6.6.) The three calls of the rk3 stage loop carry the step: stage 0
+// builds Q2, stage 1 Q3, stage 2 the update; each call spends one explicit
+// forward (H) and, in stages 0 and 1, one implicit-vertical forward at R_i.
 void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
   TORCH_CHECK(pintg->stages.size() == 3,
               "[MeshBlock] implicit-integrator hevi-ark2 runs in the 3-call "
@@ -637,8 +642,7 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
   DeferVaporCheck defer(phydro->peos.get());
   phydro->rk_stage = stage;
 
-  double const g = 1. - 1. / std::sqrt(2.), d = 1. / (2. * std::sqrt(2.)),
-               a = (3. + 2. * std::sqrt(2.)) / 6.;
+  double const g = 1. - 1. / std::sqrt(2.), d = -2. * std::sqrt(2.) / 3.;
   auto hydro_u = vars.at("hydro_u");
   // stage increments live on the interior only: forcings also write ghost
   // cells (e.g. rho g in the x1 ghosts), and a predictor built from those
@@ -665,7 +669,18 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
     exchange_ghost_zones(vars);
     phydro->hevi_mode = 2;
     auto D = inner(phydro->forward(g * dt, hydro_u, vars));
+    // further corrections towards Q = R + g dt V(Q), with the Jacobian at
+    // the current iterate: D <- D + (I + g dt J)^-1 (g dt V(R + D) - D)
+    int const niter = phydro->picorr->options->integrator_iterations();
+    for (int it = 1; it < niter; ++it) {
+      hydro_u.copy_(R + D);
+      exchange_ghost_zones(vars);
+      phydro->hevi_rhs_offset = D;
+      D = D + inner(phydro->forward(g * dt, hydro_u, vars));
+      phydro->hevi_rhs_offset = torch::Tensor();
+    }
     phydro->hevi_mode = 0;
+    hydro_u.copy_(R);
     _hevi_v[j] = D / g;
     hydro_u.add_(D);
     phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
@@ -682,16 +697,15 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
     if (phydro->peos->vapor_failures().defined())
       phydro->peos->vapor_failures().zero_();
 
-    explicit_split(0, true);  // H1, V1 at u^n
-    implicit_stage(1, _hydro_u0 + 2. * g * _hevi_h[0] + g * _hevi_v[0]);
+    explicit_split(0, false);  // H1 at u^n
+    implicit_stage(1, _hydro_u0 + g * _hevi_h[0]);
   } else if (stage == 1) {
     explicit_split(1, false);  // H2 at Q2
-    implicit_stage(2, _hydro_u0 + (1. - a) * _hevi_h[0] + a * _hevi_h[1] +
-                          d * (_hevi_v[0] + _hevi_v[1]));
+    implicit_stage(2, _hydro_u0 + d * _hevi_h[0] + (1. - d) * _hevi_h[1] +
+                          (1. - g) * _hevi_v[1]);
   } else {
     explicit_split(2, false);  // H3 at Q3
-    hydro_u.copy_(_hydro_u0 + d * (_hevi_h[0] + _hevi_v[0]) +
-                  d * (_hevi_h[1] + _hevi_v[1]) +
+    hydro_u.copy_(_hydro_u0 + (1. - g) * (_hevi_h[1] + _hevi_v[1]) +
                   g * (_hevi_h[2] + _hevi_v[2]));
     phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
   }
