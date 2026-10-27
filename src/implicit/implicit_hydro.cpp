@@ -38,6 +38,14 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
     TORCH_CHECK(!intg["implicit-advection-cfl"] && !intg["shear-cfl"],
                 "integration/implicit-advection-cfl and shear-cfl bound an "
                 "implicit direction: set implicit-scheme or remove them");
+    // without an implicit object the integrator key would be dropped and the
+    // run would go on as plain explicit rk
+    TORCH_CHECK(!intg["implicit-integrator"] ||
+                    intg["implicit-integrator"].as<std::string>() != "hevi-ark2",
+                "integration/implicit-integrator hevi-ark2 needs "
+                "implicit-scheme 9 (vic-full), got ",
+                intg["implicit-scheme"] ? "implicit-scheme 0"
+                                        : "no implicit-scheme");
     return nullptr;
   }
   {
