@@ -328,6 +328,7 @@ set_tests_properties(test_implicit_gravity_tall_column_cubed_hevi_python
                      test_gravity_work_radial_exact_hevi_python
                      PROPERTIES ENVIRONMENT "SNAP_TEST_IMPLICIT_INTEGRATOR=hevi-ark2")
 snapy_add_python_test(test_hevi_ark2_options TIMEOUT 60 LABELS "python;implicit")
+snapy_add_python_test(test_hevi_iterations TIMEOUT 300 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_implicit_options_type TIMEOUT 60 LABELS "python;implicit")
 snapy_add_python_test(test_shear_cfl TIMEOUT 60 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_check_redo_floor TIMEOUT 60 LABELS "python;mesh;redo")
