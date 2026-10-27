@@ -29,7 +29,7 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
   // pyharp's integrator reads this block too, so its keys are listed by name
   check_keys(intg, "integration",
              {"implicit-scheme", "implicit-advection-cfl", "shear-cfl",
-              "implicit-integrator"},
+              "implicit-integrator", "implicit-integrator-iterations"},
              "pyharp",
              {"type", "cfl", "tlim", "nlim", "ncycle_out", "verbose"});
   auto op =
@@ -71,6 +71,12 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
                   "integration/implicit-integrator hevi-ark2 needs "
                   "implicit-scheme 9 (vic-full)");
       op->integrator(name);
+    }
+    if (intg["implicit-integrator-iterations"]) {
+      int n = intg["implicit-integrator-iterations"].as<int>();
+      TORCH_CHECK(n >= 1, "integration/implicit-integrator-iterations must be "
+                  ">= 1, got ", n);
+      op->integrator_iterations(n);
     }
     TORCH_CHECK(op->shear_cfl() >= 0.,
                 "integration/shear-cfl must be >= 0, got ", op->shear_cfl(),
