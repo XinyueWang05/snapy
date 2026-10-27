@@ -679,7 +679,7 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
     auto D = inner(phydro->forward(g * dt, hydro_u, vars));
     // further corrections towards Q = R + g dt V(Q), with the Jacobian at
     // the current iterate: D <- D + (I + g dt J)^-1 (g dt V(R + D) - D)
-    int const niter = phydro->picorr->options->integrator_iterations();
+    int const niter = phydro->picorr->options->hevi_iterations();
     for (int it = 1; it < niter; ++it) {
       hydro_u.copy_(R + D);
       refresh_ghosts();
