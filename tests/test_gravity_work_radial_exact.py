@@ -92,7 +92,10 @@ def config(geometry, scheme, nx2, recon, ncycle_out=0):
                                             "x2-inner": x2bc, "x2-outer": x2bc,
                                             "x3-inner": x3bc, "x3-outer": x3bc}},
         "integration": {"type": "rk3", "cfl": 0.4, "implicit-scheme": scheme, "nlim": -1, "tlim": 1.e9,
-                        "ncycle_out": ncycle_out},
+                        "ncycle_out": ncycle_out,
+                        # the _hevi ctest entry runs the vic-full arms with hevi-ark2
+                        **({"implicit-integrator": os.environ.get("SNAP_TEST_IMPLICIT_INTEGRATOR", "rk")}
+                           if scheme == 9 else {})},
         "forcing": {"const-gravity": {"grav1": -G, "gravity-work": "face"}},
     }
 

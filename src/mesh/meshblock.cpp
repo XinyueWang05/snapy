@@ -611,9 +611,97 @@ struct DeferVaporCheck {
 };
 }  // namespace
 
+// ARK2 HEVI step (Giraldo, Kelly & Constantinescu 2013, SISC 35(5), "ARK2"):
+// horizontal tendency H explicit, vertical tendency V linearly implicit.
+//   Q1 = u^n
+//   Q_i = R_i + D_i,  R_i = u^n + dt sum_{j<i} (ae_ij H_j + ai_ij V_j),
+//        (I + g dt J(R_i)) D_i = g dt V(R_i),  V_i = D_i / (g dt)   (i = 2, 3)
+//   u^{n+1} = u^n + dt sum_j b_j (H_j + V_j)
+// g = 1 - 1/sqrt2, d = 1/(2 sqrt2), a = (3 + 2 sqrt2)/6; ae21 = 2g,
+// ae31 = 1 - a, ae32 = a; ai21 = g, ai31 = ai32 = d; b = (d, d, g).
+// H enters each stage once and is never filtered by the vertical operator;
+// the solve is linearised about the explicit predictor R_i. The three calls
+// of the rk3 stage loop carry it: stage 0 builds Q2, stage 1 Q3, stage 2 the
+// update. Each stage spends one explicit forward (H, and V at Q1) and, in
+// stages 0 and 1, one implicit-vertical forward at R_i.
+void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
+  TORCH_CHECK(pintg->stages.size() == 3,
+              "[MeshBlock] implicit-integrator hevi-ark2 runs in the 3-call "
+              "stage loop of integration/type rk3");
+  TORCH_CHECK(pscalar->nvar() == 0 && user_stage_forcings.empty(),
+              "[MeshBlock] implicit-integrator hevi-ark2 does not support "
+              "passive scalars or user stage forcings yet");
+  TORCH_CHECK(!phydro->gravity_work_fixer(),
+              "[MeshBlock] implicit-integrator hevi-ark2 does not support the "
+              "gravity-work fixer yet");
+  DeferVaporCheck defer(phydro->peos.get());
+  phydro->rk_stage = stage;
+
+  double const g = 1. - 1. / std::sqrt(2.), d = 1. / (2. * std::sqrt(2.)),
+               a = (3. + 2. * std::sqrt(2.)) / 6.;
+  auto hydro_u = vars.at("hydro_u");
+  // stage increments live on the interior only: forcings also write ghost
+  // cells (e.g. rho g in the x1 ghosts), and a predictor built from those
+  // would hand the next forward non-boundary ghost data where the exchange
+  // does not overwrite it (the reflecting lateral sides of a cubed-sphere
+  // face block); the predictors keep u^n's ghosts and are then exchanged
+  auto interior = part({0, 0, 0}, PartOptions().exterior(false));
+  auto inner = [&](torch::Tensor const &t) {
+    auto r = torch::zeros_like(t);
+    r.index_put_(interior, t.index(interior));
+    return r;
+  };
+  // explicit forward at the current state: dt H and dt V
+  auto explicit_split = [&](int j, bool keep_v) {
+    phydro->hevi_mode = 1;
+    auto du = phydro->forward(dt, hydro_u, vars);
+    phydro->hevi_mode = 0;
+    _hevi_h[j] = inner(phydro->hevi_horizontal);
+    if (keep_v) _hevi_v[j] = inner(du) - _hevi_h[j];
+  };
+  // implicit vertical stage from predictor R: Q = R + D, dt V = D / g
+  auto implicit_stage = [&](int j, torch::Tensor const &R) {
+    hydro_u.copy_(R);
+    exchange_ghost_zones(vars);
+    phydro->hevi_mode = 2;
+    auto D = inner(phydro->forward(g * dt, hydro_u, vars));
+    phydro->hevi_mode = 0;
+    _hevi_v[j] = D / g;
+    hydro_u.add_(D);
+    phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
+  };
+
+  if (stage == 0) {
+    _hydro_u0.copy_(hydro_u);
+    if (phydro->picorr) {
+      phydro->picorr->reset_dry_clamp_step();
+      phydro->picorr->reset_solve_failure();
+    }
+    phydro->peos->reset_limiter_marks(hydro_u);
+    saturation_failures();
+    if (phydro->peos->vapor_failures().defined())
+      phydro->peos->vapor_failures().zero_();
+
+    explicit_split(0, true);  // H1, V1 at u^n
+    implicit_stage(1, _hydro_u0 + 2. * g * _hevi_h[0] + g * _hevi_v[0]);
+  } else if (stage == 1) {
+    explicit_split(1, false);  // H2 at Q2
+    implicit_stage(2, _hydro_u0 + (1. - a) * _hevi_h[0] + a * _hevi_h[1] +
+                          d * (_hevi_v[0] + _hevi_v[1]));
+  } else {
+    explicit_split(2, false);  // H3 at Q3
+    hydro_u.copy_(_hydro_u0 + d * (_hevi_h[0] + _hevi_v[0]) +
+                  d * (_hevi_h[1] + _hevi_v[1]) +
+                  g * (_hevi_h[2] + _hevi_v[2]));
+    phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
+  }
+}
+
 void MeshBlockImpl::advance_local(Variables &vars, double dt, int stage) {
   TORCH_CHECK(stage >= 0 && stage < pintg->stages.size(),
               "Invalid stage: ", stage);
+  if (phydro->picorr && phydro->picorr->options->integrator() == "hevi-ark2")
+    return advance_hevi_ark2(vars, dt, stage);
   DeferVaporCheck defer(phydro->peos.get());
 
   // Publish the stage: the vertical implicit correction is nonlinear in dt and
