@@ -104,6 +104,7 @@ void DISPATCH_MACRO vic_assemble_partial_impl(
   Eigenvector(Rmat, Rimat, prim, cs, gm1, dir);
   Am.noalias() = Rmat * Lambda.asDiagonal() * Rimat;
   if (fold) tcols(AmT, Am);
+  T vroe_lo[2] = {prim[it[0]], prim[it[1]]};  // face i-1/2 Roe v_t
   Am2 << Am(IDN, IDN), Am(IDN, IVX), Am(IDN, IPR),  //
       Am(IVX, IDN), Am(IVX, IVX), Am(IVX, IPR),     //
       Am(IPR, IDN), Am(IPR, IVX), Am(IPR, IPR);
@@ -130,6 +131,7 @@ void DISPATCH_MACRO vic_assemble_partial_impl(
   Eigenvector(Rmat, Rimat, prim, cs, gm1, dir);
   Ap.noalias() = Rmat * Lambda.asDiagonal() * Rimat;
   if (fold) tcols(ApT, Ap);
+  T vroe_hi[2] = {prim[it[0]], prim[it[1]]};  // face i+1/2 Roe v_t
   Ap2 << Ap(IDN, IDN), Ap(IDN, IVX), Ap(IDN, IPR),  //
       Ap(IVX, IDN), Ap(IVX, IVX), Ap(IVX, IPR),     //
       Ap(IPR, IDN), Ap(IPR, IVX), Ap(IPR, IPR);
@@ -174,43 +176,68 @@ void DISPATCH_MACRO vic_assemble_partial_impl(
   rhs_corr[i].setZero();
 
   // the same terms as a[i], b[i], c[i] above, for the m_t columns (Phi and
-  // the 1/dt diagonal have none there; face work adds only the mass rows)
-  Eigen::Matrix<T, 3, 2> aT, bT, cT;
-  aT = (AmT * area_i + ApT * area_ip1 + (area_ip1 - area_i) * dfc_T) *
-       half_inv_vol;
-  bT = -(AmT + dfp_T) * area_i * half_inv_vol;
-  cT = -(ApT - dfn_T) * area_ip1 * half_inv_vol;
+  // the 1/dt diagonal have none there; face work adds only the mass rows),
+  // split by the velocity that multiplies them (scheme1-roe-vt): the flux
+  // Jacobian part (J) takes the cell's v_t, the |A| part of each face (with
+  // its face-work rows) the face's Roe-averaged v_t. dm_t = v drho + q holds
+  // for any v, so only the implicit drag of m_t by drho changes. In a uniform
+  // wind every v is the same and this equals ba2b28ce.
+  Eigen::Matrix<T, 3, 2> aJ, aLo, aHi, bJ, bA, cJ, cA;
+  aJ = (area_ip1 - area_i) * dfc_T * half_inv_vol;
+  aLo = AmT * area_i * half_inv_vol;
+  aHi = ApT * area_ip1 * half_inv_vol;
+  bJ = -dfp_T * area_i * half_inv_vol;
+  bA = -AmT * area_i * half_inv_vol;
+  cJ = dfn_T * area_ip1 * half_inv_vol;
+  cA = -ApT * area_ip1 * half_inv_vol;
   if (face_work && cartesian_face) {
-    aT.row(2) -= 0.25 * grav * (ApT.row(0) - AmT.row(0));
-    bT.row(2) -= 0.25 * grav * AmT.row(0);
-    cT.row(2) += 0.25 * grav * ApT.row(0);
+    aHi.row(2) -= 0.25 * grav * ApT.row(0);
+    aLo.row(2) += 0.25 * grav * AmT.row(0);
+    bA.row(2) -= 0.25 * grav * AmT.row(0);
+    cA.row(2) += 0.25 * grav * ApT.row(0);
   } else if (face_work || diffusive_cell) {
     T lower = work_lo[i * stride2], upper = work_hi[i * stride2];
-    aT.row(2) -= grav * (upper * ApT.row(0) - lower * AmT.row(0));
-    bT.row(2) -= grav * lower * AmT.row(0);
-    cT.row(2) += grav * upper * ApT.row(0);
+    aHi.row(2) -= grav * upper * ApT.row(0);
+    aLo.row(2) += grav * lower * AmT.row(0);
+    bA.row(2) -= grav * lower * AmT.row(0);
+    cA.row(2) += grav * upper * ApT.row(0);
   }
   // the wall mirror keeps m_t (Bnd is 1 there): a merged face is cell i's
   bool merged_lower = (i == is || solid_lower) && first_block;
   bool merged_upper = (i == ie || solid_upper) && last_block;
-  if (merged_lower) aT += bT;
-  if (merged_upper) aT += cT;
+  if (merged_lower) {
+    aJ += bJ;
+    aLo += bA;
+  }
+  if (merged_upper) {
+    aJ += cJ;
+    aHi += cA;
+  }
 
+  // tb times cell j's m_t increment, written v drho_j + (du_t,j - v drho_j)
   auto fold_cell = [&](Eigen::Matrix<T, 3, 3>& blk,
-                       Eigen::Matrix<T, 3, 2> const& tb, int j) {
+                       Eigen::Matrix<T, 3, 2> const& tb, int j, T const* vf) {
     T drho = du[IDN * stride1 + j * stride2];
     for (int n = 0; n < ny; ++n) drho += du[(ICY + n) * stride1 + j * stride2];
     for (int k = 0; k < 2; ++k) {
-      T v = w[it[k] * stride1 + j * stride2];
+      T v = vf ? vf[k] : w[it[k] * stride1 + j * stride2];
       T q = du[it[k] * stride1 + j * stride2] - v * drho;
       if (v != 0) blk.col(0) += tb.col(k) * v;
       if (q != 0) rhs_corr[i] += tb.col(k) * q;
     }
   };
-  fold_cell(a[i], aT, i);
+  fold_cell(a[i], aJ, i, nullptr);
+  fold_cell(a[i], aLo, i, vroe_lo);
+  fold_cell(a[i], aHi, i, vroe_hi);
   // a neighbour outside the fluid segment keeps the frozen coupling
-  if (!merged_lower && !solid_lower && i > is) fold_cell(b[i], bT, i - 1);
-  if (!merged_upper && !solid_upper && i < ie) fold_cell(c[i], cT, i + 1);
+  if (!merged_lower && !solid_lower && i > is) {
+    fold_cell(b[i], bJ, i - 1, nullptr);
+    fold_cell(b[i], bA, i - 1, vroe_lo);
+  }
+  if (!merged_upper && !solid_upper && i < ie) {
+    fold_cell(c[i], cJ, i + 1, nullptr);
+    fold_cell(c[i], cA, i + 1, vroe_hi);
+  }
 }
 
 }  // namespace snap

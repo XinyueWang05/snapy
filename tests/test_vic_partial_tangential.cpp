@@ -11,6 +11,9 @@
 //   rhs_corr = S (a5 T q_i + b5 T q_{i-1} + c5 T q_{i+1}),
 // with S the rows rho, m1, E; a face the wall mirror merged into a[i] uses
 // cell i's v_t and q_t.
+// scheme1-roe-vt: the |A| columns use the face's Roe-averaged v_t, so this
+// identity holds only for a uniform wind (equal v_t in every cell); under
+// shear the variant departs from it by design.
 namespace {
 
 using M5 = Eigen::Matrix<double, 5, 5>;
@@ -25,13 +28,13 @@ struct Column {
   double w[5 * kStore], du[5 * kStore];
   double gamma[kStore], area[kStore + 1], vol[kStore];
   double work_lo[kStore], work_hi[kStore];
-  explicit Column(double wind) {
+  explicit Column(double wind, double shear = 1.) {
     double rho[kStore] = {1.1, 1., .8, .6, .5};
     for (int j = 0; j < kStore; ++j) {
       w[snap::IDN * stride1 + j] = rho[j];
       w[snap::IVX * stride1 + j] = .12 - .05 * j;
-      w[snap::IVY * stride1 + j] = wind * (.9 + .1 * j);
-      w[snap::IVZ * stride1 + j] = wind * (-.2 + .07 * j);
+      w[snap::IVY * stride1 + j] = wind * (.9 + shear * .1 * j);
+      w[snap::IVZ * stride1 + j] = wind * (-.2 + shear * .07 * j);
       w[snap::IPR * stride1 + j] = 2. - .3 * j;
       du[snap::IDN * stride1 + j] = .01 * (j - 2);
       du[snap::IVX * stride1 + j] = .02;
@@ -78,7 +81,7 @@ Eigen::Matrix<double, 5, 1> Tq(Column& col, int j) {
 }
 
 void check(int flag, int i) {
-  Column col(1.);
+  Column col(1., 0.);  // uniform wind (see the note above)
   double dt = .5, grav = -9.8;
   M5 a5[3], b5[3], c5[3];
   M3 a3[3], b3[3], c3[3];
