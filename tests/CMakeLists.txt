@@ -317,6 +317,17 @@ foreach(_t test_implicit_face_work_operator test_implicit_stratified_solid)
 endforeach()
 snapy_add_python_test(test_gravity_work_fixer TIMEOUT 120 LABELS "python;hydro;gravity;energy")
 snapy_add_python_test(test_gravity_work_radial_exact TIMEOUT 300 LABELS "python;hydro;gravity")
+# implicit-integrator hevi-ark2 (ARK2 HEVI step): the same cubed-sphere ladder and
+# the same E + P closure with the vic-full arms advanced by hevi-ark2
+snapy_add_python_test(test_implicit_gravity_tall_column_cubed_hevi SCRIPT test_implicit_gravity_tall_column.py
+                      ARGS --geometry gnomonic-equiangle TIMEOUT 300
+                      LABELS "python;hydro;implicit;gravity;cubed-sphere")
+snapy_add_python_test(test_gravity_work_radial_exact_hevi SCRIPT test_gravity_work_radial_exact.py
+                      TIMEOUT 300 LABELS "python;hydro;gravity")
+set_tests_properties(test_implicit_gravity_tall_column_cubed_hevi_python
+                     test_gravity_work_radial_exact_hevi_python
+                     PROPERTIES ENVIRONMENT "SNAP_TEST_IMPLICIT_INTEGRATOR=hevi-ark2")
+snapy_add_python_test(test_hevi_ark2_options TIMEOUT 60 LABELS "python;implicit")
 snapy_add_python_test(test_implicit_options_type TIMEOUT 60 LABELS "python;implicit")
 snapy_add_python_test(test_shear_cfl TIMEOUT 60 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_check_redo_floor TIMEOUT 60 LABELS "python;mesh;redo")
