@@ -2,7 +2,8 @@
 """integration/implicit-integrator: rk (default) or hevi-ark2, the latter only with vic-full.
 
   * hevi-ark2 with implicit-scheme 9 builds a block and runs one step on a rest column;
-  * hevi-ark2 with implicit-scheme 1 and an unknown name are rejected at construction;
+  * hevi-ark2 with implicit-scheme 1, 0 or absent and an unknown name are rejected at
+    construction;
   * without implicit-integrator-iterations, hevi-ark2 runs 3 stage iterations: a step is
     bitwise the step with the key set to 3 and differs from the key set to 1;
     implicit-integrator-iterations 0 is rejected.
@@ -29,8 +30,9 @@ def config(scheme, integrator, iterations=None):
         "boundary-condition": {"external": {"x1-inner": "reflecting", "x1-outer": "reflecting",
                                             "x2-inner": "periodic", "x2-outer": "periodic",
                                             "x3-inner": "periodic", "x3-outer": "periodic"}},
-        "integration": {"type": "rk3", "cfl": 0.3, "implicit-scheme": scheme, "nlim": -1, "tlim": 1.e9,
-                        "implicit-integrator": integrator,
+        "integration": {"type": "rk3", "cfl": 0.3, "nlim": -1, "tlim": 1.e9,
+                        **({} if scheme is None else {"implicit-scheme": scheme}),
+                        **({} if integrator is None else {"implicit-integrator": integrator}),
                         **({} if iterations is None else {"implicit-integrator-iterations": iterations})},
         "forcing": {"const-gravity": {"grav1": -9.8}},
     }
@@ -80,12 +82,16 @@ def main():
             fails.append("accepted implicit-integrator-iterations 0")
         except Exception as e:
             print("rejected iterations 0: %s" % str(e).splitlines()[0][:100])
-        for scheme, name in ((1, "hevi-ark2"), (9, "ark-unknown")):
+        for scheme, name in ((1, "hevi-ark2"), (0, "hevi-ark2"), (None, "hevi-ark2"),
+                             (9, "ark-unknown")):
             try:
                 build(scheme, name, tmp)
-                fails.append("accepted scheme %d with %s" % (scheme, name))
+                fails.append("accepted scheme %s with %s" % (scheme, name))
             except Exception as e:  # TORCH_CHECK -> RuntimeError
-                print("rejected scheme %d, %s: %s" % (scheme, name, str(e).splitlines()[0][:100]))
+                msg = next((l for l in str(e).splitlines() if name in l), "")
+                print("rejected scheme %s, %s: %s" % (scheme, name, msg[:160]))
+                if not msg:
+                    fails.append("scheme %s with %s rejected without naming %s" % (scheme, name, name))
     if fails:
         print("FAILED:", "; ".join(fails))
         return 1
