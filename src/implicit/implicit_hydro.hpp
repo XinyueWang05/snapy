@@ -29,7 +29,8 @@ struct ImplicitOptionsImpl {
        << "* scheme = " << scheme() << "\n"
        << "* advection_cfl = " << advection_cfl() << "\n"
        << "* shear_cfl = " << shear_cfl() << "\n"
-       << "* integrator = " << integrator() << "\n";
+       << "* integrator = " << integrator() << "\n"
+       << "* integrator_iterations = " << integrator_iterations() << "\n";
   }
 
   int size() const {
@@ -48,6 +49,10 @@ struct ImplicitOptionsImpl {
   //! "hevi-ark2": vic-full only; MeshBlock advances the step with the
   //! ARK2 HEVI tableau (explicit horizontal, linearly implicit vertical)
   ADD_ARG(std::string, integrator) = "rk";
+  //! hevi-ark2: solves per implicit stage. 1: one linearised solve about
+  //! the predictor; n > 1: n - 1 further corrections towards the stage's
+  //! implicit solution, D <- D + (I + g dt J)^-1 (g dt V(R + D) - D)
+  ADD_ARG(int, integrator_iterations) = 1;
 };
 using ImplicitOptions = std::shared_ptr<ImplicitOptionsImpl>;
 
