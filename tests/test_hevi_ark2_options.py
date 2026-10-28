@@ -5,8 +5,8 @@ the key, implicit-scheme 9 under rk3 runs hevi-ark2 (implicit-integrator: rk opt
   * hevi-ark2 with implicit-scheme 9 builds a block and runs one step on a rest column;
   * hevi-ark2 with implicit-scheme 1, 0 or absent and an unknown name are rejected at
     construction;
-  * the fixed-solve fallback: implicit-integrator-tolerance 0 with iterations 4 is bitwise
-    iterations 4 alone and differs from iterations 3; the default (4 fixed solves) step is
+  * the default is bitwise implicit-integrator-iterations 4 (4 fixed solves) and differs
+    from iterations 3; tolerance 0 with iterations 4 is bitwise iterations 4; the default step is
     finite; implicit-integrator-iterations 0 and a negative tolerance are rejected;
   * implicit-integrator-iterations and -tolerance under rk (named, or no implicit scheme
     9) are rejected at construction; under implicit-scheme 9 without the integrator key
@@ -83,6 +83,9 @@ def main():
               "4 differs from 3: %s (max |u4 - u3| %.3e); default (4 fixed solves) stats %s, "
               "max |u_default - u4| %.3e" % (same4, st40, diff3, (u4 - u3).abs().max().item(),
                                              st_default, (u_default - u4).abs().max().item()))
+        # the old assertion, kept: the default is 4 fixed solves
+        if not torch.equal(u_default, u4):
+            fails.append("hevi-ark2 default is not bitwise iterations 4")
         if not (same4 and diff3):
             fails.append("the fixed-solve fallback is not 4 stage solves")
         if not (torch.isfinite(u_default).all() and st_default[0] > 0):
