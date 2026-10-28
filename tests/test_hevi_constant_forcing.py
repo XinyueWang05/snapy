@@ -13,7 +13,7 @@ implicit-integrator key):
 
 Each arm: max |u - a t| / (a t) <= TOL_U after NSTEP steps of fixed dt, max |w| <= W_BOUND,
 and the solve counter moved (the step is hevi-ark2). The rk path (implicit-integrator: rk)
-is reported for reference only: it misses u = a t by about 1% here (measured 1.0e-2).
+is reported for reference (it meets u = a t as well).
 
   python test_hevi_constant_forcing.py
 """
@@ -105,9 +105,12 @@ def run(native, tmp, integrator=None):
         for s in range(len(block.module("intg").stages)):
             block.forward(v, DT, s)
     I = (0, slice(ng, ng + NX2), slice(ng, ng + NZ))
-    hw = v["hydro_w"]
-    u = hw[kIV1 + 1][I]
-    wv = hw[kIV1][I]
+    # velocities from the conserved state: hydro_w is refreshed at the start of each
+    # stage's forward, so after a step it holds the last stage's input (t + dt/2 for
+    # rk3's third stage, t + dt for ARS(2,3,2)), not u^{n+1}
+    hu = v["hydro_u"]
+    u = (hu[kIV1 + 1] / hu[kIDN])[I]
+    wv = (hu[kIV1] / hu[kIDN])[I]
     exact = A * NSTEP * DT
     return dict(err=((u - exact).abs().max() / exact).item(), w=wv.abs().max().item(),
                 solves=(block.hevi_solve_stats() - stats0).tolist())

@@ -19,7 +19,9 @@ using namespace snap;
 constexpr double SPLIT_TOL = 1.e-3;
 // ... at this fraction of the step limit, where the dynamics' response to the
 // split's heating within the step is negligible (at the full step the two
-// integrators' vertical acoustic responses differ by about 40% of the split)
+// integrators' vertical acoustic responses differ by about the split itself:
+// against a 512-substep reference the rk path converges at first order and
+// hevi-ark2 at second, with the same Strang wrapper)
 constexpr double DT_FRACTION = 1.e-3;
 namespace {
 Mesh make_mesh(int n = 12, int partitions = 1) {
@@ -600,7 +602,12 @@ TEST(CubedSphereDiffusion, hevi_ark2_radial_split_matches_rk) {
     std::vector<torch::Tensor> du;
     double stages = 0.;
     for (size_t i = 0; i < s.size(); ++i) {
-      du.push_back(vars[i]["hydro_u"][IPR] - u0[i][IPR]);
+      // interior cells only: corner ghosts are not refreshed by the exchange
+      int ng = mesh->blocks[i]->pcoord->options->nghost();
+      du.push_back((vars[i]["hydro_u"][IPR] - u0[i][IPR])
+                       .slice(0, ng, -ng)
+                       .slice(1, ng, -ng)
+                       .slice(2, ng, -ng));
       stages += mesh->blocks[i]->hevi_solve_stats.defined()
                     ? mesh->blocks[i]->hevi_solve_stats[0].item<double>()
                     : 0.;
