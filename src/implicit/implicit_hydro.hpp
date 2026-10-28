@@ -30,7 +30,9 @@ struct ImplicitOptionsImpl {
        << "* advection_cfl = " << advection_cfl() << "\n"
        << "* shear_cfl = " << shear_cfl() << "\n"
        << "* integrator = " << integrator() << "\n"
-       << "* integrator_iterations = " << integrator_iterations() << "\n";
+       << "* integrator_iterations = " << integrator_iterations() << "\n"
+       << "* integrator_tolerance = " << integrator_tolerance() << "\n"
+       << "* integrator_auto = " << integrator_auto() << "\n";
   }
 
   int size() const {
@@ -49,17 +51,51 @@ struct ImplicitOptionsImpl {
   //! "hevi-ark2": vic-full only; MeshBlock advances the step with the
   //! ARK2 HEVI tableau (explicit horizontal, linearly implicit vertical)
   ADD_ARG(std::string, integrator) = "rk";
+  //! the integrator was chosen without an implicit-integrator key: vic-full
+  //! with integration/type rk3 runs hevi-ark2 (implicit-integrator: rk opts
+  //! out and restores the rk path)
+  ADD_ARG(bool, integrator_auto) = false;
+  //! hevi-ark2: relative tolerance of the stage solves; < 0: key absent.
+  //! With a tolerance > 0 the stage iterates until every conserved row's
+  //! correction satisfies max|dD| <= tol max|D| + kHeviAtolEps eps scale
+  //! (scale: the row's max |R|; sqrt(rho E) for the momenta)
+  //! (at least kHeviMinSolves, the measured fixed-solve floor, at most
+  //! hevi_max_solves(); past the minimum it also stops once the correction
+  //! stops contracting); 0 switches the stop off and runs hevi_iterations()
+  //! fixed solves
+  ADD_ARG(double, integrator_tolerance) = -1.;
   //! hevi-ark2: solves per implicit stage. 1: one linearised solve about
   //! the predictor; n > 1: n - 1 further corrections towards the stage's
   //! implicit solution, D <- D + (I + g dt J)^-1 (g dt V(R + D) - D).
-  //! 0 (default): hevi-ark2 uses kHeviDefaultIterations. On a rest column
+  //! 0 (default): the fixed count is kHeviDefaultIterations. On a rest column
   //! from the discretely balanced state, 1 solve grows at vertical acoustic
   //! Courant >= 1.65 and 3 solves at >= 197; 4 stay at round-off up to 250
  public:
   static constexpr int kHeviDefaultIterations = 4;
+  static constexpr int kHeviMaxIterations = 8;
+  static constexpr int kHeviMinSolves = 4;
+  static constexpr double kHeviAtolEps = 1.e3;
+  //! fixed solves per stage when the tolerance stop is off
   int hevi_iterations() const {
     return integrator_iterations() > 0 ? integrator_iterations()
                                        : kHeviDefaultIterations;
+  }
+  //! the tolerance in use (0: fixed hevi_iterations() solves). The stop is
+  //! on only with implicit-integrator-tolerance > 0: by default the stages
+  //! run the measured kHeviDefaultIterations fixed solves. Fewer solves grow
+  //! on a balanced rest column at vertical acoustic Courant >= 65.6 (cubed
+  //! tall column, face-work operator box); more diverge on a 45-level,
+  //! 40-scale-height column at dt 1500 s (stratified-solid coarse column:
+  //! fixed 4 runs 40 steps at max|w| 0.095, fixed 8 fails at step 13)
+  double hevi_tolerance() const {
+    return integrator_tolerance() >= 0. ? integrator_tolerance() : 0.;
+  }
+  //! solves per stage at most (tolerance stop) or exactly (fixed)
+  int hevi_max_solves() const {
+    if (hevi_tolerance() > 0.)
+      return integrator_iterations() > 0 ? integrator_iterations()
+                                         : kHeviMaxIterations;
+    return hevi_iterations();
   }
   ADD_ARG(int, integrator_iterations) = 0;
 };
