@@ -29,7 +29,8 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
   // pyharp's integrator reads this block too, so its keys are listed by name
   check_keys(intg, "integration",
              {"implicit-scheme", "implicit-advection-cfl", "shear-cfl",
-              "implicit-integrator", "implicit-integrator-iterations"},
+              "implicit-integrator", "implicit-integrator-iterations",
+              "implicit-integrator-tolerance"},
              "pyharp",
              {"type", "cfl", "tlim", "nlim", "ncycle_out", "verbose"});
   auto op =
@@ -48,6 +49,10 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
         intg["implicit-scheme"] ? "implicit-scheme 0" : "no implicit-scheme");
     TORCH_CHECK(!intg["implicit-integrator-iterations"],
                 "integration/implicit-integrator-iterations applies only to "
+                "implicit-integrator hevi-ark2 (implicit-scheme 9); remove it "
+                "under rk");
+    TORCH_CHECK(!intg["implicit-integrator-tolerance"],
+                "integration/implicit-integrator-tolerance applies only to "
                 "implicit-integrator hevi-ark2 (implicit-scheme 9); remove it "
                 "under rk");
     return nullptr;
@@ -84,6 +89,12 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
                   "integration/implicit-integrator hevi-ark2 needs "
                   "implicit-scheme 9 (vic-full)");
       op->integrator(name);
+    } else if (((op->scheme() >> 3) & 1) && intg["type"] &&
+               intg["type"].as<std::string>() == "rk3") {
+      // vic-full under rk3 defaults to the ARS(2,3,2) HEVI step: the rk path
+      // grows at its default step (implicit-integrator: rk restores it)
+      op->integrator("hevi-ark2");
+      op->integrator_auto(true);
     }
     if (intg["implicit-integrator-iterations"]) {
       // rk does not read it: a deck that sets it under rk would run unchanged
@@ -97,6 +108,18 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
                   ">= 1, got ",
                   n);
       op->integrator_iterations(n);
+    }
+    if (intg["implicit-integrator-tolerance"]) {
+      TORCH_CHECK(op->integrator() == "hevi-ark2",
+                  "integration/implicit-integrator-tolerance applies only to "
+                  "implicit-integrator hevi-ark2, got implicit-integrator ",
+                  op->integrator(), "; remove it under rk");
+      double tol = read_finite("implicit-integrator-tolerance", -1.);
+      TORCH_CHECK(tol >= 0.,
+                  "integration/implicit-integrator-tolerance must be >= 0 "
+                  "(0: fixed solves), got ",
+                  tol);
+      op->integrator_tolerance(tol);
     }
     TORCH_CHECK(op->shear_cfl() >= 0.,
                 "integration/shear-cfl must be >= 0, got ", op->shear_cfl(),

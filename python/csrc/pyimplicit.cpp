@@ -32,7 +32,11 @@ void bind_implicit(py::module &m) {
       .def("type", &snap::ImplicitOptionsImpl::type)
       .ADD_OPTION(int, snap::ImplicitOptionsImpl, scheme)
       .ADD_OPTION(double, snap::ImplicitOptionsImpl, advection_cfl)
-      .ADD_OPTION(double, snap::ImplicitOptionsImpl, shear_cfl);
+      .ADD_OPTION(double, snap::ImplicitOptionsImpl, shear_cfl)
+      .ADD_OPTION(std::string, snap::ImplicitOptionsImpl, integrator)
+      .ADD_OPTION(int, snap::ImplicitOptionsImpl, integrator_iterations)
+      .ADD_OPTION(double, snap::ImplicitOptionsImpl, integrator_tolerance)
+      .ADD_OPTION(bool, snap::ImplicitOptionsImpl, integrator_auto);
 
   ADD_SNAP_MODULE(ImplicitHydro, ImplicitOptions)
       .def(py::init<snap::ImplicitOptions, torch::nn::Module *>(),
