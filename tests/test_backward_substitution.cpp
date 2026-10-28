@@ -340,9 +340,8 @@ TEST(vic_redistribution, tangential_momentum_follows_the_face_mass) {
                                          vol.data(), nlayer, 0, stride1,
                                          stride2);
     for (int i = 0; i < nlayer; ++i)
-      snap::vic_redistribute_cell<double, 3>(du.data(), mass_fix.data(),
-                                             delta.data(), i, 0, ny, stride1,
-                                             stride2);
+      snap::vic_redistribute_cell<double, 3>(
+          du.data(), mass_fix.data(), delta.data(), i, 0, ny, stride1, stride2);
 
     if (!wind) {
       for (int n : {snap::IVY, snap::IVZ})

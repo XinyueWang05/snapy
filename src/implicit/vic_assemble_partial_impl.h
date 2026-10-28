@@ -57,7 +57,8 @@ void DISPATCH_MACRO vic_assemble_partial_impl(
   bool fold = du != nullptr && rhs_corr != nullptr;
   int const it[2] = {IVX + (dir + 1) % 3, IVX + (dir + 2) % 3};
   Eigen::Matrix<T, 3, 2> AmT, ApT, dfp_T, dfc_T, dfn_T;
-  auto tcols = [&](Eigen::Matrix<T, 3, 2>& out, Eigen::Matrix<T, 5, 5> const& m) {
+  auto tcols = [&](Eigen::Matrix<T, 3, 2>& out,
+                   Eigen::Matrix<T, 5, 5> const& m) {
     int const rows[3] = {IDN, IVX, IPR};
     for (int r = 0; r < 3; ++r)
       for (int k = 0; k < 2; ++k) out(r, k) = m(rows[r], it[k]);
