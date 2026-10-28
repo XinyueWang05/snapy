@@ -4,8 +4,8 @@
   * hevi-ark2 with implicit-scheme 9 builds a block and runs one step on a rest column;
   * hevi-ark2 with implicit-scheme 1, 0 or absent and an unknown name are rejected at
     construction;
-  * without implicit-integrator-iterations, hevi-ark2 runs 3 stage iterations: a step is
-    bitwise the step with the key set to 3 and differs from the key set to 1;
+  * without implicit-integrator-iterations, hevi-ark2 runs 4 stage iterations: a step is
+    bitwise the step with the key set to 4 and differs from the key set to 3;
     implicit-integrator-iterations 0 is rejected;
   * implicit-integrator-iterations under rk (named or default, implicit-scheme 9, 0 or
     absent) is rejected at construction.
@@ -73,12 +73,12 @@ def main():
             for st in range(len(blk.module("intg").stages)):
                 blk.forward(v, 5.0, st)
             return v["hydro_u"].clone()
-        u_default, u3, u1 = step(None), step(3), step(1)
-        same3, diff1 = torch.equal(u_default, u3), not torch.equal(u_default, u1)
-        print("default iterations: bitwise = 3: %s; differs from 1: %s (max |u3 - u1| %.3e)"
-              % (same3, diff1, (u3 - u1).abs().max().item()))
-        if not (same3 and diff1):
-            fails.append("hevi-ark2 default is not 3 stage iterations")
+        u_default, u4, u3 = step(None), step(4), step(3)
+        same4, diff3 = torch.equal(u_default, u4), not torch.equal(u_default, u3)
+        print("default iterations: bitwise = 4: %s; differs from 3: %s (max |u4 - u3| %.3e)"
+              % (same4, diff3, (u4 - u3).abs().max().item()))
+        if not (same4 and diff3):
+            fails.append("hevi-ark2 default is not 4 stage iterations")
         try:
             build(9, "hevi-ark2", tmp, 0)
             fails.append("accepted implicit-integrator-iterations 0")
