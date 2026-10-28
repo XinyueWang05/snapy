@@ -28,10 +28,12 @@ def create(cfg):
     b.to(torch.device(device), torch.float64)
     return b
 
-def tall_run(nz, heights, scheme, work, steps=1, dt=None, fixer=False):
+def tall_run(nz, heights, scheme, work, steps=1, dt=None, fixer=False, integrator=None):
     H = tall.RD * tall.T0 / tall.GRAV
     dz = H * heights / nz
     cfg = tall.config(scheme)
+    if integrator:
+        cfg['integration']['implicit-integrator'] = integrator
     cfg['geometry']['cells']['nx1'] = nz
     cfg['geometry']['bounds']['x1max'] = dz * nz
     cfg['forcing']['const-gravity'].update({'gravity-work': work, 'gravity-work-fixer': fixer})
@@ -257,7 +259,10 @@ if __name__ == '__main__':
                     and abs(out['mass']) < 1e-12 and out['clamp'] == 0
                     and (work == 'cell' and not fixer or abs(out['epe_drift']) < tall.EPE_TOL)):
                 failures.append(f'tall column {nz}: {out}')
-        out = tall_run(45, 40, 9, work, 40, 1500, fixer=fixer)
+        # the face arm covers the redo/rollback of the rk path (implicit-integrator: rk);
+        # under the hevi-ark2 default this deck does not reach a redo
+        out = tall_run(45, 40, 9, work, 40, 1500, fixer=fixer,
+                       integrator='rk' if work == 'face' else None)
         if work == 'face':
             # Rollback coverage only; a retry does not establish stability.
             if out['redo_status'] > 0:
