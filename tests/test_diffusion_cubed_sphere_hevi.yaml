@@ -1,0 +1,38 @@
+# test_diffusion_cubed_sphere.yaml with weak gravity and implicit-scheme 9 (the implicit
+# solve needs const-gravity; 1e-12 keeps the column quiet), for the hevi-ark2 vs rk
+# radial-split parity test
+reference-state: {Tref: 0., Pref: 1.e5}
+species:
+  - name: dry
+    composition: {O: 0.42, N: 1.56, Ar: 0.01}
+    cv_R: 2.5
+dynamics:
+  equation-of-state: {type: ideal-gas}
+geometry:
+  type: gnomonic-equiangle
+  cells: {nx1: 4, nx2: 12, nx3: 12, nghost: 2}
+  bounds:
+    x1min: 10.
+    x1max: 11.
+    x2min_pi: -0.25
+    x2max_pi: 0.25
+    x3min_pi: -0.25
+    x3max_pi: 0.25
+distribute:
+  layout: cubed-sphere
+  nb2: 1
+  nb3: 1
+  blocks_per_process: 6
+  verbose: false
+boundary-condition:
+  external:
+    x1-inner: reflecting
+    x1-outer: reflecting
+    x2-inner: custom
+    x2-outer: custom
+    x3-inner: custom
+    x3-outer: custom
+forcing:
+  const-gravity: {grav1: -1.e-12}
+  diffusion: {nu_iso: 0.01, kappa_iso: 0.02, dynamic: true}
+integration: {type: rk3, cfl: 0.4, implicit-scheme: 9}
