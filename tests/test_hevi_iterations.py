@@ -12,8 +12,8 @@ grows here: max|w| rises about 100x to above 1e-5 in 480 steps. Each arm:
     largest max|w| of the first quarter;
   * mass: the relative change of the total mass is below MASS_TOL.
 
-Also: the default arm is bitwise the arm with implicit-integrator-iterations 3, and the
-arm at 5 is not bitwise the arm at 3 (the key reaches the solver).
+Also: the default arm is bitwise the arm with implicit-integrator-iterations 4, and the
+arm at 5 is not bitwise the arm at 4 (the key reaches the solver).
 
   python test_hevi_iterations.py
 """
@@ -115,17 +115,17 @@ def main():
     torch.set_default_dtype(torch.float64)
     fails = []
     with tempfile.TemporaryDirectory() as tmp:
-        r_def, r3, r5 = run(None, tmp), run(3, tmp), run(5, tmp)
+        r_def, r4, r5 = run(None, tmp), run(4, tmp), run(5, tmp)
     check("default", r_def, fails)
     check("iterations 5", r5, fails)
-    same3 = torch.equal(r_def["u"], r3["u"])
-    diff5 = not torch.equal(r5["u"], r3["u"])
-    print("default bitwise = iterations 3: %s; iterations 5 differs from 3: %s (max |u5 - u3| %.3e)"
-          % (same3, diff5, (r5["u"] - r3["u"]).abs().max().item()))
-    if not same3:
-        fails.append("default is not bitwise iterations 3")
+    same4 = torch.equal(r_def["u"], r4["u"])
+    diff5 = not torch.equal(r5["u"], r4["u"])
+    print("default bitwise = iterations 4: %s; iterations 5 differs from 4: %s (max |u5 - u4| %.3e)"
+          % (same4, diff5, (r5["u"] - r4["u"]).abs().max().item()))
+    if not same4:
+        fails.append("default is not bitwise iterations 4")
     if not diff5:
-        fails.append("iterations 5 is bitwise iterations 3")
+        fails.append("iterations 5 is bitwise iterations 4")
     if fails:
         print("FAILED:", "; ".join(fails))
         return 1

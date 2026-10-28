@@ -52,10 +52,11 @@ struct ImplicitOptionsImpl {
   //! hevi-ark2: solves per implicit stage. 1: one linearised solve about
   //! the predictor; n > 1: n - 1 further corrections towards the stage's
   //! implicit solution, D <- D + (I + g dt J)^-1 (g dt V(R + D) - D).
-  //! 0 (default): hevi-ark2 uses kHeviDefaultIterations; one linearised
-  //! solve grows on a rest column at vertical acoustic Courant >= 4
+  //! 0 (default): hevi-ark2 uses kHeviDefaultIterations. On a rest column
+  //! from the discretely balanced state, 1 solve grows at vertical acoustic
+  //! Courant >= 1.65 and 3 solves at >= 197; 4 stay at round-off up to 250
  public:
-  static constexpr int kHeviDefaultIterations = 3;
+  static constexpr int kHeviDefaultIterations = 4;
   int hevi_iterations() const {
     return integrator_iterations() > 0 ? integrator_iterations()
                                        : kHeviDefaultIterations;
