@@ -14,8 +14,28 @@ The face ladder runs twice, each in a child process (the switch is read once per
 process): with SNAP_GRAVITY_WORK_RADIAL_EXACT=0, and with it on (the corrected-PE
 work of docs/derivations/curved-gravity-work-weight.md sec 7, booked inside the
 implicit operator, #296). Every rung must stay below W_TOL, end the run below
-W_SETTLED, and, with the switch on, peak at most ON_OFF times its switch-off rung.
+W_SETTLED, and, with the switch on, peak at most ON_OFF times its switch-off rung (or
+W_ROUNDOFF, the round-off level of the rebalanced column).
 A child that exits non-zero or prints an incomplete ladder fails the parent (#299).
+
+Every arm starts from the column rebalanced against the run's own discrete operator
+(rebalance). snapy.balance_column (rtol 1e-12, 400 sweeps) leaves a rest residual of
+~5.5e-13 (scaled by rho g) against that operator; at its default rtol 1e-10 it left 3.3e-11
+in the bottom levels, which seeded an acoustic transient that explicit scheme 0, converged
+in dt, carried to max w ~2.0e-6. One Gauss-Newton step on (ln rho, ln p) of the column,
+with the explicit tendency of one tiny step from rest as the residual, takes it to
+round-off (~8e-15) and the explicit transient to ~3e-10.
+
+With SNAP_TEST_IMPLICIT_INTEGRATOR=hevi-ark2 (the _hevi entry) the face ladder runs the
+hevi-ark2 rungs HEVI_COURANTS in one child at the default gravity work, i.e. with
+SNAP_GRAVITY_WORK_RADIAL_EXACT unset (on), each without an early stop over at least
+HEVI_T_END (the 40 steps of the 6.6 rung), with the default stage solves (4). Every rung
+must stay finite with max w at most HEVI_W_TOL on every step: from the rebalanced column
+the run must stay at round-off (4 solves peak at 2.1e-10; 3 solves grow to 2.9e-9 at
+Courant 197/250 by step 40). That bar replaces W_TOL,
+W_SETTLED and ON_OFF in this arm. The cell-work + global-fixer arm runs on the rk ladder
+only: hevi-ark2 rejects the gravity-work fixer at its first step. The rk ladder keeps
+W_TOL, W_SETTLED and ON_OFF.
 """
 import argparse
 import math
@@ -34,8 +54,12 @@ COURANTS = (6.6, 65.6, 100.0, 197.0, 250.0)
 RADIUS = 7.e7
 W_TOL = 1.0e-7  # m/s
 W_SETTLED = 1.0e-10  # m/s, max w at the last step: the column has settled
-ON_OFF = 1.1  # switch on: max w at most this times the switch-off rung's
-
+ON_OFF = 1.1  # switch on: max w at most this times the switch-off rung's,
+W_ROUNDOFF = 1.0e-11  # m/s round-off floor: measured 8.1e-13 (OFF) / 8.2e-13 (ON) at C 100
+# hevi-ark2 arm (see the docstring)
+HEVI = os.environ.get("SNAP_TEST_IMPLICIT_INTEGRATOR", "rk") != "rk"
+HEVI_COURANTS = (0.4, 1.65, 3.3) + COURANTS
+HEVI_W_TOL = 1.0e-9  # m/s, max w on every step of every hevi rung (4.7x the 2.1e-10 peak)
 
 def config(geometry="cartesian", cell_work=False):
     rgas = 8.31446261815324
@@ -84,13 +108,96 @@ def config(geometry="cartesian", cell_work=False):
     return cfg
 
 
-def run(dt, nstep, device, geometry="cartesian", cell_work=False):
+def interior_of(geometry):
+    ng, cells = 3, config(geometry)["geometry"]["cells"]
+    jl = ng if cells["nx2"] > 1 else 0
+    kl = ng if cells["nx3"] > 1 else 0
+    return (slice(None), slice(kl, kl + cells["nx3"]), slice(jl, jl + cells["nx2"]), slice(ng, ng + NZ))
+
+
+def initialize(block, rho, p):
+    """the block at rest on the column (rho, p), ghosts copied from the edge cells"""
+    from snapy import kIDN, kIPR
+    ng = 3
+    w = dict(block.named_buffers())["hydro.D"].clone().zero_()
+    for c, v in ((kIDN, rho), (kIPR, p)):
+        w[c][..., ng:ng + NZ] = v.to(w)
+        w[c][..., :ng] = w[c][..., ng:ng + 1]
+        w[c][..., ng + NZ:] = w[c][..., ng + NZ - 1:ng + NZ]
+    block_vars, _ = block.initialize({"hydro_w": w})
+    return block_vars
+
+
+def explicit_block(geometry, device, cell_work=False):
+    from snapy import MeshBlock, MeshBlockOptions
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, dir=os.getcwd()) as f:
+        cfg = config(geometry, cell_work)
+        cfg["integration"].update({"implicit-scheme": 0, "implicit-integrator": "rk"})
+        yaml.safe_dump(cfg, f)
+        tmp = f.name
+    try:
+        block = MeshBlock(MeshBlockOptions.from_yaml(tmp))
+    finally:
+        os.unlink(tmp)
+    block.to(torch.device(device))
+    return block
+
+
+_REBALANCED = {}
+
+
+def rebalance(geometry, device, cell_work, rho, p, h=1.0, eps=1.0e-7, newton=3, tol=1.0e-13):
+    """the column zeroing the explicit operator's own rest tendency: Gauss-Newton on
+    (ln rho, ln p), residual = the change of (rho, m1, E) over one explicit step of h
+    seconds from rest, scaled by rho cs / dz, rho g and p cs / dz, over every column"""
+    from snapy import kIDN, kIPR, kIV1
+    key = (geometry, device, cell_work, os.environ.get("SNAP_GRAVITY_WORK_RADIAL_EXACT"))
+    if key in _REBALANCED:
+        return _REBALANCED[key]
+    block = explicit_block(geometry, device, cell_work)
+    interior = interior_of(geometry)
+    nstage = len(block.module("intg").stages)
+    cs = math.sqrt(GAMMA * RD * T0)
+
+    def residual(x):
+        r_, p_ = x[:NZ].exp(), x[NZ:].exp()
+        bv = initialize(block, r_, p_)
+        u0 = bv["hydro_u"][interior].clone()
+        for stage in range(nstage):
+            block.forward(bv, h, stage)
+        du = ((bv["hydro_u"][interior] - u0) / h).cpu()
+        return torch.cat([(du[kIDN] / (r_ * cs / DZ)).flatten(), (du[kIV1] / (r_ * GRAV)).flatten(),
+                          (du[kIPR] / (p_ * cs / DZ)).flatten()])
+
+    x = torch.cat([rho.log(), p.log()])
+    for _ in range(newton):
+        r = residual(x)
+        if r.abs().max().item() < tol:
+            break
+        jac = torch.empty(r.numel(), 2 * NZ, dtype=torch.float64)
+        for j in range(2 * NZ):
+            xj = x.clone()
+            xj[j] += eps
+            jac[:, j] = (residual(xj) - r) / eps
+        x = x + torch.linalg.lstsq(jac, -r.unsqueeze(1), driver="gelsd").solution.squeeze(1)
+    _REBALANCED[key] = (x[:NZ].exp(), x[NZ:].exp())
+    print(json.dumps({"geometry": geometry, "cell_work": cell_work, "rebalance_residual_before": residual(
+        torch.cat([rho.log(), p.log()])).abs().max().item(),
+        "rebalance_residual_after": residual(x).abs().max().item()}), flush=True)
+    return _REBALANCED[key]
+
+
+def run(dt, nstep, device, geometry="cartesian", cell_work=False, stop=True, integration=None):
+    """stop=False: no early stop at W_TOL, and history holds max w at every step;
+    integration overrides the deck's integration keys."""
 
     import snapy
     from snapy import MeshBlock, MeshBlockOptions, kIDN, kIPR, kIV1
 
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, dir=os.getcwd()) as f:
-        yaml.safe_dump(config(geometry, cell_work), f)
+        cfg = config(geometry, cell_work)
+        cfg["integration"].update(integration or {})
+        yaml.safe_dump(cfg, f)
         tmp = f.name
     try:
         block = MeshBlock(MeshBlockOptions.from_yaml(tmp))
@@ -98,25 +205,16 @@ def run(dt, nstep, device, geometry="cartesian", cell_work=False):
         os.unlink(tmp)
     block.to(torch.device(device))
 
-    ng = 3
     z = (torch.arange(NZ, dtype=torch.float64) + 0.5) * DZ
     p = PS * torch.exp(-GRAV * z / (RD * T0))
     col = torch.zeros(kIPR + 1, 1, 1, NZ, dtype=torch.float64)
     col[kIDN, 0, 0] = p / (RD * T0)
     col[kIPR, 0, 0] = p
-    wb, err, _ = snapy.balance_column(col, torch.full((NZ,), DZ, dtype=torch.float64), GRAV)
-    w = dict(block.named_buffers())["hydro.D"].clone().zero_()
-    for c in (kIDN, kIPR):
-        w[c][..., ng:ng + NZ] = wb[c, 0, 0].to(w)
-        w[c][..., :ng] = w[c][..., ng:ng + 1]
-        w[c][..., ng + NZ:] = w[c][..., ng + NZ - 1:ng + NZ]
-    block_vars, _ = block.initialize({"hydro_w": w})
-
-    cells = config(geometry)["geometry"]["cells"]
-    nx2, nx3 = cells["nx2"], cells["nx3"]
-    jl = ng if nx2 > 1 else 0
-    kl = ng if nx3 > 1 else 0
-    interior = (slice(None), slice(kl, kl + nx3), slice(jl, jl + nx2), slice(ng, ng + NZ))
+    wb, err, _ = snapy.balance_column(col, torch.full((NZ,), DZ, dtype=torch.float64), GRAV,
+                                      rtol=1.e-12, max_iter=400)
+    rho, p = rebalance(geometry, device, cell_work, wb[kIDN, 0, 0].clone(), wb[kIPR, 0, 0].clone())
+    block_vars = initialize(block, rho, p)
+    interior = interior_of(geometry)
     nstage = len(block.module("intg").stages)
     wmax, history = 0.0, []
     for n in range(1, nstep + 1):
@@ -130,11 +228,19 @@ def run(dt, nstep, device, geometry="cartesian", cell_work=False):
             return False, n, wmax, history, err
         wn = (u[kIV1] / u[kIDN]).abs().max().item()
         wmax = max(wmax, wn)
+        if not stop:
+            history.append(wn)
+            continue
         if wmax >= W_TOL:
             return False, n, wmax, history, err
         if n in (1, 10, 20, 30, nstep):
             history.append((n, wn))
     return True, nstep, wmax, history, err
+
+
+def hevi_t_end(cs):
+    """the simulated time of the 40-step 6.6 rung, 4015 s"""
+    return 40 * COURANTS[0] * DZ / cs
 
 
 def main():
@@ -143,7 +249,7 @@ def main():
     ap.add_argument("--nstep", type=int, default=40)
     ap.add_argument("--geometry", choices=("cartesian", "spherical-polar", "gnomonic-equiangle", "both"),
                     default="both")
-    ap.add_argument("--courants", type=float, nargs="+", default=COURANTS)
+    ap.add_argument("--courants", type=float, nargs="+", default=HEVI_COURANTS if HEVI else COURANTS)
     ap.add_argument("--ladder", action="store_true",
                     help="child: the face ladder only, under the inherited switch")
     args = ap.parse_args()
@@ -157,7 +263,8 @@ def main():
     geometries = ("cartesian", "spherical-polar") if args.geometry == "both" else (args.geometry,)
     if not args.ladder:
         ladder = {}
-        for value in ("0", "1"):  # SNAP_GRAVITY_WORK_RADIAL_EXACT off, on (on by default)
+        # rk: SNAP_GRAVITY_WORK_RADIAL_EXACT off, on; hevi-ark2: unset, the default (on)
+        for value in ((None,) if HEVI else ("0", "1")):
             env = dict(os.environ)
             env.pop("SNAP_GRAVITY_WORK_RADIAL_EXACT", None)
             if value is not None:
@@ -171,18 +278,18 @@ def main():
                 if not line.startswith("{"):
                     continue
                 row = json.loads(line)
-                row["radial_exact"] = value == "1"
+                row["radial_exact"] = value != "0"
                 print(json.dumps(row), flush=True)
                 if "first_failing_courant" in row:
                     summaries.add(row["geometry"])
                 if "passed" not in row:
                     continue
                 rungs.add((row["geometry"], row["courant"]))
-                arm = "radial-exact" if value == "1" else "face"
+                arm = "radial-exact" if value != "0" else "face"
                 ladder[arm, row["geometry"], row["courant"]] = row
                 if not row["passed"]:
                     failures.append((arm, row["geometry"], row["courant"], row["steps"], row["max_w"]))
-                elif row["history"][-1][1] > W_SETTLED:
+                elif not HEVI and row["history"][-1][1] > W_SETTLED:
                     failures.append((arm, row["geometry"], row["courant"], "not settled",
                                      row["history"][-1]))
             # a child exits 1 for a failing rung (already listed above) and for an
@@ -194,17 +301,27 @@ def main():
                 failures.append(("child", value, out.returncode, "missing rows", missing))
         for (arm, geometry, courant), on in ladder.items():
             off = ladder.get(("face", geometry, courant))
-            if arm == "radial-exact" and off and on["max_w"] > ON_OFF * off["max_w"]:
+            if not HEVI and arm == "radial-exact" and off and on["max_w"] > max(ON_OFF * off["max_w"], W_ROUNDOFF):
                 failures.append((arm, geometry, courant, "max w", on["max_w"], "off", off["max_w"]))
     for geometry in (geometries if args.ladder else ()):
         first_failure = None
         for courant in args.courants:
             dt = courant * DZ / cs
-            finite, n, wmax, history, err = run(dt, args.nstep, args.device, geometry)
-            passed = finite and wmax < W_TOL
-            print(json.dumps({"geometry": geometry, "courant": courant, "dt": dt,
-                              "steps": n, "passed": passed, "max_w": wmax,
-                              "balance_error": err, "history": history}), flush=True)
+            if HEVI:
+                nstep = max(args.nstep, math.ceil(hevi_t_end(cs) / dt))
+                finite, n, wmax, w, err = run(dt, nstep, args.device, geometry, stop=False)
+                passed = finite and n == nstep and wmax <= HEVI_W_TOL
+                k = w.index(max(w)) if w else -1
+                print(json.dumps({"geometry": geometry, "courant": courant, "dt": dt, "steps": n,
+                                  "passed": passed, "max_w": wmax, "peak_step": k + 1,
+                                  "last_w": w[-1] if w else None, "w_tol": HEVI_W_TOL,
+                                  "balance_error": err, "history": w}), flush=True)
+            else:
+                finite, n, wmax, history, err = run(dt, args.nstep, args.device, geometry)
+                passed = finite and wmax < W_TOL
+                print(json.dumps({"geometry": geometry, "courant": courant, "dt": dt,
+                                  "steps": n, "passed": passed, "max_w": wmax,
+                                  "balance_error": err, "history": history}), flush=True)
             if not passed:
                 if first_failure is None:
                     first_failure = courant
@@ -212,8 +329,10 @@ def main():
         print(json.dumps({"geometry": geometry, "first_failing_courant": first_failure,
                           "tested_courants": args.courants}), flush=True)
     # Preserve the Cartesian cell work + global fixer coverage alongside the
-    # explicitly face-only, fixer-off ladder.
-    for dt in (() if args.ladder else (997.0, 100.0)):
+    # explicitly face-only, fixer-off ladder (rk only: hevi-ark2 rejects the fixer).
+    if HEVI and not args.ladder:
+        print("SKIP cell-global-fixer: hevi-ark2 does not support the gravity-work fixer", flush=True)
+    for dt in (() if args.ladder or HEVI else (997.0, 100.0)):
         finite, n, wmax, history, err = run(
             dt, args.nstep, args.device, cell_work=True)
         passed = finite and wmax < W_TOL
