@@ -40,12 +40,12 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
                 "implicit direction: set implicit-scheme or remove them");
     // without an implicit object the integrator key would be dropped and the
     // run would go on as plain explicit rk
-    TORCH_CHECK(!intg["implicit-integrator"] ||
-                    intg["implicit-integrator"].as<std::string>() != "hevi-ark2",
-                "integration/implicit-integrator hevi-ark2 needs "
-                "implicit-scheme 9 (vic-full), got ",
-                intg["implicit-scheme"] ? "implicit-scheme 0"
-                                        : "no implicit-scheme");
+    TORCH_CHECK(
+        !intg["implicit-integrator"] ||
+            intg["implicit-integrator"].as<std::string>() != "hevi-ark2",
+        "integration/implicit-integrator hevi-ark2 needs "
+        "implicit-scheme 9 (vic-full), got ",
+        intg["implicit-scheme"] ? "implicit-scheme 0" : "no implicit-scheme");
     TORCH_CHECK(!intg["implicit-integrator-iterations"],
                 "integration/implicit-integrator-iterations applies only to "
                 "implicit-integrator hevi-ark2 (implicit-scheme 9); remove it "
@@ -78,7 +78,8 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
       auto name = intg["implicit-integrator"].as<std::string>();
       TORCH_CHECK(name == "rk" || name == "hevi-ark2",
                   "integration/implicit-integrator must be rk or hevi-ark2, "
-                  "got '", name, "'");
+                  "got '",
+                  name, "'");
       TORCH_CHECK(name == "rk" || ((op->scheme() >> 3) & 1),
                   "integration/implicit-integrator hevi-ark2 needs "
                   "implicit-scheme 9 (vic-full)");
@@ -91,8 +92,10 @@ ImplicitOptions ImplicitOptionsImpl::from_yaml(const std::string& filename,
                   "implicit-integrator hevi-ark2, got implicit-integrator ",
                   op->integrator(), "; remove it under rk");
       int n = intg["implicit-integrator-iterations"].as<int>();
-      TORCH_CHECK(n >= 1, "integration/implicit-integrator-iterations must be "
-                  ">= 1, got ", n);
+      TORCH_CHECK(n >= 1,
+                  "integration/implicit-integrator-iterations must be "
+                  ">= 1, got ",
+                  n);
       op->integrator_iterations(n);
     }
     TORCH_CHECK(op->shear_cfl() >= 0.,
