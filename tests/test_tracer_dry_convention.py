@@ -4,7 +4,8 @@ flux. A tracer that starts uniform must therefore stay uniform (to round-off) un
 operator that moves or converts dry air. Three arms on a warm unsaturated moist column:
 
   init     MeshBlock.initialize() builds scalar_s from the DRY density, not the total.
-  implicit the vertical implicit correction moves tracers with the dry face transfer, not
+  implicit the vertical implicit correction (scheme 1, scheme 9 on the rk path, and scheme 9
+           under its hevi-ark2 default) moves tracers with the dry face transfer, not
            the total one (it over-moved them by 1/(1 - sum y)).
   relax    relax-bot-comp converts dry air to vapour in the bottom cell; the tracer riding
            that dry air goes with it (r was left to drift).
@@ -139,9 +140,13 @@ def main():
 
     # ---- implicit: tracer moved with the dry face transfer (partial and full VIC) ----
     finals = {}
+    # scheme 9 on the rk path (implicit-integrator: rk), whose one-solve stage transfer this
+    # check bites; hevi-ark2, the scheme-9 default under rk3, is checked below
     for scheme in (1, 9):
         cfg = yaml.safe_load(yaml.safe_dump(base))
         cfg["integration"]["implicit-scheme"] = scheme
+        if scheme == 9:
+            cfg["integration"]["implicit-integrator"] = "rk"
         vs, dev, bug_scale = run(cfg, args.device, moving=True, nlim=cfg["integration"]["nlim"])
         finals[scheme] = vs["hydro_u"].clone()
         print(f"implicit{scheme}: max|r/r_init-1|={dev:.3e}"
@@ -156,6 +161,15 @@ def main():
     if torch.equal(finals[1], finals[9]):
         failures.append(
             "implicit: schemes 1 and 9 gave bitwise-identical states; scheme 9 not exercised")
+
+    # hevi-ark2 (scheme 9, no integrator key): the tracer rides on the ARS split and the
+    # solve's face transfer, so a uniform tracer stays uniform
+    cfg = yaml.safe_load(yaml.safe_dump(base))
+    cfg["integration"]["implicit-scheme"] = 9
+    vs, dev, _ = run(cfg, args.device, moving=True, nlim=cfg["integration"]["nlim"])
+    print(f"implicit9 hevi-ark2: max|r/r_init-1|={dev:.3e}")
+    if not dev < TOL:
+        failures.append(f"implicit scheme 9 hevi-ark2: uniform tracer departed by {dev:.3e}")
 
     # ---- relax: relax-bot-comp carries the tracer with the dry air it converts, both ways ----
     cfg = yaml.safe_load(yaml.safe_dump(base))

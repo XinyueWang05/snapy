@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""implicit-integrator hevi-ark2 at its default stage iterations (key absent) and at 5.
+"""implicit-integrator hevi-ark2 at its default stage solves (keys absent: 4 fixed), at 5,
+and with the opt-in tolerance stop (implicit-integrator-tolerance 1e-10).
 
 The u = 0 box without noise at vertical acoustic Courant 6.7: x1 vertical, 100 levels of
 4.5 km (about 10 scale heights), reflecting walls; x2 periodic, 4 cells of 100 km; dry
@@ -13,8 +14,9 @@ grows here: max|w| rises about 100x to above 1e-5 in 480 steps. Each arm:
     largest max|w| of the first quarter;
   * mass: the relative change of the total mass is below MASS_TOL.
 
-Also: the default arm is bitwise the arm with implicit-integrator-iterations 4, and the
-arm at 5 is not bitwise the arm at 4 (the key reaches the solver).
+Also: the default arm is bitwise the arm with implicit-integrator-iterations 4, the arm at
+5 is not bitwise the arm at 4 (the key reaches the solver), and the tolerance arm's solve
+counter shows 4 to 8 solves per stage.
 
   python test_hevi_iterations.py
 """
@@ -35,7 +37,7 @@ COURANT, NSTEP = 6.7, 480
 W_BOUND, DECAY, MASS_TOL = 1.e-8, 0.5, 1.e-13
 
 
-def config(iterations):
+def config(iterations, tolerance=None):
     return {
         "reference-state": {"Tref": 0.0, "Pref": 1.0e5},
         "species": [{"name": "dry", "composition": {"H": 1.5, "He": 0.15}, "cv_R": 2.5}],
@@ -54,17 +56,18 @@ def config(iterations):
                                             "x3-inner": "periodic", "x3-outer": "periodic"}},
         "integration": {"type": "rk3", "cfl": 0.3, "implicit-scheme": 9, "nlim": -1, "tlim": 1.e9,
                         "implicit-integrator": "hevi-ark2",
-                        **({} if iterations is None else {"implicit-integrator-iterations": iterations})},
+                        **({} if iterations is None else {"implicit-integrator-iterations": iterations}),
+                        **({} if tolerance is None else {"implicit-integrator-tolerance": tolerance})},
         "forcing": {"const-gravity": {"grav1": -G}},
     }
 
 
-def run(iterations, tmp):
+def run(iterations, tmp, tolerance=None):
     import snapy
     from snapy import MeshBlock, MeshBlockOptions, kIDN, kIPR, kIV1
     p = os.path.join(tmp, "deck.yaml")
     with open(p, "w") as f:
-        yaml.safe_dump(config(iterations), f)
+        yaml.safe_dump(config(iterations, tolerance), f)
     block = MeshBlock(MeshBlockOptions.from_yaml(p))
     block.to(torch.device("cpu"))
 
@@ -95,6 +98,7 @@ def run(iterations, tmp):
         wmax.append((u[kIV1] / u[kIDN]).abs().max().item())
     u = bv["hydro_u"][inner]
     return dict(u=bv["hydro_u"].clone(), wmax=wmax, dt=dt, resid=float(resid),
+                stats=block.hevi_solve_stats().tolist(),
                 mass_rel=abs(u[kIDN].sum().item() - mass0) / mass0)
 
 
@@ -121,9 +125,17 @@ def main():
     fails = []
     with tempfile.TemporaryDirectory() as tmp:
         r_def, r4, r5 = run(None, tmp), run(4, tmp), run(5, tmp)
+        r_tol = run(None, tmp, 1.e-10)
     print("initial column: balance_column residual %.2e (rtol 1e-12, 400 sweeps)" % r_def["resid"])
     check("default", r_def, fails)
     check("iterations 5", r5, fails)
+    check("tolerance 1e-10", r_tol, fails)
+    st = r_tol["stats"]
+    print("tolerance arm solve stats: %d implicit stages, %d solves (%.2f per stage), max %d, "
+          "capped %d, non-contracting %d" % (st[0], st[1], st[1] / max(st[0], 1), st[2], st[3],
+                                             st[4]))
+    if not (st[0] > 0 and st[1] >= 4 * st[0] and st[2] <= 8):
+        fails.append("tolerance arm: solve stats %s outside 4..8 per stage" % st)
     same4 = torch.equal(r_def["u"], r4["u"])
     diff5 = not torch.equal(r5["u"], r4["u"])
     print("default bitwise = iterations 4: %s; iterations 5 differs from 4: %s (max |u5 - u4| %.3e)"
