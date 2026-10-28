@@ -4,6 +4,7 @@
 #include <snap/coord/coord_utils.hpp>
 #include <snap/coord/cubed_sphere_utils.hpp>
 #include <snap/forcing/forcing.hpp>
+#include <snap/implicit/implicit_hydro.hpp>
 #include <snap/mesh/mesh.hpp>
 
 #include "cuda_test_gate.hpp"
@@ -13,6 +14,13 @@
 #endif
 
 using namespace snap;
+// hevi_ark2_radial_split_matches_rk: relative bound on the split-effect
+// mismatch
+constexpr double SPLIT_TOL = 1.e-3;
+// ... at this fraction of the step limit, where the dynamics' response to the
+// split's heating within the step is negligible (at the full step the two
+// integrators' vertical acoustic responses differ by about 40% of the split)
+constexpr double DT_FRACTION = 1.e-3;
 namespace {
 Mesh make_mesh(int n = 12, int partitions = 1) {
   auto opts = MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere.yaml");
@@ -544,4 +552,82 @@ TEST(CubedSphereDiffusion, cuda_mesh_split_step_matches_cpu) {
         reference.push_back(u.clone());
     }
   }
+}
+
+// hevi-ark2 keeps the implicit radial conduction's Strang split around the
+// step, as the rk path does. The state isolates the split: T = 300 + 2/r is
+// horizontally uniform, p uniform, at rest, under weak gravity (rho g ~ 1e-3
+// Pa/m at 1e-3; the deck uses 1e-12), so the explicit diffusion forcing (its
+// radial heat flux is off under implicit_radial, the lateral one sees no
+// gradient) does not depend on kappa: kappa 10 minus kappa 0 is the split's
+// energy change, which must agree between implicit-integrator hevi-ark2 and rk.
+// The mesh has several local blocks, so the hevi-ark2 tolerance stop also runs
+// its cross-block decision here.
+TEST(CubedSphereDiffusion, hevi_ark2_radial_split_matches_rk) {
+  torch::set_num_threads(1);
+  auto run = [&](std::string const &integrator, double kappa) {
+    auto opts =
+        MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere_hevi.yaml");
+    auto c = opts->block()->coord();
+    c->nx2() = 6;
+    c->nx3() = 6;
+    c->global_nx2() = 6;
+    c->global_nx3() = 6;
+    opts->blocks_per_process(6 / get_world_size());
+    opts->block()->hydro()->icorr()->integrator(integrator);
+    static std::shared_ptr<ProcessGroupContext> session;
+    auto mesh = Mesh(opts);
+    if (get_world_size() > 1) session = mesh->blocks[0]->get_layout()->comm;
+    auto s = states(mesh, 2);
+    MeshVariables vars(s.size());
+    std::vector<torch::Tensor> u0;
+    for (size_t i = 0; i < s.size(); ++i) {
+      auto b = mesh->blocks[i];
+      b->phydro->pdiffusion->options->implicit_radial(true).kappa_iso(kappa);
+      double gas = b->phydro->peos->species_cv_ref() *
+                   (b->phydro->peos->options->gammad() - 1.);
+      s[i].w.narrow(0, IVX, 3).zero_();
+      s[i].w[IPR].fill_(1.e5);
+      s[i].w[IDN].copy_(1.e5 / (gas * s[i].t));
+      vars[i]["hydro_w"] = s[i].w;
+    }
+    mesh->initialize(vars);
+    for (size_t i = 0; i < s.size(); ++i)
+      u0.push_back(vars[i]["hydro_u"].clone());
+    double dt = DT_FRACTION * mesh->max_time_step(vars);
+    for (int stage = 0; stage < mesh->blocks[0]->pintg->stages.size(); ++stage)
+      mesh->forward(vars, dt, stage);
+    std::vector<torch::Tensor> du;
+    double stages = 0.;
+    for (size_t i = 0; i < s.size(); ++i) {
+      du.push_back(vars[i]["hydro_u"][IPR] - u0[i][IPR]);
+      stages += mesh->blocks[i]->hevi_solve_stats.defined()
+                    ? mesh->blocks[i]->hevi_solve_stats[0].item<double>()
+                    : 0.;
+    }
+    return std::make_pair(du, stages);
+  };
+  auto [dh, hs] = run("hevi-ark2", 1000.);
+  auto [dh0, hs0] = run("hevi-ark2", 0.);  // the same step without the split
+  auto [dr, rs] = run("rk", 1000.);
+  auto [dr0, rs0] = run("rk", 0.);
+  EXPECT_GT(hs, 0.);
+  EXPECT_EQ(rs, 0.);
+  // the split's energy change: kappa 10 minus kappa 0 on each path (the
+  // background change of the step, the same with and without the split,
+  // cancels)
+  double scale = 0., diff = 0., background = 0., background_rk = 0.;
+  for (size_t i = 0; i < dh.size(); ++i) {
+    auto sh = dh[i] - dh0[i], sr = dr[i] - dr0[i];
+    scale = std::max(scale, sr.abs().max().item<double>());
+    diff = std::max(diff, (sh - sr).abs().max().item<double>());
+    background = std::max(background, dh0[i].abs().max().item<double>());
+    background_rk = std::max(background_rk, dr0[i].abs().max().item<double>());
+  }
+  std::cout << "radial split: max |dE_split rk| " << scale
+            << ", max |dE_split hevi - rk| " << diff << " (" << diff / scale
+            << " of it); step background max |dE| hevi " << background
+            << ", rk " << background_rk << std::endl;
+  EXPECT_GT(scale, 0.);
+  EXPECT_LE(diff, SPLIT_TOL * scale);
 }
