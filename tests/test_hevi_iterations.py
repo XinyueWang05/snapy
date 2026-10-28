@@ -3,7 +3,8 @@
 
 The u = 0 box without noise at vertical acoustic Courant 6.7: x1 vertical, 100 levels of
 4.5 km (about 10 scale heights), reflecting walls; x2 periodic, 4 cells of 100 km; dry
-H2-He, isothermal 100 K, 10 bar at the bottom, balanced with snapy.balance_column. Fixed
+H2-He, isothermal 100 K, 10 bar at the bottom, balanced with snapy.balance_column to rtol
+1e-12 (400 sweeps), so the bound measures the solver and not the IC residual. Fixed
 dt, NSTEP steps; w starts at round-off. One linearised solve per stage (iterations 1)
 grows here: max|w| rises about 100x to above 1e-5 in 480 steps. Each arm:
 
@@ -28,7 +29,10 @@ import yaml
 G, T0, PS = 8.87, 100.0, 1.0e6
 NZ, DZ, NX2, DX = 100, 4.5e3, 4, 100.e3
 COURANT, NSTEP = 6.7, 480
-W_BOUND, DECAY, MASS_TOL = 1.e-6, 0.5, 1.e-13
+# W_BOUND: 7.8x the measured peak (1.288e-9 default, 1.286e-9 at 5) from the column
+# balanced to rtol 1e-12 (residual 6.5e-13); the default-tolerance column (5.8e-11)
+# peaked at 1.26e-7
+W_BOUND, DECAY, MASS_TOL = 1.e-8, 0.5, 1.e-13
 
 
 def config(iterations):
@@ -70,7 +74,8 @@ def run(iterations, tmp):
     pz = PS * torch.exp(-G * z / (rd * T0))
     col = torch.zeros(kIPR + 1, 1, 1, NZ, dtype=torch.float64)
     col[kIDN, 0, 0], col[kIPR, 0, 0] = pz / (rd * T0), pz
-    wb, _, _ = snapy.balance_column(col, torch.full((NZ,), DZ, dtype=torch.float64), G)
+    wb, resid, _ = snapy.balance_column(col, torch.full((NZ,), DZ, dtype=torch.float64), G,
+                                        rtol=1.e-12, max_iter=400)
     w = dict(block.named_buffers())["hydro.D"].clone().zero_()
     for c in (kIDN, kIPR):
         w[c][..., ng:ng + NZ] = wb[c, 0, 0]
@@ -89,7 +94,7 @@ def run(iterations, tmp):
         u = bv["hydro_u"][inner]
         wmax.append((u[kIV1] / u[kIDN]).abs().max().item())
     u = bv["hydro_u"][inner]
-    return dict(u=bv["hydro_u"].clone(), wmax=wmax, dt=dt,
+    return dict(u=bv["hydro_u"].clone(), wmax=wmax, dt=dt, resid=float(resid),
                 mass_rel=abs(u[kIDN].sum().item() - mass0) / mass0)
 
 
@@ -116,6 +121,7 @@ def main():
     fails = []
     with tempfile.TemporaryDirectory() as tmp:
         r_def, r4, r5 = run(None, tmp), run(4, tmp), run(5, tmp)
+    print("initial column: balance_column residual %.2e (rtol 1e-12, 400 sweeps)" % r_def["resid"])
     check("default", r_def, fails)
     check("iterations 5", r5, fails)
     same4 = torch.equal(r_def["u"], r4["u"])
