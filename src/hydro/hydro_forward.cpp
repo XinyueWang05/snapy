@@ -1188,6 +1188,10 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // state it is handed (the stage's explicit predictor)
       du.sub_(hevi_horizontal);
       if (hevi_rhs_offset.defined()) du.sub_(hevi_rhs_offset);
+      // the defect of the converged stage increment D = D_prev + dD:
+      // e(Q) + epe(D - dt V(Q)) = e(Q) + epe(dD) - epe(dt V(Q) - D_prev),
+      // i.e. the solve's E+PE change measured from the offset increment
+      if (gwfix_stage.defined()) epe0 = epe(du);
       _apply_implicit_correction(du, w, dt_corr, other);
     } else if (hevi_mode == 0) {
       _apply_implicit_correction(du, w, dt_corr, other);
@@ -1208,7 +1212,11 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     du[IPR].slice(-1, is, ie) += gravity_energy_correction;
   }
 
-  if (gwfix_stage.defined()) {
+  if (hevi_mode != 0) {
+    // MeshBlock books the defect with the ARS weight of the increment
+    hevi_gwfix = gwfix_stage.defined() ? gwfix_stage.to(_gwfix_d.device())
+                                       : torch::Tensor();
+  } else if (gwfix_stage.defined()) {
     // weight of this stage's du in the step's update u0 -> u1 (stage s:
     // u <- w0 u0 + w1 u + w2 du): w2_s * prod_{t > s} w1_t (rk3: 1/6 1/6 2/3)
     double cw = 1.;

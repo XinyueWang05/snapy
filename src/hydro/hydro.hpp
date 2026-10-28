@@ -243,6 +243,11 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! mode 2: subtracted from the vertical increment before the solve
   //! (the current stage increment of an iterated implicit stage)
   torch::Tensor hevi_rhs_offset;
+  //! gravity-work-fixer in a HEVI mode: the E+PE defect (J, float64) of the
+  //! increment the last forward returned, not yet accumulated; MeshBlock
+  //! weights the converged solve's defect into the step's (mode 1 returns
+  //! H + V of which only H, free of gravity work, enters the step)
+  torch::Tensor hevi_gwfix;
 
  protected:
   void _revise_x1inner_ghost(torch::Tensor const& w);
