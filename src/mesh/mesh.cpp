@@ -274,6 +274,9 @@ void MeshImpl::reset() {
   if (blocks.size() > 1) {
     workers_ = std::make_shared<BlockWorkerPool>(
         blocks.size(), torch::Device(blocks.front()->options->device_str()));
+    // hevi-ark2's tolerance stop: one decision for all local blocks
+    auto consensus = std::make_shared<HeviConsensus>(blocks.size());
+    for (auto& b : blocks) b->hevi_consensus = consensus;
   }
 }
 

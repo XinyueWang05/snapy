@@ -2,7 +2,10 @@
 
 // C/C++
 #include <array>
+#include <condition_variable>
+#include <functional>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -116,6 +119,24 @@ struct PartOptions {
   ADD_ARG(int, ndim) = 4;
 };
 
+//! hevi-ark2 tolerance stop: the stop must be one decision for every block,
+//! since each stage solve is a hydro forward that exchanges with the
+//! neighbours (cubed-sphere panel edges, x2/x3 ghosts). The local blocks of a
+//! Mesh run in one worker thread each and meet here; the last to arrive also
+//! reduces across ranks. A MeshBlock outside a Mesh reduces across ranks only.
+struct HeviConsensus {
+  explicit HeviConsensus(int nblocks) : n(nblocks) {}
+  //! max over the local blocks; `across` (run once, by the last thread)
+  //! takes it to the max over the ranks
+  double reduce_max(double x, std::function<double(double)> const& across);
+  int n;
+  std::mutex m;
+  std::condition_variable cv;
+  int arrived = 0;
+  int64_t generation = 0;
+  double acc = 0., result = 0.;
+};
+
 class MeshBlockImpl : public torch::nn::Cloneable<MeshBlockImpl> {
  public:
   //! options with which this `MeshBlock` was constructed
@@ -196,6 +217,19 @@ class MeshBlockImpl : public torch::nn::Cloneable<MeshBlockImpl> {
   void advance_local(Variables& vars, double dt, int stage);
   //! implicit-integrator hevi-ark2: one stage of the ARK2 HEVI step
   void advance_hevi_ark2(Variables& vars, double dt, int stage);
+  //! hevi-ark2: max over every block of the mesh (all local blocks, all
+  //! ranks) of x; collective, every block must call it equally often
+  double hevi_global_max(double x);
+  //! set by a Mesh with several local blocks (shared by them)
+  std::shared_ptr<HeviConsensus> hevi_consensus;
+  //! hevi-ark2 solve counts since construction (CPU, float64): {implicit
+  //! stages, solves, max solves in one stage, stages stopped at the cap
+  //! without meeting the tolerance, stages stopped because the correction
+  //! stopped contracting}
+  torch::Tensor hevi_solve_stats;
+  //! final-stage saturation adjustment (thermo with reactions), shared by
+  //! the rk path and hevi-ark2
+  void saturation_adjust_(torch::Tensor hydro_u);
 
   //! gravity-work-fixer: this block's {E+PE defect D, mass M} (CPU, double),
   //! and the step-end fix from the global sums
@@ -299,8 +333,9 @@ class MeshBlockImpl : public torch::nn::Cloneable<MeshBlockImpl> {
 
   //! stage registers
   torch::Tensor _hydro_u0;
-  //! hevi-ark2: dt * H_j and dt * V_j of the stages so far
+  //! hevi-ark2: dt * H_j and dt * V_j of the stages so far (hydro, scalar)
   torch::Tensor _hevi_h[3], _hevi_v[3];
+  torch::Tensor _hevi_sh[3], _hevi_sv[3];
   torch::Tensor _scalar_s0;
 };
 

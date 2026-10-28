@@ -240,6 +240,22 @@ void MeshBlockImpl::reset() {
                      << std::endl;
   }
 
+  // vic-full under rk3 without an implicit-integrator key runs hevi-ark2
+  // (implicit_hydro.cpp); say so once per process
+  {
+    auto ic = options->hydro() ? options->hydro()->icorr() : nullptr;
+    if (ic && ic->integrator_auto()) {
+      static std::once_flag announced;
+      std::call_once(announced, [] {
+        std::cout << "[snapy] implicit-scheme 9 with rk3: using "
+                     "implicit-integrator hevi-ark2 (ARS(2,3,2) HEVI); set "
+                     "integration/implicit-integrator: rk for the previous "
+                     "rk path"
+                  << std::endl;
+      });
+    }
+  }
+
   //// ----- (5) set up coordinate model ------ ////
   pcoord = CoordinateImpl::create(options->coord(), this);
   if (options->verbose()) {
@@ -611,39 +627,92 @@ struct DeferVaporCheck {
 };
 }  // namespace
 
+double HeviConsensus::reduce_max(double x,
+                                 std::function<double(double)> const &across) {
+  std::unique_lock<std::mutex> lock(m);
+  int64_t const gen = generation;
+  acc = arrived == 0 ? x : std::max(acc, x);
+  if (++arrived == n) {
+    result = across(acc);
+    arrived = 0;
+    ++generation;
+    lock.unlock();
+    cv.notify_all();
+    return result;
+  }
+  cv.wait(lock, [&] { return generation != gen; });
+  return result;
+}
+
+double MeshBlockImpl::hevi_global_max(double x) {
+  auto across = [this](double v) {
+    if (!_playout->has_process_group()) return v;
+    std::vector<at::Tensor> r = {torch::tensor({v}, torch::kFloat64)};
+    _playout->comm->allreduce(r, c10d::ReduceOp::MAX);
+    return r[0].item<double>();
+  };
+  if (hevi_consensus) return hevi_consensus->reduce_max(x, across);
+  return across(x);
+}
+
+void MeshBlockImpl::saturation_adjust_(torch::Tensor hydro_u) {
+  phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
+
+  int ny = hydro_u.size(0) - ICY;  // number of species
+
+  auto ke = phydro->peos->compute("U->K", {hydro_u});
+  auto rho = hydro_u[IDN] + hydro_u.narrow(0, ICY, ny).sum(0);
+  auto ie = hydro_u[IPR] - ke;
+
+  auto yfrac = hydro_u.narrow(0, ICY, ny) / rho;
+
+  auto m = named_modules()["hydro.eos.thermo"];
+  auto pthermo = std::dynamic_pointer_cast<kintera::ThermoYImpl>(m);
+
+  auto sub = part({0, 0, 0}, PartOptions().exterior(false));
+  auto sub3 = part({0, 0, 0}, PartOptions().exterior(false).ndim(3));
+  pthermo->forward(rho.index(sub3), ie.index(sub3), yfrac.index(sub),
+                   /*warm_start=*/true);
+
+  hydro_u.narrow(0, ICY, ny) = yfrac * rho;
+}
+
 // HEVI step with the ARS(2,3,2) pair (Ascher, Ruuth & Spiteri 1997, Appl.
 // Numer. Math. 25, sec. 2.5): horizontal tendency H explicit, vertical
 // tendency V linearly implicit, second order.
 //   Q1 = u^n
 //   Q_i = R_i + D_i,  R_i = u^n + dt sum_{j<i} (ae_ij H_j + ai_ij V_j),
-//        (I + g dt J(R_i)) D_i = g dt V(R_i),  V_i = D_i / (g dt)   (i = 2, 3)
-//   u^{n+1} = u^n + dt sum_j b_j (H_j + V_j)
+//        D_i = g dt V(R_i + D_i), solved by linearised corrections
+//        D <- D + (I + g dt J)^-1 (g dt V(R_i + D) - D)   (i = 2, 3)
+//   u^{n+1} = u^n + dt sum_j b_j (H_j + V_j),  V_i = D_i / (g dt)
 // g = 1 - 1/sqrt2, d = -2 sqrt2 / 3; ae21 = g, ae31 = d, ae32 = 1 - d;
 // ai22 = g, ai32 = 1 - g, ai33 = g (first column zero); b = (0, 1 - g, g).
-// H enters each stage once and is never filtered by the vertical operator,
-// and V(u^n) is never taken explicitly: the solve is linearised about the
-// explicit predictor R_i. The implicit tableau is stiffly accurate and the
-// explicit one has the rk3 linear stability polynomial. (The ARK2 tableau
-// of Giraldo, Kelly & Constantinescu 2013 takes V(u^n) explicitly in its
-// first stage and grew on a rest column at vertical acoustic Courant
-// >= 6.6.) The three calls of the rk3 stage loop carry the step: stage 0
-// builds Q2, stage 1 Q3, stage 2 the update; each call spends one explicit
-// forward (H) and, in stages 0 and 1, one implicit-vertical forward at R_i.
+// H is the x2/x3 flux divergence (and the horizontal momentum rows' metric
+// sources) plus the user stage forcings, explicit in every stage; V is the
+// x1 flux divergence with the native forcings (gravity, Coriolis, ...), whose
+// stage equation the corrections solve. Passive scalars ride on the same
+// split: their H is the lateral tracer-flux divergence, their V the x1 tracer
+// flux plus the solve's face mass transfer at the donor ratio, so a uniform
+// ratio stays uniform. The three calls of the rk3 stage loop carry the step:
+// stage 0 builds Q2, stage 1 Q3, stage 2 the update. The implicit radial
+// diffusion keeps its Strang split around the step, as on the rk path, and
+// the gravity-work fixer books the E+PE defect of each converged stage
+// increment with its weight b_i / g in the update.
 void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
   TORCH_CHECK(pintg->stages.size() == 3,
               "[MeshBlock] implicit-integrator hevi-ark2 runs in the 3-call "
               "stage loop of integration/type rk3");
-  TORCH_CHECK(pscalar->nvar() == 0 && user_stage_forcings.empty(),
-              "[MeshBlock] implicit-integrator hevi-ark2 does not support "
-              "passive scalars or user stage forcings yet");
-  TORCH_CHECK(!phydro->gravity_work_fixer(),
-              "[MeshBlock] implicit-integrator hevi-ark2 does not support the "
-              "gravity-work fixer yet");
   DeferVaporCheck defer(phydro->peos.get());
   phydro->rk_stage = stage;
 
   double const g = 1. - 1. / std::sqrt(2.), d = -2. * std::sqrt(2.) / 3.;
   auto hydro_u = vars.at("hydro_u");
+  bool const has_scalar = pscalar->nvar() > 0;
+  auto scalar_s =
+      vars.count("scalar_s") ? vars.at("scalar_s") : torch::Tensor();
+  bool const fixer = phydro->gravity_work_fixer();
+  auto icorr = phydro->picorr->options;
+
   // stage increments live on the interior only: forcings also write ghost
   // cells (e.g. rho g in the x1 ghosts), and a predictor built from those
   // would hand the next forward non-boundary ghost data where the exchange
@@ -655,69 +724,249 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
     r.index_put_(interior, t.index(interior));
     return r;
   };
-  // explicit forward at the current state: dt H and dt V
-  auto explicit_split = [&](int j, bool keep_v) {
+  auto fill_solid = [&]() {
+    if (vars.count("solid"))
+      pib->fill_cons_solid_(hydro_u, vars.at("solid"),
+                            vars.at("fill_solid_hydro_u"));
+  };
+  // a state the next forward reads gets its ghosts the way a stage of
+  // advance_local leaves them: exchange, then the physical boundaries
+  auto refresh_ghosts = [&]() {
+    exchange_ghost_zones(vars);
+    apply_boundaries(vars, hydro_u, scalar_s);
+  };
+  // tracer face mass transfer of the last solve, at the donor ratio r
+  // (as advance_local): ds += (P - P_above) / V, P = r_donor M
+  auto mass_transfer = [&](torch::Tensor const &r) {
+    auto mass_corr = phydro->implicit_mass_correction();
+    if (!mass_corr.defined() || mass_corr.numel() == 0)
+      return torch::zeros_like(r);
+    auto M = mass_corr[IVY];  // slot IVX+(dir+1)%3 with dir == 0 (x1 only)
+    int nc1 = r.size(-1);
+    auto r_below = torch::zeros_like(r);
+    r_below.slice(-1, 1, nc1) = r.slice(-1, 0, nc1 - 1);
+    auto P = torch::where(M > 0., r_below, r) * M;
+    auto P_above = torch::zeros_like(P);
+    P_above.slice(-1, 0, nc1 - 1) = P.slice(-1, 1, nc1);
+    return (P - P_above) / pcoord->cell_volume();
+  };
+
+  // explicit forward at the current state Q_j: dt H_j
+  auto explicit_split = [&](int j) {
     phydro->hevi_mode = 1;
     auto du = phydro->forward(dt, hydro_u, vars);
     phydro->hevi_mode = 0;
     _hevi_h[j] = inner(phydro->hevi_horizontal);
-    if (keep_v) _hevi_v[j] = inner(du) - _hevi_h[j];
+    torch::Tensor sh;
+    if (has_scalar) {
+      // the tracer fluxes ride on this forward's mass fluxes; keep only the
+      // lateral divergence (the forward's x1 part belongs to V)
+      pscalar->forward(dt, scalar_s, vars);
+      auto div_h =
+          pcoord->divergence(torch::Tensor(), pscalar->_flux2, pscalar->_flux3);
+      sh = torch::zeros_like(scalar_s);
+      sh.index(interior) = -dt * div_h.index(interior);
+    }
+    // user stage forcings are explicit: they join H at Q_j with full dt
+    if (!user_stage_forcings.empty()) {
+      auto inputs = stage_forcing_variables(*this, vars);
+      for (size_t i = 0; i < user_stage_forcings.size(); ++i) {
+        auto result = user_stage_forcings[i]->forward({inputs, dt, stage});
+        auto extra = stage_forcing_result(result, i);
+        auto source = "User stage forcing " + std::to_string(i);
+        for (auto const &[name, value] : extra) {
+          TORCH_CHECK(name == "hydro_du" || name == "scalar_ds", source,
+                      " returned unsupported key '", name,
+                      "'. Expected one or both of: hydro_du, scalar_ds.");
+          if (name == "hydro_du") {
+            TORCH_CHECK(value.sizes() == du.sizes(), source,
+                        " returned hydro_du with shape ", value.sizes(),
+                        ", expected ", du.sizes(), ".");
+            auto add = inner(value);
+            _hevi_h[j] = _hevi_h[j] + add;
+            // a dry-mass source carries tracer at the stage ratio
+            if (has_scalar && vars.count("scalar_r"))
+              sh = sh + vars.at("scalar_r") * add[IDN].unsqueeze(0);
+          } else {
+            TORCH_CHECK(has_scalar, source,
+                        " returned scalar_ds, but no scalar variables are "
+                        "configured on this MeshBlock.");
+            TORCH_CHECK(value.sizes() == scalar_s.sizes(), source,
+                        " returned scalar_ds with shape ", value.sizes(),
+                        ", expected ", scalar_s.sizes(), ".");
+            sh = sh + inner(value);
+          }
+        }
+      }
+    }
+    if (has_scalar) _hevi_sh[j] = sh;
   };
-  // implicit vertical stage from predictor R: Q = R + D, dt V = D / g
-  // a state the next forward reads gets its ghosts the way a stage of
-  // advance_local leaves them: exchange, then the physical boundaries
-  // (apply_boundaries closes every rk stage; without it the reflecting-wall
-  // ghosts of the predictors and stage states stay those of u^n)
-  auto refresh_ghosts = [&]() {
-    exchange_ghost_zones(vars);
-    apply_boundaries(vars, hydro_u, torch::Tensor());
-  };
-  auto implicit_stage = [&](int j, torch::Tensor const &R) {
+
+  // implicit vertical stage from predictor (R, Rs): Q = R + D
+  auto implicit_stage = [&](int j, torch::Tensor const &R,
+                            torch::Tensor const &Rs) {
+    int const nmax = icorr->hevi_max_solves();
+    double const tol = icorr->hevi_tolerance();
+    int const nmin =
+        tol > 0. ? std::min(ImplicitOptionsImpl::kHeviMinSolves, nmax) : nmax;
+    double const atol =
+        ImplicitOptionsImpl::kHeviAtolEps * machine_epsilon(R.scalar_type());
+    // per-row scale of the absolute floor: density for the mass and species
+    // rows, the energy for IPR, sqrt(rho E) (about rho c) for the momenta
+    auto Rabs = R.index(interior).abs().amax({1, 2, 3});
+    auto scale = Rabs.clone();
+    {
+      auto rho_s = Rabs[IDN], e_s = Rabs[IPR];
+      scale.narrow(0, IVX, 3).fill_(0.);
+      scale.narrow(0, IVX, 3) += (rho_s * e_s).sqrt();
+      if (scale.size(0) > ICY)
+        scale.narrow(0, ICY, scale.size(0) - ICY).fill_(0.);
+      if (scale.size(0) > ICY)
+        scale.narrow(0, ICY, scale.size(0) - ICY) += rho_s;
+    }
+
     hydro_u.copy_(R);
+    if (has_scalar) scalar_s.copy_(Rs);
     refresh_ghosts();
+    // the predictor's tracer ratio, ghosts included (exchanged just now)
+    auto r =
+        has_scalar ? scalar_s / hydro_u[IDN].unsqueeze(0) : torch::Tensor();
     phydro->hevi_mode = 2;
     auto D = inner(phydro->forward(g * dt, hydro_u, vars));
+    int solves = 1;
+    double metric = 0., previous = 0.;
+    bool stalled = false;
     // further corrections towards Q = R + g dt V(Q), with the Jacobian at
     // the current iterate: D <- D + (I + g dt J)^-1 (g dt V(R + D) - D)
-    int const niter = phydro->picorr->options->hevi_iterations();
-    for (int it = 1; it < niter; ++it) {
+    while (solves < nmax) {
       hydro_u.copy_(R + D);
       refresh_ghosts();
       phydro->hevi_rhs_offset = D;
-      D = D + inner(phydro->forward(g * dt, hydro_u, vars));
+      auto dD = inner(phydro->forward(g * dt, hydro_u, vars));
       phydro->hevi_rhs_offset = torch::Tensor();
+      D = D + dD;
+      ++solves;
+      if (tol > 0. && solves >= nmin) {
+        // every conserved variable: max|dD| <= tol max|D| + atol max|R|
+        auto num = dD.index(interior).abs().amax({1, 2, 3});
+        auto den = tol * D.index(interior).abs().amax({1, 2, 3}) + atol * scale;
+        auto ratio = torch::where(num == 0., torch::zeros_like(num), num / den);
+        double local = ratio.max().item<double>();
+        if (!std::isfinite(local)) local = 1.e300;
+        previous = metric;
+        metric = hevi_global_max(local);
+        if (metric <= 1.) break;
+        // past the minimum, a correction larger than the last one means the
+        // iteration has stopped contracting (a coarse tall column at a large
+        // step diverges here: more solves make it worse); keep the last
+        // correction, whose forward the fixer and the tracers book, and stop
+        if (solves > nmin && metric > previous) {
+          stalled = true;
+          break;
+        }
+      }
     }
     phydro->hevi_mode = 0;
+    // the last forward was at R + D_prev: its x1 fluxes and the solve's mass
+    // transfer are those of the converged increment D
+    if (fixer && phydro->hevi_gwfix.defined()) {
+      double const b = j == 1 ? 1. - g : g;
+      phydro->gravity_work_defect().add_(
+          (b / g) *
+          phydro->hevi_gwfix.to(phydro->gravity_work_defect().device()));
+    }
+    torch::Tensor Ds;
+    if (has_scalar) {
+      // the predictor's ratio at the density of the last forward's state
+      scalar_s.copy_(r * hydro_u[IDN].unsqueeze(0));
+      pscalar->forward(g * dt, scalar_s, vars);
+      auto div_v =
+          pcoord->divergence(pscalar->_flux1, torch::Tensor(), torch::Tensor());
+      Ds = torch::zeros_like(scalar_s);
+      Ds.index(interior) = -g * dt * div_v.index(interior);
+      Ds = Ds + inner(mass_transfer(r));
+      auto dry = phydro->forcing_dry_increment();
+      if (dry.defined()) Ds = Ds + inner(r * dry.unsqueeze(0));
+    }
+    auto stats = hevi_solve_stats;
+    stats[0] += 1.;
+    stats[1] += solves;
+    stats[2] = std::max(stats[2].item<double>(), double(solves));
+    if (tol > 0. && metric > 1. && !stalled) stats[3] += 1.;
+    if (stalled) stats[4] += 1.;
+
     hydro_u.copy_(R);
     _hevi_v[j] = D / g;
     hydro_u.add_(D);
     phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
-    apply_boundaries(vars, hydro_u, torch::Tensor());
+    fill_solid();
+    if (has_scalar) {
+      _hevi_sv[j] = Ds / g;
+      scalar_s.copy_(Rs + Ds);
+      set_scalar_primitive(vars, scalar_s, hydro_u);
+    }
+    apply_boundaries(vars, hydro_u, scalar_s);
   };
 
+  if (!hevi_solve_stats.defined())
+    hevi_solve_stats = torch::zeros({5}, torch::kFloat64);
+
   if (stage == 0) {
-    _hydro_u0.copy_(hydro_u);
-    if (phydro->picorr) {
-      phydro->picorr->reset_dry_clamp_step();
-      phydro->picorr->reset_solve_failure();
+    if (phydro->pdiffusion && phydro->pdiffusion->options->implicit_radial()) {
+      phydro->pdiffusion->begin_step(hydro_u, dt);
+      apply_boundaries(vars, hydro_u, scalar_s);
+      exchange_ghost_zones(vars);
     }
+    _hydro_u0.copy_(hydro_u);
+    if (fixer) {
+      phydro->gravity_work_defect().zero_();  // a redone step starts afresh
+      phydro->commit_gravity_work_fix();      // the previous step was accepted
+      phydro->gravity_work_wall_mass().zero_();
+    }
+    phydro->picorr->reset_dry_clamp_step();
+    phydro->picorr->reset_solve_failure();
     phydro->peos->reset_limiter_marks(hydro_u);
     saturation_failures();
     if (phydro->peos->vapor_failures().defined())
       phydro->peos->vapor_failures().zero_();
+    if (has_scalar) _scalar_s0.copy_(scalar_s);
 
-    explicit_split(0, false);  // H1 at u^n
-    implicit_stage(1, _hydro_u0 + g * _hevi_h[0]);
+    explicit_split(0);  // H1 at u^n
+    implicit_stage(1, _hydro_u0 + g * _hevi_h[0],
+                   has_scalar ? _scalar_s0 + g * _hevi_sh[0] : torch::Tensor());
   } else if (stage == 1) {
-    explicit_split(1, false);  // H2 at Q2
-    implicit_stage(2, _hydro_u0 + d * _hevi_h[0] + (1. - d) * _hevi_h[1] +
-                          (1. - g) * _hevi_v[1]);
+    explicit_split(1);  // H2 at Q2
+    implicit_stage(2,
+                   _hydro_u0 + d * _hevi_h[0] + (1. - d) * _hevi_h[1] +
+                       (1. - g) * _hevi_v[1],
+                   has_scalar
+                       ? _scalar_s0 + d * _hevi_sh[0] + (1. - d) * _hevi_sh[1] +
+                             (1. - g) * _hevi_sv[1]
+                       : torch::Tensor());
   } else {
-    explicit_split(2, false);  // H3 at Q3
+    explicit_split(2);  // H3 at Q3
     hydro_u.copy_(_hydro_u0 + (1. - g) * (_hevi_h[1] + _hevi_v[1]) +
                   g * (_hevi_h[2] + _hevi_v[2]));
+    if (phydro->pdiffusion && phydro->pdiffusion->options->implicit_radial())
+      phydro->pdiffusion->finish_step(hydro_u, dt);
     phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
-    apply_boundaries(vars, hydro_u, torch::Tensor());
+    if (has_scalar) {
+      scalar_s.copy_(_scalar_s0 + (1. - g) * (_hevi_sh[1] + _hevi_sv[1]) +
+                     g * (_hevi_sh[2] + _hevi_sv[2]));
+      set_scalar_primitive(vars, scalar_s, hydro_u);
+    }
+    fill_solid();
+    if (phydro->options->eos()->thermo() &&
+        phydro->options->eos()->thermo()->reactions().size() > 0)
+      saturation_adjust_(hydro_u);
+    if (fixer && !defer_gravity_work_fixer) {
+      std::vector<at::Tensor> reduce = {gravity_work_fixer_sums(vars)};
+      if (_playout->has_process_group()) {
+        _playout->comm->allreduce(reduce, c10d::ReduceOp::SUM);
+      }
+      apply_gravity_work_fixer(vars, reduce[0]);
+    }
+    apply_boundaries(vars, hydro_u, scalar_s);
   }
 }
 
@@ -942,25 +1191,7 @@ void MeshBlockImpl::advance_local(Variables &vars, double dt, int stage) {
   // -------- (6) saturation adjustment --------
   if (stage == pintg->stages.size() - 1 && phydro->options->eos()->thermo() &&
       phydro->options->eos()->thermo()->reactions().size() > 0) {
-    phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
-
-    int ny = hydro_u.size(0) - ICY;  // number of species
-
-    auto ke = phydro->peos->compute("U->K", {hydro_u});
-    auto rho = hydro_u[IDN] + hydro_u.narrow(0, ICY, ny).sum(0);
-    auto ie = hydro_u[IPR] - ke;
-
-    auto yfrac = hydro_u.narrow(0, ICY, ny) / rho;
-
-    auto m = named_modules()["hydro.eos.thermo"];
-    auto pthermo = std::dynamic_pointer_cast<kintera::ThermoYImpl>(m);
-
-    auto sub = part({0, 0, 0}, PartOptions().exterior(false));
-    auto sub3 = part({0, 0, 0}, PartOptions().exterior(false).ndim(3));
-    pthermo->forward(rho.index(sub3), ie.index(sub3), yfrac.index(sub),
-                     /*warm_start=*/true);
-
-    hydro_u.narrow(0, ICY, ny) = yfrac * rho;
+    saturation_adjust_(hydro_u);
     if (options->verbose()) {
       auto end = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> elapsed = end - start;
