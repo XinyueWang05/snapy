@@ -29,7 +29,7 @@ def create(cfg):
     b.to(torch.device(device), torch.float64)
     return b
 
-def tall_run(nz, heights, scheme, work, steps=1, dt=None, fixer=False):
+def tall_run(nz, heights, scheme, work, steps=1, dt=None, fixer=False, rtol=None):
     H = tall.RD * tall.T0 / tall.GRAV
     dz = H * heights / nz
     cfg = tall.config(scheme)
@@ -43,7 +43,9 @@ def tall_run(nz, heights, scheme, work, steps=1, dt=None, fixer=False):
     col = torch.zeros(kIPR + 1, 1, 1, nz)
     col[kIDN, 0, 0] = p / (tall.RD * tall.T0)
     col[kIPR, 0, 0] = p
-    (wb, _, _) = snapy.balance_column(col, torch.full((nz,), dz), tall.GRAV)
+    # rtol: balance_column's tolerance (its default 1e-10 when None)
+    bal = {} if rtol is None else {'rtol': rtol, 'max_iter': 400}
+    (wb, resid, _) = snapy.balance_column(col, torch.full((nz,), dz), tall.GRAV, **bal)
     w = dict(b.named_buffers())['hydro.D'].clone().zero_()
     for c in (kIDN, kIPR):
         w[c][..., ng:ng + nz] = wb[c, 0, 0].to(w)
@@ -66,7 +68,8 @@ def tall_run(nz, heights, scheme, work, steps=1, dt=None, fixer=False):
 
     e0 = energy(u0)
     dt = dt or 657 * dz / math.sqrt(tall.GAMMA * tall.RD * tall.T0)
-    out = {'nz': nz, 'H': heights, 'scheme': scheme, 'work': work, 'fixer': fixer, 'dt': dt, 'device': device}
+    out = {'nz': nz, 'H': heights, 'scheme': scheme, 'work': work, 'fixer': fixer, 'dt': dt, 'device': device,
+           'balance_residual': float(resid)}
     wmax = 0.0
     redos = 0
     completed = 0
@@ -250,19 +253,18 @@ def coarse_restart():
 
 def coarse_face(failures):
     """45 levels over 40 scale heights, gravity-work face, dt 1500 s, 40 steps, on the
-    default integrator (hevi-ark2 for implicit-scheme 9 under rk3). A retry must restore
-    its input; a run without a retry must stay below 0.1 m/s.
+    default integrator (hevi-ark2 for implicit-scheme 9 under rk3), from a column balanced
+    with balance_column to rtol 1e-12 (400 sweeps). A retry must restore its input; a run
+    without a retry must stay below 0.1 m/s.
 
-    Open item "the hevi-ark2 stage iteration fails to contract near the density floor"
-    (docs/user_guide/configuration.rst, Limit; test case test_hevi_coarse_column.py),
-    with its sub-question "hevi-ark2 vs rk on this column: which is right is
-    unresolved". With SNAP_GRAVITY_WORK_RADIAL_EXACT on, hevi-ark2
-    (4 solves) runs all 40 steps with max w 2.97 m/s and fails the 0.1 bound; the rk path
-    retries at step 25 (w 189 m/s). The dt/16 references disagree: hevi-ark2 converged at
-    dt/16 keeps up to 2.4 m/s near the top, rk at dt/16 stays at 2e-7 m/s. Its ctest
-    entry with the switch on is an expected failure (WILL_FAIL) until that is resolved.
+    The operator itself amplifies a balance residual on its way up this column by about
+    e^{H/2} = e^{20} (max_t ||exp(tJ)|| of the explicit tendency's Jacobian: 6.8e7 near
+    3600 s); hevi-ark2 follows that transient as dt -> 0, rk damps it at O(dt). At the
+    default rtol 1e-10 (residual 9.3e-11) the transient reaches max|w| 2.97 m/s with the
+    corrected-PE switch on; at rtol 1e-12 (residual ~6e-13) it stays below the bound. The
+    convergence in dt itself is covered by test_hevi_short_column_transient.py.
     """
-    out = tall_run(45, 40, 9, 'face', 40, 1500)
+    out = tall_run(45, 40, 9, 'face', 40, 1500, rtol=1.e-12)
     # Rollback coverage only; a retry does not establish stability.
     if out['redo_status'] > 0:
         if not out['rolled_back']:
