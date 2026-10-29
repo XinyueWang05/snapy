@@ -450,6 +450,12 @@ if(CUDA)
   snapy_add_python_test(test_scalar_flux_covariance_cuda
     SCRIPT test_scalar_flux_covariance.py ARGS --device cuda
     TIMEOUT 300 LABELS "python;hydro;scalar;cuda")
+  snapy_add_python_test(test_hevi_options_cuda
+    SCRIPT test_hevi_options.py ARGS --device cuda
+    TIMEOUT 300 LABELS "python;implicit;thermo;solid;cuda")
+  snapy_add_python_test(test_hevi_conservation_cuda
+    SCRIPT test_hevi_conservation.py ARGS --device cuda
+    TIMEOUT 300 LABELS "python;scalar;forcing;implicit;cuda")
   set_tests_properties(
     test_fix_vapor_reports_failure_cuda_python
     test_fix_vapor_stale_count_cuda_python
@@ -461,6 +467,8 @@ if(CUDA)
     test_x1_centroid_rest_cuda_python
     test_gravity_work_radial_exact_cuda_python
     test_scalar_flux_covariance_cuda_python
+    test_hevi_options_cuda_python
+    test_hevi_conservation_cuda_python
     PROPERTIES SKIP_RETURN_CODE 125)
 endif()
 

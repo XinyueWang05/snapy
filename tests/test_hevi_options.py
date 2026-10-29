@@ -17,8 +17,9 @@ Parity with the rk path:
               NSTEP steps on each path; the solid cells hold their fill state bitwise and the
               fluid mass is conserved to MASS_TOL.
 
-  python test_hevi_options.py
+  python test_hevi_options.py [--device cuda]
 """
+import argparse
 import math
 import os
 import sys
@@ -29,6 +30,7 @@ import torch
 import yaml
 
 SAT_TOL, MASS_TOL, NSTEP, SAT_DT = 1.0e-6, 1.0e-12, 20, 1.0e-3
+DEVICE = "cpu"
 
 
 def config(scheme, integrator, iterations=None):
@@ -58,7 +60,7 @@ def make_block(cfg):
         with open(p, "w") as f:
             yaml.safe_dump(cfg, f)
         b = MeshBlock(MeshBlockOptions.from_yaml(p))
-    b.to(torch.device("cpu"), torch.float64)
+    b.to(torch.device(DEVICE), torch.float64)
     return b
 
 
@@ -209,7 +211,15 @@ def parity(fails):
             fails.append("solid %s: exact %s finite %s mass %.3e" % (name, exact, finite, mass))
 
 
-def main():
+def main(argv=None):
+    global DEVICE
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--device", default="cpu")
+    args = ap.parse_args(argv)
+    if args.device.startswith("cuda") and (os.environ.get("SNAPY_BUILD_CUDA", "1") == "0" or not torch.cuda.is_available()):
+        print("SKIP: cuda requested but not available")
+        return 125
+    DEVICE = args.device
     torch.set_default_dtype(torch.float64)
     fails = []
     options(fails)

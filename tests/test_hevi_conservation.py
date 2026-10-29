@@ -15,8 +15,9 @@ forcing  A dry isothermal column at rest (40 levels of 1 km; x2 periodic, 4 cell
          H). Each: max |u - a t| / (a t) <= TOL_U after NSTEP_F steps of fixed dt, max |w| <=
          W_BOUND. The rk path (implicit-integrator: rk) is reported for reference.
 
-  python test_hevi_conservation.py
+  python test_hevi_conservation.py [--device cuda]
 """
+import argparse
 import math
 import os
 import sys
@@ -26,6 +27,7 @@ import torch
 import yaml
 
 G, T0, PS, RD = 10.0, 300.0, 1.0e5, 287.0
+DEVICE = "cpu"
 NZ_S, DZ_S, NX2_S, DX_S = 32, 1.0e3, 8, 2.0e3
 NSTEP_S, R0, TOL = 40, 1.0e-3, 1.0e-12
 NZ_F, DZ_F, NX2_F, DX_F = 40, 1.0e3, 4, 10.0e3
@@ -70,7 +72,7 @@ def scalars(fails):
         with open(p, "w") as f:
             yaml.safe_dump(scalar_config(), f)
         block = MeshBlock(MeshBlockOptions.from_yaml(p))
-    block.to(torch.device("cpu"))
+    block.to(torch.device(DEVICE))
 
     ng = 3
     z = (torch.arange(NZ_S, dtype=torch.float64) + 0.5) * DZ_S
@@ -91,11 +93,11 @@ def scalars(fails):
     xx = torch.zeros(w.shape[-2])
     xx[ng:ng + NX2_S] = x
     blob = torch.exp(-((xx.view(-1, 1) - 0.3 * NX2_S * DX_S) / (2 * DX_S)) ** 2
-                     - ((zz.view(1, -1) - 0.4 * H) / (0.15 * H)) ** 2)
+                     - ((zz.view(1, -1) - 0.4 * H) / (0.15 * H)) ** 2).to(w)
     w[kIDN] = w[kIDN] / (1.0 + 0.5 / T0 * blob)  # +0.5 K at fixed p
     w[kIV1] = 5.0 * torch.sin(math.pi * zz / H).view(1, 1, -1)
     w[kIV1 + 1] = (10.0 + 5.0 * torch.cos(math.pi * zz / H)).view(1, 1, -1)
-    r = torch.full((2,) + tuple(w.shape[1:]), R0, dtype=torch.float64)
+    r = torch.full((2,) + tuple(w.shape[1:]), R0, dtype=torch.float64).to(w)
     r[1] = R0 * (1.0 + blob)
     v, _ = block.initialize({"hydro_w": w, "scalar_r": r})
 
@@ -177,7 +179,7 @@ def run(native, tmp, integrator=None):
     with open(p, "w") as f:
         yaml.safe_dump(forcing_config(native, integrator), f)
     block = MeshBlock(MeshBlockOptions.from_yaml(p))
-    block.to(torch.device("cpu"))
+    block.to(torch.device(DEVICE))
     if not native:
         path = os.path.join(tmp, "push.pt")
         torch.jit.script(ConstantPush(A).eval()).save(path)
@@ -228,7 +230,15 @@ def forcing(fails):
                   % ("", k["err"], k["w"]))
 
 
-def main():
+def main(argv=None):
+    global DEVICE
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--device", default="cpu")
+    args = ap.parse_args(argv)
+    if args.device.startswith("cuda") and (os.environ.get("SNAPY_BUILD_CUDA", "1") == "0" or not torch.cuda.is_available()):
+        print("SKIP: cuda requested but not available")
+        return 125
+    DEVICE = args.device
     torch.set_default_dtype(torch.float64)
     fails = []
     scalars(fails)
