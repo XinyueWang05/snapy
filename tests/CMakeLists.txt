@@ -340,6 +340,9 @@ snapy_add_python_test(test_hevi_constant_forcing TIMEOUT 300
                       LABELS "python;forcing;implicit")
 snapy_add_python_test(test_hevi_rk_parity TIMEOUT 300
                       LABELS "python;implicit;thermo;solid")
+# open item: the stage iteration does not contract near the density floor (Limit, part 2)
+snapy_add_python_test(test_hevi_coarse_column TIMEOUT 300
+                      LABELS "python;hydro;implicit;gravity")
 snapy_add_python_test(test_implicit_options_type TIMEOUT 60 LABELS "python;implicit")
 snapy_add_python_test(test_shear_cfl TIMEOUT 60 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_check_redo_floor TIMEOUT 60 LABELS "python;mesh;redo")

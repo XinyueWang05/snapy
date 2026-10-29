@@ -181,6 +181,38 @@ time-step bound, set an implicit scheme under ``integration``:
 
 See :class:`~snapy.ImplicitOptions` for what each key does.
 
+hevi-ark2 (vic-full under rk3)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With ``implicit-scheme: 9`` and ``type: rk3`` and no ``implicit-integrator`` key, the
+step is the ARS(2,3,2) HEVI step ``hevi-ark2``: the horizontal tendency explicit, the
+vertical one linearly implicit, each implicit stage solved by corrections
+``D <- D + (I + g dt J)^-1 (g dt V(R + D) - D)``. A one-line notice is printed when this
+default applies. ``implicit-integrator: rk`` keeps the previous rk path.
+
+.. code-block:: yaml
+
+    integration:
+      type: rk3
+      implicit-scheme: 9
+      # implicit-integrator: rk            # opt out: the previous rk path
+      # implicit-integrator-iterations: 4  # stage solves (default 4, fixed)
+      # implicit-integrator-tolerance: 0   # > 0: stop on a tolerance (4 to 8
+      #                                    # solves, and when the correction
+      #                                    # stops contracting); 0 or absent: fixed
+
+**Limit.**
+
+1. On smooth stratified flow the stage iteration contracts up to vertical acoustic
+   Courant ~657 (0.37/0.40/0.83 per solve at 65.6/197/657), and the default's 4 solves
+   are within 9e-6 of the converged iterate.
+2. In the near-floor top cells of a deep stratified column the iteration does not
+   contract even at Courant ~14, so the default's 4 solves are a truncated iterate
+   there, with error equal to the base rk path's against a converged dt/16 reference,
+   while more solves diverge. Why the iteration fails to contract near the density
+   floor is an open item; ``tests/test_hevi_coarse_column.py`` (45 levels over 40 scale
+   heights, dt 1500 s) is its test case.
+
 Output Configuration
 --------------------
 
