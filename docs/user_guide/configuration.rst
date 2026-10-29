@@ -196,21 +196,46 @@ default applies. ``implicit-integrator: rk`` keeps the previous rk path.
       type: rk3
       implicit-scheme: 9
       # implicit-integrator: rk            # opt out: the previous rk path
-      # implicit-integrator-iterations: 4  # stage solves (default 4, fixed)
+      # implicit-integrator-iterations: 5  # stage solves (default 5, fixed)
       # implicit-integrator-tolerance: 0   # > 0: stop on a tolerance (4 to 8
       #                                    # solves, and when the correction
       #                                    # stops contracting); 0 or absent: fixed
 
-**Limit.** The stage iteration stops contracting above vertical acoustic Courant ~14 in
-the near-floor top cells of a 40-scale-height column (no converged ARS stage at Courant
-28 and above); on an 11-scale-height column it contracts at ~0.8 per solve up to
-Courant 657. The default truncates at 4 solves, matching the rk path's error there.
+Limits
+^^^^^^
 
-Why the iteration fails to contract near the density floor is an open item. Its test
-case is ``tests/test_hevi_coarse_column.py`` (45 levels over 40 scale heights,
-dt 1500 s); the coarse face-work arm of ``tests/test_implicit_stratified_solid.py``
-(ctest ``test_implicit_stratified_solid_coarse_face_re1``, an expected failure) belongs
-to the same item.
+Each stage solve inverts a first-order, three-point Roe linearisation of the vertical
+operator against the full high-order residual, so the stage iteration is a defect
+correction: it contracts at a rate that depends on the vertical acoustic Courant number,
+not to a fixed tolerance. The default of 5 solves was chosen against the converged ARS
+stage (implicit-integrator-iterations 20) in the cp5 linear model of the 22 wind and box
+arms at dt0, 2 dt0 and 3 dt0 (growth minus converged ARS, worst horizontal mode):
+
+1. At dt0, 5 solves match converged ARS on all 22 arms.
+2. Above dt0, on the dx 400 km boxes, 5 solves grow weakly: +0.0067 per day at 2 dt0, an
+   e-folding time of about 150 days.
+3. Converged ARS itself grows at grid scale at 3 dt0 on the LMARS u 400 m/s boxes with
+   dx 200 km and dx 400 km (+8.76 and +7.16 per day, m 32); the rk path does not. No
+   number of solves removes this growth.
+4. Near-floor coarse columns at large vertical Courant number redo (retry the step at a
+   halved dt) under the default and under the rk path alike. On the coarse
+   face-work column of ``tests/test_implicit_stratified_solid.py`` (45 levels over 40
+   scale heights, dt 1500 s, vertical acoustic Courant 27.8, balanced to rtol 1e-12), run
+   for 60,000 s with redos as dt halvings: the rk path first redoes at step 33 (corrected-PE
+   switch on) and step 34 (off), with 25 and 40 rejected tries and max\|w\| 494 and
+   437 m/s; 5 solves first redo at step 12 and step 19, with 138 and 80 rejected tries and
+   max\|w\| 1042 and 671 m/s. Every run reaches 60,000 s; none aborts. The test cases are
+   that column (ctest ``test_implicit_stratified_solid_coarse_face_re0`` and ``_re1``) and
+   ``tests/test_hevi_coarse_column.py``; both pin that a redo restores the step input.
+
+.. warning::
+
+   Raising ``implicit-integrator-iterations`` does not converge monotonically, so it is
+   not a tuning knob. In the linear model the number of cells out of 64 whose growth
+   exceeds converged ARS by more than 1e-4 per day is 31, 7, 7, 22, 0, 3, 0 and 0 at 4,
+   5, 6, 8, 10, 12, 16 and 20 solves; 4 solves run the
+   coarse column above without a redo but grow on the wind arms (+0.35 per day on HLLC
+   u 250 m/s at 2 dt0, against -0.43 at 5).
 
 Output Configuration
 --------------------

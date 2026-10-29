@@ -69,9 +69,12 @@ struct ImplicitOptionsImpl {
   //! implicit solution, D <- D + (I + g dt J)^-1 (g dt V(R + D) - D).
   //! 0 (default): the fixed count is kHeviDefaultIterations. On a rest column
   //! from the discretely balanced state, 1 solve grows at vertical acoustic
-  //! Courant >= 1.65 and 3 solves at >= 197; 4 stay at round-off up to 250
+  //! Courant >= 1.65 and 3 solves at >= 197; 4 stay at round-off up to 250.
+  //! 5: the smallest fixed count that matches converged ARS at dt0 on all 22
+  //! linear-model arms (docs/user_guide/configuration.rst, Limits). The
+  //! iteration does not converge monotonically in the count
  public:
-  static constexpr int kHeviDefaultIterations = 4;
+  static constexpr int kHeviDefaultIterations = 5;
   static constexpr int kHeviMaxIterations = 8;
   static constexpr int kHeviMinSolves = 4;
   static constexpr double kHeviAtolEps = 1.e3;
@@ -82,11 +85,10 @@ struct ImplicitOptionsImpl {
   }
   //! the tolerance in use (0: fixed hevi_iterations() solves). The stop is
   //! on only with implicit-integrator-tolerance > 0: by default the stages
-  //! run the measured kHeviDefaultIterations fixed solves. Fewer solves grow
+  //! run the measured kHeviDefaultIterations fixed solves. Fewer than 4 grow
   //! on a balanced rest column at vertical acoustic Courant >= 65.6 (cubed
-  //! tall column, face-work operator box); more diverge on a 45-level,
-  //! 40-scale-height column at dt 1500 s (stratified-solid coarse column:
-  //! fixed 4 runs 40 steps at max|w| 0.095, fixed 8 fails at step 13)
+  //! tall column, face-work operator box); 5 and more redo on a 45-level,
+  //! 40-scale-height column at dt 1500 s, as the rk path does (Limits)
   double hevi_tolerance() const {
     return integrator_tolerance() >= 0. ? integrator_tolerance() : 0.;
   }

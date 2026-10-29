@@ -340,7 +340,7 @@ snapy_add_python_test(test_hevi_constant_forcing TIMEOUT 300
                       LABELS "python;forcing;implicit")
 snapy_add_python_test(test_hevi_rk_parity TIMEOUT 300
                       LABELS "python;implicit;thermo;solid")
-# open item: the stage iteration does not contract near the density floor (Limit, part 2)
+# the near-floor Limit: the stage iteration does not contract near the density floor
 snapy_add_python_test(test_hevi_coarse_column TIMEOUT 300
                       LABELS "python;hydro;implicit;gravity")
 # converged hevi-ark2 follows the operator's own e^{H/2} transient on a short column

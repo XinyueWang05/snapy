@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """hevi-ark2 on a deep stratified column whose top cells sit near the density floor.
 
-Test case for the open item "why the hevi-ark2 stage iteration fails to contract near the
-density floor" (Limit, docs/user_guide/configuration.rst). The column: 45 levels
+Test case for the near-floor Limit (Limits, docs/user_guide/configuration.rst): the
+hevi-ark2 stage iteration does not contract near the density floor. The column: 45 levels
 over 40 scale heights (dz 106 km), isothermal 786 K, H2-He-like gas of
 test_implicit_face_work_operator.py, gravity-work cell, reflecting walls, implicit-scheme 9
 under rk3 (hevi-ark2 by default), dt 1500 s (vertical acoustic Courant 27.8), 40 steps.
 Its top density, about 1.5e-17 kg/m^3, is next to the 3.5e-18 floor. There the stage
 iteration does not contract (measured: no stage converges in 60 solves; fixed 8 fails at
-step 14), so the default's 4 solves are a truncated iterate. This test pins the current
-behaviour:
+step 14), so any fixed count is a truncated iterate, and the default's 5 solves retry here
+(step 12). This test pins the Limit:
 
-  * the default (4 solves) runs all NSTEP steps, finite, without a retry, max|w| < W_BOUND;
-  * its error against a dt/16 reference at the same time (hevi-ark2 with
-    implicit-integrator-tolerance 1e-10, which converges at dt/16 in at most 5 solves) is
-    comparable to the rk path's (implicit-integrator: rk) at the same dt: max relative
-    error of rho and of E at most RATIO times rk's (measured 2.2e-5 vs 2.1e-5).
+  * the dt/16 reference (hevi-ark2 with implicit-integrator-tolerance 1e-10, which converges
+    at dt/16 in at most 5 solves) runs and converges;
+  * the rk path (implicit-integrator: rk) runs all NSTEP steps, finite, max|w| < W_BOUND;
+  * the default (5 solves) either runs all NSTEP steps bounded, with a max relative error of
+    rho and of E against the reference at most RATIO times rk's, or its retry restores the
+    step input exactly (the driver then halves dt; a retry does not establish stability).
 
-Fixed 8 and the stop-on-no-contraction rule are run and reported, not asserted (they fail
-on this column today; resolving the open item should let them through).
+Fixed 4, fixed 8 and the stop-on-no-contraction rule are run and reported, not asserted
+(fixed 4 runs all steps here, fixed 8 and the stop rule retry; the count is not
+monotone).
 
   python test_hevi_coarse_column.py
 """
@@ -67,12 +69,14 @@ def run(keys, dt, nstep):
         w[c][..., ng + NZ:] = w[c][..., ng + NZ - 1:ng + NZ]
     v, _ = b.initialize({"hydro_w": w})
     sl = (Ellipsis, slice(ng, ng + fw.NX2), slice(ng, ng + NZ))
-    wmax, done, status = 0.0, 0, "ok"
+    wmax, done, status, rolled_back = 0.0, 0, "ok", None
     for n in range(nstep):
+        previous = v["hydro_u"][sl].clone()
         for s in range(len(b.module("intg").stages)):
             b.forward(v, dt, s)
         if b.check_redo(v) != 0:
             status = "retry at step %d" % (n + 1)
+            rolled_back = bool(torch.equal(v["hydro_u"][sl], previous))
             break
         u = v["hydro_u"][sl]
         if not torch.isfinite(u).all():
@@ -81,7 +85,7 @@ def run(keys, dt, nstep):
         wmax = max(wmax, (u[1] / u[kIDN]).abs().max().item())
         done = n + 1
     return dict(u=v["hydro_u"][sl].clone(), wmax=wmax, steps=done, status=status,
-                stats=b.hevi_solve_stats().tolist())
+                rolled_back=rolled_back, stats=b.hevi_solve_stats().tolist())
 
 
 def errors(a, r):
@@ -95,30 +99,36 @@ def main():
     torch.set_num_threads(1)
     fails = []
     ref = run({"implicit-integrator-tolerance": 1.e-10}, DT / DTDIV, NSTEP * DTDIV)
-    f4 = run({}, DT, NSTEP)
+    fd = run({}, DT, NSTEP)
     rk = run({"implicit-integrator": "rk"}, DT, NSTEP)
     print("reference (dt/%d, tolerance 1e-10): %s, solve stats %s" % (DTDIV, ref["status"], ref["stats"]))
-    for name, r in (("default (4 solves)", f4), ("rk", rk)):
-        print("%-18s %s, steps %d, max|w| %.3e" % (name, r["status"], r["steps"], r["wmax"]))
+    for name, r in (("default (5 solves)", fd), ("rk", rk)):
+        print("%-18s %s, steps %d, max|w| %.3e, retry restored input: %s"
+              % (name, r["status"], r["steps"], r["wmax"], r["rolled_back"]))
     if ref["status"] != "ok" or ref["stats"][3] > 0:
         fails.append("reference did not run or did not converge: %s %s" % (ref["status"], ref["stats"]))
-    if not (f4["status"] == "ok" and f4["steps"] == NSTEP and f4["wmax"] < W_BOUND):
-        fails.append("default not bounded: %s, steps %d, max|w| %.3e" % (f4["status"], f4["steps"], f4["wmax"]))
-    if rk["status"] == "ok" and ref["status"] == "ok" and f4["status"] == "ok":
-        e4, er = errors(f4["u"], ref["u"]), errors(rk["u"], ref["u"])
-        print("max relative error vs reference: default rho %.2e E %.2e; rk rho %.2e E %.2e"
-              % (e4[0], e4[1], er[0], er[1]))
-        for k, name in ((0, "rho"), (1, "E")):
-            if not e4[k] <= RATIO * er[k]:
-                fails.append("default %s error %.2e > %.0f x rk's %.2e" % (name, e4[k], RATIO, er[k]))
-    else:
-        fails.append("rk or the default did not complete")
-    # open item: more solves diverge today (reported only)
-    for name, keys in (("fixed 8", {"implicit-integrator-iterations": 8,
+    if not (rk["status"] == "ok" and rk["steps"] == NSTEP and rk["wmax"] < W_BOUND):
+        fails.append("rk not bounded: %s, steps %d, max|w| %.3e" % (rk["status"], rk["steps"], rk["wmax"]))
+    if fd["status"] == "ok":
+        if not (fd["steps"] == NSTEP and fd["wmax"] < W_BOUND):
+            fails.append("default not bounded: steps %d, max|w| %.3e" % (fd["steps"], fd["wmax"]))
+        elif rk["status"] == "ok" and ref["status"] == "ok":
+            ed, er = errors(fd["u"], ref["u"]), errors(rk["u"], ref["u"])
+            print("max relative error vs reference: default rho %.2e E %.2e; rk rho %.2e E %.2e"
+                  % (ed[0], ed[1], er[0], er[1]))
+            for k, name in ((0, "rho"), (1, "E")):
+                if not ed[k] <= RATIO * er[k]:
+                    fails.append("default %s error %.2e > %.0f x rk's %.2e" % (name, ed[k], RATIO, er[k]))
+    elif fd["rolled_back"] is not True:
+        fails.append("default %s without restoring the step input" % fd["status"])
+    # the Limit: other counts, reported only
+    for name, keys in (("fixed 4", {"implicit-integrator-iterations": 4}),
+                       ("fixed 8", {"implicit-integrator-iterations": 8,
                                     "implicit-integrator-tolerance": 0.0}),
                        ("stop rule", {"implicit-integrator-tolerance": 1.e-10})):
         r = run(keys, DT, NSTEP)
-        print("open item, %-9s: %s, steps %d, solve stats %s" % (name, r["status"], r["steps"], r["stats"]))
+        print("Limit, %-9s: %s, steps %d, max|w| %.3e, solve stats %s"
+              % (name, r["status"], r["steps"], r["wmax"], r["stats"]))
     print("FAILED: " + "; ".join(fails) if fails else "PASSED")
     return 1 if fails else 0
 

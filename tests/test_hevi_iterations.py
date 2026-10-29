@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""implicit-integrator hevi-ark2 at its default stage solves (keys absent: 4 fixed), at 5,
+"""implicit-integrator hevi-ark2 at its default stage solves (keys absent: 5 fixed), at 4,
 and with the opt-in tolerance stop (implicit-integrator-tolerance 1e-10).
 
 The u = 0 box without noise at vertical acoustic Courant 6.7: x1 vertical, 100 levels of
@@ -14,8 +14,8 @@ grows here: max|w| rises about 100x to above 1e-5 in 480 steps. Each arm:
     largest max|w| of the first quarter;
   * mass: the relative change of the total mass is below MASS_TOL.
 
-Also: the default arm is bitwise the arm with implicit-integrator-iterations 4, the arm at
-5 is not bitwise the arm at 4 (the key reaches the solver), and the tolerance arm's solve
+Also: the default arm is bitwise the arm with implicit-integrator-iterations 5, the arm at
+4 is not bitwise the arm at 5 (the key reaches the solver), and the tolerance arm's solve
 counter shows 4 to 8 solves per stage.
 
   python test_hevi_iterations.py
@@ -124,11 +124,11 @@ def main():
     torch.set_default_dtype(torch.float64)
     fails = []
     with tempfile.TemporaryDirectory() as tmp:
-        r_def, r4, r5 = run(None, tmp), run(4, tmp), run(5, tmp)
+        r_def, r5, r4 = run(None, tmp), run(5, tmp), run(4, tmp)
         r_tol = run(None, tmp, 1.e-10)
     print("initial column: balance_column residual %.2e (rtol 1e-12, 400 sweeps)" % r_def["resid"])
     check("default", r_def, fails)
-    check("iterations 5", r5, fails)
+    check("iterations 4", r4, fails)
     check("tolerance 1e-10", r_tol, fails)
     st = r_tol["stats"]
     print("tolerance arm solve stats: %d implicit stages, %d solves (%.2f per stage), max %d, "
@@ -136,14 +136,14 @@ def main():
                                              st[4]))
     if not (st[0] > 0 and st[1] >= 4 * st[0] and st[2] <= 8):
         fails.append("tolerance arm: solve stats %s outside 4..8 per stage" % st)
-    same4 = torch.equal(r_def["u"], r4["u"])
-    diff5 = not torch.equal(r5["u"], r4["u"])
-    print("default bitwise = iterations 4: %s; iterations 5 differs from 4: %s (max |u5 - u4| %.3e)"
-          % (same4, diff5, (r5["u"] - r4["u"]).abs().max().item()))
-    if not same4:
-        fails.append("default is not bitwise iterations 4")
-    if not diff5:
-        fails.append("iterations 5 is bitwise iterations 4")
+    same5 = torch.equal(r_def["u"], r5["u"])
+    diff4 = not torch.equal(r4["u"], r5["u"])
+    print("default bitwise = iterations 5: %s; iterations 4 differs from 5: %s (max |u4 - u5| %.3e)"
+          % (same5, diff4, (r4["u"] - r5["u"]).abs().max().item()))
+    if not same5:
+        fails.append("default is not bitwise iterations 5")
+    if not diff4:
+        fails.append("iterations 4 is bitwise iterations 5")
     if fails:
         print("FAILED:", "; ".join(fails))
         return 1

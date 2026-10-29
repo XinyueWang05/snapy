@@ -29,9 +29,9 @@ round-off (~8e-15) and the explicit transient to ~3e-10.
 With SNAP_TEST_IMPLICIT_INTEGRATOR=hevi-ark2 (the _hevi entry) the face ladder runs the
 hevi-ark2 rungs HEVI_COURANTS in one child at the default gravity work, i.e. with
 SNAP_GRAVITY_WORK_RADIAL_EXACT unset (on), each without an early stop over at least
-HEVI_T_END (the 40 steps of the 6.6 rung), with the default stage solves (4). Every rung
+HEVI_T_END (the 40 steps of the 6.6 rung), with the default stage solves (5). Every rung
 must stay finite with max w at most HEVI_W_TOL on every step: from the rebalanced column
-the run must stay at round-off (4 solves peak at 2.1e-10; 3 solves grow to 2.9e-9 at
+the run must stay at round-off (5 solves peak at 2.3e-10, 4 at 2.1e-10; 3 solves grow to 2.9e-9 at
 Courant 197/250 by step 40). That bar replaces W_TOL,
 W_SETTLED and ON_OFF in this arm. The cell-work + global-fixer arm runs on the rk ladder
 only: hevi-ark2 rejects the gravity-work fixer at its first step. The rk ladder keeps
