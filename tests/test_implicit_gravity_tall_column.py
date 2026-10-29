@@ -34,8 +34,8 @@ must stay finite with max w at most HEVI_W_TOL on every step: from the rebalance
 the run must stay at round-off (5 solves peak at 2.3e-10, 4 at 2.1e-10; 3 solves grow to 2.9e-9 at
 Courant 197/250 by step 40). That bar replaces W_TOL,
 W_SETTLED and ON_OFF in this arm. The cell-work + global-fixer arm runs on the rk ladder
-only: hevi-ark2 rejects the gravity-work fixer at its first step. The rk ladder keeps
-W_TOL, W_SETTLED and ON_OFF.
+only (hevi-ark2 with the fixer is covered by the solid arm of test_hevi_options.py). The
+rk ladder keeps W_TOL, W_SETTLED and ON_OFF.
 """
 import argparse
 import math
@@ -329,9 +329,10 @@ def main():
         print(json.dumps({"geometry": geometry, "first_failing_courant": first_failure,
                           "tested_courants": args.courants}), flush=True)
     # Preserve the Cartesian cell work + global fixer coverage alongside the
-    # explicitly face-only, fixer-off ladder (rk only: hevi-ark2 rejects the fixer).
+    # explicitly face-only, fixer-off ladder (rk ladder only; hevi-ark2 with the fixer is
+    # covered by the solid arm of test_hevi_options.py).
     if HEVI and not args.ladder:
-        print("SKIP cell-global-fixer: hevi-ark2 does not support the gravity-work fixer", flush=True)
+        print("SKIP cell-global-fixer: rk ladder only (hevi-ark2 + fixer: test_hevi_options.py)", flush=True)
     for dt in (() if args.ladder or HEVI else (997.0, 100.0)):
         finite, n, wmax, history, err = run(
             dt, args.nstep, args.device, cell_work=True)

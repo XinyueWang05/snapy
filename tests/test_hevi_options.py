@@ -7,7 +7,8 @@ Options:
   * hevi-ark2 with implicit-scheme 1, 0 or absent and an unknown name are rejected;
   * the default is bitwise implicit-integrator-iterations 5 and differs from iterations 4;
     iterations 0 is rejected; the key is rejected under rk (named, or no implicit scheme 9)
-    and accepted under implicit-scheme 9 without the integrator key.
+    and accepted under implicit-scheme 9 without the integrator key;
+    implicit-integrator-tolerance (the removed stop) is rejected as an unknown key.
 
 Parity with the rk path:
   saturation  final-stage saturation adjustment (thermo with reactions). A supersaturated
@@ -113,6 +114,11 @@ def options(fails):
         if not rejected(config(scheme, name, 3), "implicit-integrator-iterations"):
             fails.append("iterations under scheme %s, %s not rejected" % (scheme, name))
     make_block(config(9, None, 3))
+    # the tolerance stop is gone: its key is an unknown key
+    cfg = config(9, None)
+    cfg["integration"]["implicit-integrator-tolerance"] = 1.e-10
+    if not rejected(cfg, "implicit-integrator-tolerance"):
+        fails.append("implicit-integrator-tolerance not rejected as an unknown key")
 
 
 def saturation(integrator):

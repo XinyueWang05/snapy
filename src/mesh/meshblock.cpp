@@ -625,6 +625,16 @@ struct DeferVaporCheck {
   }
   ~DeferVaporCheck() { eos->defer_vapor_check(false); }
 };
+
+// a forward that throws mid-stage (e.g. an unrepairable vapour column on CPU)
+// must not leave the HEVI mode or the correction offset set for the next call
+struct HeviModeReset {
+  HydroImpl *hydro;
+  ~HeviModeReset() {
+    hydro->hevi_mode = 0;
+    hydro->hevi_rhs_offset = torch::Tensor();
+  }
+};
 }  // namespace
 
 void MeshBlockImpl::saturation_adjust_(torch::Tensor hydro_u) {
@@ -675,6 +685,7 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
               "[MeshBlock] implicit-integrator hevi-ark2 runs in the 3-call "
               "stage loop of integration/type rk3");
   DeferVaporCheck defer(phydro->peos.get());
+  HeviModeReset reset{phydro.get()};
   phydro->rk_stage = stage;
 
   double const g = 1. - 1. / std::sqrt(2.), d = -2. * std::sqrt(2.) / 3.;
