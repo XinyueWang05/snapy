@@ -201,17 +201,16 @@ default applies. ``implicit-integrator: rk`` keeps the previous rk path.
       #                                    # solves, and when the correction
       #                                    # stops contracting); 0 or absent: fixed
 
-**Limit.**
+**Limit.** The stage iteration stops contracting above vertical acoustic Courant ~14 in
+the near-floor top cells of a 40-scale-height column (no converged ARS stage at Courant
+28 and above); on an 11-scale-height column it contracts at ~0.8 per solve up to
+Courant 657. The default truncates at 4 solves, matching the rk path's error there.
 
-1. On smooth stratified flow the stage iteration contracts up to vertical acoustic
-   Courant ~657 (0.37/0.40/0.83 per solve at 65.6/197/657), and the default's 4 solves
-   are within 9e-6 of the converged iterate.
-2. In the near-floor top cells of a deep stratified column the iteration does not
-   contract even at Courant ~14, so the default's 4 solves are a truncated iterate
-   there, with error equal to the base rk path's against a converged dt/16 reference,
-   while more solves diverge. Why the iteration fails to contract near the density
-   floor is an open item; ``tests/test_hevi_coarse_column.py`` (45 levels over 40 scale
-   heights, dt 1500 s) is its test case.
+Why the iteration fails to contract near the density floor is an open item. Its test
+case is ``tests/test_hevi_coarse_column.py`` (45 levels over 40 scale heights,
+dt 1500 s); the coarse face-work arm of ``tests/test_implicit_stratified_solid.py``
+(ctest ``test_implicit_stratified_solid_coarse_face_re1``, an expected failure) belongs
+to the same item.
 
 Output Configuration
 --------------------

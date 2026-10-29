@@ -2,7 +2,7 @@
 """hevi-ark2 on a deep stratified column whose top cells sit near the density floor.
 
 Test case for the open item "why the hevi-ark2 stage iteration fails to contract near the
-density floor" (Limit, part 2, docs/user_guide/configuration.rst). The column: 45 levels
+density floor" (Limit, docs/user_guide/configuration.rst). The column: 45 levels
 over 40 scale heights (dz 106 km), isothermal 786 K, H2-He-like gas of
 test_implicit_face_work_operator.py, gravity-work cell, reflecting walls, implicit-scheme 9
 under rk3 (hevi-ark2 by default), dt 1500 s (vertical acoustic Courant 27.8), 40 steps.

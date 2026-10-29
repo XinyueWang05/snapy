@@ -418,11 +418,13 @@ foreach(_re 0 1)
   set_tests_properties(${_n}_python PROPERTIES ENVIRONMENT
                        "SNAP_GRAVITY_WORK_RADIAL_EXACT=${_re};SNAP_TEST_COARSE_FACE=only")
 endforeach()
-# Expected failure, open item "hevi-ark2 vs rk on test_implicit_stratified_solid coarse
-# face column: which is right is unresolved": with the switch on, hevi-ark2 runs all 40
-# steps at max w 2.97 m/s (bound 0.1) where the rk path retries at step 25; the dt/16
-# references disagree (hevi-ark2 converged: up to 2.4 m/s, rk: 2e-7 m/s). Remove
-# WILL_FAIL when the item is resolved.
+# Expected failure, open item "the hevi-ark2 stage iteration fails to contract near the
+# density floor" (docs/user_guide/configuration.rst, Limit; test case
+# test_hevi_coarse_column), with its sub-question "hevi-ark2 vs rk on this column: which
+# is right is unresolved": with the switch on, hevi-ark2 runs all 40 steps at max w
+# 2.97 m/s (bound 0.1) where the rk path retries at step 25; the dt/16 references
+# disagree (hevi-ark2 converged: up to 2.4 m/s, rk: 2e-7 m/s). Remove WILL_FAIL when
+# the item is resolved.
 set_tests_properties(test_implicit_stratified_solid_coarse_face_re1_python
                      PROPERTIES WILL_FAIL TRUE)
 

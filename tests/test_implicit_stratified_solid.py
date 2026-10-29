@@ -253,8 +253,10 @@ def coarse_face(failures):
     default integrator (hevi-ark2 for implicit-scheme 9 under rk3). A retry must restore
     its input; a run without a retry must stay below 0.1 m/s.
 
-    Open item "hevi-ark2 vs rk on test_implicit_stratified_solid coarse face column:
-    which is right is unresolved". With SNAP_GRAVITY_WORK_RADIAL_EXACT on, hevi-ark2
+    Open item "the hevi-ark2 stage iteration fails to contract near the density floor"
+    (docs/user_guide/configuration.rst, Limit; test case test_hevi_coarse_column.py),
+    with its sub-question "hevi-ark2 vs rk on this column: which is right is
+    unresolved". With SNAP_GRAVITY_WORK_RADIAL_EXACT on, hevi-ark2
     (4 solves) runs all 40 steps with max w 2.97 m/s and fails the 0.1 bound; the rk path
     retries at step 25 (w 189 m/s). The dt/16 references disagree: hevi-ark2 converged at
     dt/16 keeps up to 2.4 m/s near the top, rk at dt/16 stays at 2e-7 m/s. Its ctest
