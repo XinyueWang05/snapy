@@ -8,12 +8,12 @@ coarse  45 levels over 40 scale heights (dz 106 km), isothermal 786 K, the H2-He
         Its top density, about 1.5e-17 kg/m^3, is next to the 3.5e-18 floor, where the stage
         iteration does not contract, so any fixed count is a truncated iterate and the
         default's 5 solves retry (step 12). Pinned:
-          * the dt/16 reference (implicit-integrator-iterations 20) runs;
           * the rk path (implicit-integrator: rk) runs all NSTEP steps, finite,
             max|w| < W_BOUND;
           * the default (5 solves) either runs all NSTEP steps bounded, with a max relative
-            error of rho and of E against the reference at most RATIO times rk's, or its
-            retry restores the step input exactly (the driver then halves dt).
+            error of rho and of E against a dt/16 reference (implicit-integrator-iterations
+            20, run only in that case) at most RATIO times rk's, or its retry restores the
+            step input exactly (the driver then halves dt).
         Fixed 4 and fixed 8 are reported, not asserted (the count is not monotone).
 short   12 levels over 10.67 scale heights (the 106 km levels of the coarse column), gravity-
         work face, balance_column at its defaults (residual ~1e-10). A balanced column whose
@@ -99,27 +99,30 @@ def errors(a, r):
 
 
 def coarse(fails):
-    ref = coarse_run({"implicit-integrator-iterations": 20}, DT / DTDIV, NSTEP * DTDIV)
     fd = coarse_run({}, DT, NSTEP)
     rk = coarse_run({"implicit-integrator": "rk"}, DT, NSTEP)
-    print("reference (dt/%d, iterations 20): %s" % (DTDIV, ref["status"]))
     for name, r in (("default (5 solves)", fd), ("rk", rk)):
         print("%-18s %s, steps %d, max|w| %.3e, retry restored input: %s"
               % (name, r["status"], r["steps"], r["wmax"], r["rolled_back"]))
-    if ref["status"] != "ok":
-        fails.append("reference did not run: %s" % ref["status"])
     if not (rk["status"] == "ok" and rk["steps"] == NSTEP and rk["wmax"] < W_BOUND):
         fails.append("rk not bounded: %s, steps %d, max|w| %.3e" % (rk["status"], rk["steps"], rk["wmax"]))
     if fd["status"] == "ok":
         if not (fd["steps"] == NSTEP and fd["wmax"] < W_BOUND):
             fails.append("default not bounded: steps %d, max|w| %.3e" % (fd["steps"], fd["wmax"]))
-        elif rk["status"] == "ok" and ref["status"] == "ok":
-            ed, er = errors(fd["u"], ref["u"]), errors(rk["u"], ref["u"])
-            print("max relative error vs reference: default rho %.2e E %.2e; rk rho %.2e E %.2e"
-                  % (ed[0], ed[1], er[0], er[1]))
-            for k, name in ((0, "rho"), (1, "E")):
-                if not ed[k] <= RATIO * er[k]:
-                    fails.append("default %s error %.2e > %.0f x rk's %.2e" % (name, ed[k], RATIO, er[k]))
+        elif rk["status"] == "ok":
+            # the reference is needed only here: the default ran all steps
+            ref = coarse_run({"implicit-integrator-iterations": 20}, DT / DTDIV, NSTEP * DTDIV)
+            print("reference (dt/%d, iterations 20): %s" % (DTDIV, ref["status"]))
+            if ref["status"] != "ok":
+                fails.append("reference did not run: %s" % ref["status"])
+            else:
+                ed, er = errors(fd["u"], ref["u"]), errors(rk["u"], ref["u"])
+                print("max relative error vs reference: default rho %.2e E %.2e; "
+                      "rk rho %.2e E %.2e" % (ed[0], ed[1], er[0], er[1]))
+                for k, name in ((0, "rho"), (1, "E")):
+                    if not ed[k] <= RATIO * er[k]:
+                        fails.append("default %s error %.2e > %.0f x rk's %.2e"
+                                     % (name, ed[k], RATIO, er[k]))
     elif fd["rolled_back"] is not True:
         fails.append("default %s without restoring the step input" % fd["status"])
     # the Limit: other counts, reported only (the count is not monotone)

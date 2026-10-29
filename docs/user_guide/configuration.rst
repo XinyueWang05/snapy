@@ -203,7 +203,8 @@ correction (a first-order Roe matrix inverted against the high-order residual), 
 contraction depends on the vertical acoustic Courant number. Above acoustic CFL 0.3 on
 coarse grids the default grows weakly. Near-floor coarse columns at large vertical
 Courant number redo, under the rk path as well. The number of solves is not a tuning
-knob: raising it does not converge monotonically. Details: issue #NNN.
+knob: raising it does not converge monotonically. Details: issue
+`#331 <https://github.com/chengcli/snapy/issues/331>`_.
 
 Output Configuration
 --------------------

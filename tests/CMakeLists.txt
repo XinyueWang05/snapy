@@ -328,16 +328,21 @@ set_tests_properties(test_implicit_gravity_tall_column_cubed_hevi_python
                      test_gravity_work_radial_exact_hevi_python
                      PROPERTIES ENVIRONMENT "SNAP_TEST_IMPLICIT_INTEGRATOR=hevi-ark2")
 # hevi-ark2, the default of implicit-scheme 9 under rk3: options and rk-path parity,
-# tracers and forcing, the wind mode at dt0 (and its growth on the rk opt-out; each
-# entry builds its seed on the rk path first), and the near-floor columns
+# tracers and forcing, and the near-floor columns
 snapy_add_python_test(test_hevi_options TIMEOUT 300 LABELS "python;implicit;thermo;solid")
 snapy_add_python_test(test_hevi_conservation TIMEOUT 300
                       LABELS "python;scalar;forcing;implicit")
-snapy_add_python_test(test_hevi_eigenmode TIMEOUT 1500 LABELS "python;hydro;implicit")
-snapy_add_python_test(test_hevi_eigenmode_rk SCRIPT test_hevi_eigenmode.py
-                      ARGS --integrator rk TIMEOUT 1200 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_hevi_coarse_column TIMEOUT 300
                       LABELS "python;hydro;implicit;gravity")
+# the wind mode at dt0 and its growth on the rk opt-out: each entry builds its seed on
+# the rk path (8 h) and then runs 3 h at dt0, about 6 and 11 minutes on one CPU thread
+if(FULL_TESTS)
+  snapy_add_python_test(test_hevi_eigenmode TIMEOUT 1500
+                        LABELS "python;hydro;implicit;slow")
+  snapy_add_python_test(test_hevi_eigenmode_rk SCRIPT test_hevi_eigenmode.py
+                        ARGS --integrator rk TIMEOUT 1200
+                        LABELS "python;hydro;implicit;slow")
+endif()
 snapy_add_python_test(test_implicit_options_type TIMEOUT 60 LABELS "python;implicit")
 snapy_add_python_test(test_shear_cfl TIMEOUT 60 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_check_redo_floor TIMEOUT 60 LABELS "python;mesh;redo")
