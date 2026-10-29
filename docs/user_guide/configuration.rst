@@ -208,15 +208,20 @@ Each stage solve inverts a first-order, three-point Roe linearisation of the ver
 operator against the full high-order residual, so the stage iteration is a defect
 correction: it contracts at a rate that depends on the vertical acoustic Courant number,
 not to a fixed tolerance. The default of 5 solves was chosen against the converged ARS
-stage (implicit-integrator-iterations 20) in the cp5 linear model of the 22 wind and box
-arms at dt0, 2 dt0 and 3 dt0 (growth minus converged ARS, worst horizontal mode):
+stage (implicit-integrator-iterations 20) with a linear stability analysis of the cp5
+(WENO5 linear-weight) operator on 22 arms: an isothermal 100 K box with LMARS and HLLC,
+u 250 and 400 m/s and dx 5 to 400 km, plus a hot-Jupiter box. The step dt0 is the
+default step at acoustic CFL 0.3, dt0 = 0.3 dx / (\|u\| + c_s), minimum over the cells
+(the horizontal bound of the block's max_time_step; the implicit vertical direction adds
+only an advective bound); 2 dt0 and 3 dt0 are acoustic CFL 0.6 and 0.9. Measured as
+growth minus converged ARS, worst horizontal mode:
 
 1. At dt0, 5 solves match converged ARS on all 22 arms.
-2. Above dt0, on the dx 400 km boxes, 5 solves grow weakly: +0.0067 per day at 2 dt0, an
-   e-folding time of about 150 days.
-3. Converged ARS itself grows at grid scale at 3 dt0 on the LMARS u 400 m/s boxes with
-   dx 200 km and dx 400 km (+8.76 and +7.16 per day, m 32); the rk path does not. No
-   number of solves removes this growth.
+2. Above dt0, 5 solves grow weakly: +0.0067 per day on the HLLC u 250 m/s, dx 400 km
+   box at acoustic CFL 0.6, an e-folding time of about 150 days.
+3. Converged ARS itself grows at grid scale at acoustic CFL 0.9 on the LMARS u 400 m/s
+   boxes with dx 200 km and dx 400 km (+8.76 and +7.16 per day, m 32); the rk path does
+   not. No number of solves removes this growth.
 4. Near-floor coarse columns at large vertical Courant number redo (retry the step at a
    halved dt) under the default and under the rk path alike. On the coarse
    face-work column of ``tests/test_implicit_stratified_solid.py`` (45 levels over 40
@@ -231,11 +236,13 @@ arms at dt0, 2 dt0 and 3 dt0 (growth minus converged ARS, worst horizontal mode)
 .. warning::
 
    Raising ``implicit-integrator-iterations`` does not converge monotonically, so it is
-   not a tuning knob. In the linear model the number of cells out of 64 whose growth
-   exceeds converged ARS by more than 1e-4 per day is 31, 7, 7, 22, 0, 3, 0 and 0 at 4,
-   5, 6, 8, 10, 12, 16 and 20 solves; 4 solves run the
-   coarse column above without a redo but grow on the wind arms (+0.35 per day on HLLC
-   u 250 m/s at 2 dt0, against -0.43 at 5).
+   not a tuning knob. In the linear stability analysis the number of cells out of 64
+   whose growth exceeds converged ARS by more than 1e-4 per day is 31, 7, 7, 22, 0, 3, 0
+   and 0 at 4, 5, 6, 8, 10, 12, 16 and 20 solves. 4 solves run the coarse column above
+   without a redo but grow at +0.35 per day on the HLLC u 250 m/s, dx 400 km box at
+   acoustic CFL 0.6, where 5 solves grow at +0.0067 per day.
+
+The stage solve and these limits are tracked in an issue (details: issue #NNN).
 
 Output Configuration
 --------------------
