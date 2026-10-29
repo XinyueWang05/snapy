@@ -32,7 +32,8 @@ NZ_S, DZ_S, NX2_S, DX_S = 32, 1.0e3, 8, 2.0e3
 NSTEP_S, R0, TOL = 40, 1.0e-3, 1.0e-12
 NZ_F, DZ_F, NX2_F, DX_F = 40, 1.0e3, 4, 10.0e3
 A, NSTEP_F, DT = 1.0e-3, 50, 20.0
-# W_BOUND: 3.5x the rk path's 2.9e-8 on the same box (the column's balance residual)
+# W_BOUND: 2.6x the largest max|w| measured on these boxes (3.8e-8, native arm; rk 2.3e-8),
+# the column's balance residual
 TOL_U, W_BOUND = 1.0e-10, 1.0e-7
 
 

@@ -264,7 +264,7 @@ def coarse_face(failures):
     corrected-PE switch on. At rtol 1e-12 (residual ~6e-13) the default's 5 solves retry at
     step 12 (switch on) and step 19 (off), as the rk path does later (near-floor Limit,
     docs/user_guide/configuration.rst), so this pins the rollback. The convergence in dt
-    itself is covered by test_hevi_short_column_transient.py.
+    itself is covered by the short-column part of test_hevi_coarse_column.py.
     """
     out = tall_run(45, 40, 9, 'face', 40, 1500, rtol=1.e-12)
     # Rollback coverage only; a retry does not establish stability.

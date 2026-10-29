@@ -2,8 +2,7 @@
 """The scheme-9 wind mode at the default step dt0: it grows on the rk path and decays under
 hevi-ark2 (the default for implicit-scheme 9 with rk3).
 
-The box of the LMARS energy-flux study (fork branch lmars-energy-flux-test 85a3ce1b,
-run_arm.py) cut to 16 columns: x1 vertical, 450 km, 100 levels (dz 4.5 km), reflecting;
+The box: x1 vertical, 450 km, 100 levels (dz 4.5 km), reflecting;
 x2 periodic, NX2 columns of dx 5 km; dry H2-He (cv_R 2.5), isothermal 100 K, g 8.87,
 10 bar at the bottom, balanced with snapy.balance_column (rtol 1e-12, 400 sweeps);
 weno5, lmars, rk3, cfl 0.3, implicit-scheme 9, uniform wind u = 400 m/s (Mach 0.54).
@@ -21,10 +20,13 @@ onto damped modes.)
   python test_hevi_eigenmode.py               the default (hevi-ark2): must not grow,
                                               end/start <= DECAY
   python test_hevi_eigenmode.py --integrator rk   the opt-out rk path: must grow,
-                                              end/start >= GROW (the RED side)
+                                              end/start >= GROW
 
-Exit 0 when the arm behaves as stated, 1 otherwise. On a tree without hevi-ark2 (the
-base), the default arm is the rk path and fails: that is the RED run.
+The bounds are deliberately loose (robust across devices). Measured on a CPU build
+(f2aa4e25, seed from SEED_HOURS = 8 h): hevi-ark2 0.654, rk 2.994. Each run builds its
+seed first; the two ctest entries take about 11 and 6 minutes on one CPU thread and are
+registered only with FULL_TESTS (label slow). Exit 0 when the arm behaves as stated,
+1 otherwise.
 """
 import argparse
 import math
