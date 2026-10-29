@@ -197,52 +197,13 @@ default applies. ``implicit-integrator: rk`` keeps the previous rk path.
       implicit-scheme: 9
       # implicit-integrator: rk            # opt out: the previous rk path
       # implicit-integrator-iterations: 5  # stage solves (default 5, fixed)
-      # implicit-integrator-tolerance: 0   # > 0: stop on a tolerance (4 to 8
-      #                                    # solves, and when the correction
-      #                                    # stops contracting); 0 or absent: fixed
 
-Limits
-^^^^^^
-
-Each stage solve inverts a first-order, three-point Roe linearisation of the vertical
-operator against the full high-order residual, so the stage iteration is a defect
-correction: it contracts at a rate that depends on the vertical acoustic Courant number,
-not to a fixed tolerance. The default of 5 solves was chosen against the converged ARS
-stage (implicit-integrator-iterations 20) with a linear stability analysis of the cp5
-(WENO5 linear-weight) operator on 22 arms: an isothermal 100 K box with LMARS and HLLC,
-u 250 and 400 m/s and dx 5 to 400 km, plus a hot-Jupiter box. The step dt0 is the
-default step at acoustic CFL 0.3, dt0 = 0.3 dx / (\|u\| + c_s), minimum over the cells
-(the horizontal bound of the block's max_time_step; the implicit vertical direction adds
-only an advective bound); 2 dt0 and 3 dt0 are acoustic CFL 0.6 and 0.9. Measured as
-growth minus converged ARS, worst horizontal mode:
-
-1. At dt0, 5 solves match converged ARS on all 22 arms.
-2. Above dt0, 5 solves grow weakly: +0.0067 per day on the HLLC u 250 m/s, dx 400 km
-   box at acoustic CFL 0.6, an e-folding time of about 150 days.
-3. Converged ARS itself grows at grid scale at acoustic CFL 0.9 on the LMARS u 400 m/s
-   boxes with dx 200 km and dx 400 km (+8.76 and +7.16 per day, m 32); the rk path does
-   not. No number of solves removes this growth.
-4. Near-floor coarse columns at large vertical Courant number redo (retry the step at a
-   halved dt) under the default and under the rk path alike. On the coarse
-   face-work column of ``tests/test_implicit_stratified_solid.py`` (45 levels over 40
-   scale heights, dt 1500 s, vertical acoustic Courant 27.8, balanced to rtol 1e-12), run
-   for 60,000 s with redos as dt halvings: the rk path first redoes at step 33 (corrected-PE
-   switch on) and step 34 (off), with 25 and 40 rejected tries and max\|w\| 494 and
-   437 m/s; 5 solves first redo at step 12 and step 19, with 138 and 80 rejected tries and
-   max\|w\| 1042 and 671 m/s. Every run reaches 60,000 s; none aborts. The test cases are
-   that column (ctest ``test_implicit_stratified_solid_coarse_face_re0`` and ``_re1``) and
-   ``tests/test_hevi_coarse_column.py``; both pin that a redo restores the step input.
-
-.. warning::
-
-   Raising ``implicit-integrator-iterations`` does not converge monotonically, so it is
-   not a tuning knob. In the linear stability analysis the number of cells out of 64
-   whose growth exceeds converged ARS by more than 1e-4 per day is 31, 7, 7, 22, 0, 3, 0
-   and 0 at 4, 5, 6, 8, 10, 12, 16 and 20 solves. 4 solves run the coarse column above
-   without a redo but grow at +0.35 per day on the HLLC u 250 m/s, dx 400 km box at
-   acoustic CFL 0.6, where 5 solves grow at +0.0067 per day.
-
-The stage solve and these limits are tracked in an issue (details: issue #NNN).
+**Limits.** Each implicit stage takes 5 solves by default. The iteration is a defect
+correction (a first-order Roe matrix inverted against the high-order residual), so its
+contraction depends on the vertical acoustic Courant number. Above acoustic CFL 0.3 on
+coarse grids the default grows weakly. Near-floor coarse columns at large vertical
+Courant number redo, under the rk path as well. The number of solves is not a tuning
+knob: raising it does not converge monotonically. Details: issue #NNN.
 
 Output Configuration
 --------------------

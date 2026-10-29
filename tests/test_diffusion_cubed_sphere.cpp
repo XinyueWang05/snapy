@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <fstream>
 #include <future>
+
 #include <snap/coord/coord_utils.hpp>
 #include <snap/coord/cubed_sphere_utils.hpp>
 #include <snap/forcing/forcing.hpp>
@@ -563,13 +565,54 @@ TEST(CubedSphereDiffusion, cuda_mesh_split_step_matches_cpu) {
 // radial heat flux is off under implicit_radial, the lateral one sees no
 // gradient) does not depend on kappa: kappa 10 minus kappa 0 is the split's
 // energy change, which must agree between implicit-integrator hevi-ark2 and rk.
-// The mesh has several local blocks, so the hevi-ark2 tolerance stop also runs
-// its cross-block decision here.
+// The deck is test_diffusion_cubed_sphere.yaml with weak gravity and
+// implicit-scheme 9 (the implicit solve needs const-gravity; 1e-12 keeps the
+// column quiet).
 TEST(CubedSphereDiffusion, hevi_ark2_radial_split_matches_rk) {
   torch::set_num_threads(1);
+  // one file per rank: no rank reads a file another is writing
+  std::string const deck = "test_diffusion_cubed_sphere_hevi_" +
+                           std::to_string(get_rank()) + ".yaml";
+  {
+    std::ofstream(deck) << R"(reference-state: {Tref: 0., Pref: 1.e5}
+species:
+  - name: dry
+    composition: {O: 0.42, N: 1.56, Ar: 0.01}
+    cv_R: 2.5
+dynamics:
+  equation-of-state: {type: ideal-gas}
+geometry:
+  type: gnomonic-equiangle
+  cells: {nx1: 4, nx2: 12, nx3: 12, nghost: 2}
+  bounds:
+    x1min: 10.
+    x1max: 11.
+    x2min_pi: -0.25
+    x2max_pi: 0.25
+    x3min_pi: -0.25
+    x3max_pi: 0.25
+distribute:
+  layout: cubed-sphere
+  nb2: 1
+  nb3: 1
+  blocks_per_process: 6
+  verbose: false
+boundary-condition:
+  external:
+    x1-inner: reflecting
+    x1-outer: reflecting
+    x2-inner: custom
+    x2-outer: custom
+    x3-inner: custom
+    x3-outer: custom
+forcing:
+  const-gravity: {grav1: -1.e-12}
+  diffusion: {nu_iso: 0.01, kappa_iso: 0.02, dynamic: true}
+integration: {type: rk3, cfl: 0.4, implicit-scheme: 9}
+)";
+  }
   auto run = [&](std::string const &integrator, double kappa) {
-    auto opts =
-        MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere_hevi.yaml");
+    auto opts = MeshOptionsImpl::from_yaml(deck);
     auto c = opts->block()->coord();
     c->nx2() = 6;
     c->nx3() = 6;
@@ -600,7 +643,6 @@ TEST(CubedSphereDiffusion, hevi_ark2_radial_split_matches_rk) {
     for (int stage = 0; stage < mesh->blocks[0]->pintg->stages.size(); ++stage)
       mesh->forward(vars, dt, stage);
     std::vector<torch::Tensor> du;
-    double stages = 0.;
     for (size_t i = 0; i < s.size(); ++i) {
       // interior cells only: corner ghosts are not refreshed by the exchange
       int ng = mesh->blocks[i]->pcoord->options->nghost();
@@ -608,18 +650,16 @@ TEST(CubedSphereDiffusion, hevi_ark2_radial_split_matches_rk) {
                        .slice(0, ng, -ng)
                        .slice(1, ng, -ng)
                        .slice(2, ng, -ng));
-      stages += mesh->blocks[i]->hevi_solve_stats.defined()
-                    ? mesh->blocks[i]->hevi_solve_stats[0].item<double>()
-                    : 0.;
     }
-    return std::make_pair(du, stages);
+    return std::make_pair(
+        du, mesh->blocks[0]->phydro->picorr->options->integrator());
   };
   auto [dh, hs] = run("hevi-ark2", 1000.);
   auto [dh0, hs0] = run("hevi-ark2", 0.);  // the same step without the split
   auto [dr, rs] = run("rk", 1000.);
   auto [dr0, rs0] = run("rk", 0.);
-  EXPECT_GT(hs, 0.);
-  EXPECT_EQ(rs, 0.);
+  EXPECT_EQ(hs, "hevi-ark2");
+  EXPECT_EQ(rs, "rk");
   // the split's energy change: kappa 10 minus kappa 0 on each path (the
   // background change of the step, the same with and without the split,
   // cancels)

@@ -239,16 +239,6 @@ void bind_mesh(py::module& m) {
       .def("print_cycle_info", &snap::MeshBlockImpl::print_cycle_info)
       .def("finalize", &snap::MeshBlockImpl::finalize)
       .def("check_redo", &snap::MeshBlockImpl::check_redo)
-      .def(
-          "hevi_solve_stats",
-          [](snap::MeshBlockImpl& self) {
-            return self.hevi_solve_stats.defined()
-                       ? self.hevi_solve_stats.clone()
-                       : torch::zeros({5}, torch::kFloat64);
-          },
-          "hevi-ark2 solve counts since construction: {implicit stages, "
-          "solves, max solves in one stage, stages capped unconverged, stages "
-          "stopped on a non-contracting correction}")
       .def("get_outputs",
            [](snap::MeshBlockImpl& self) { return self.output_types; })
       .def(

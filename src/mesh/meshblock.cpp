@@ -627,34 +627,6 @@ struct DeferVaporCheck {
 };
 }  // namespace
 
-double HeviConsensus::reduce_max(double x,
-                                 std::function<double(double)> const &across) {
-  std::unique_lock<std::mutex> lock(m);
-  int64_t const gen = generation;
-  acc = arrived == 0 ? x : std::max(acc, x);
-  if (++arrived == n) {
-    result = across(acc);
-    arrived = 0;
-    ++generation;
-    lock.unlock();
-    cv.notify_all();
-    return result;
-  }
-  cv.wait(lock, [&] { return generation != gen; });
-  return result;
-}
-
-double MeshBlockImpl::hevi_global_max(double x) {
-  auto across = [this](double v) {
-    if (!_playout->has_process_group()) return v;
-    std::vector<at::Tensor> r = {torch::tensor({v}, torch::kFloat64)};
-    _playout->comm->allreduce(r, c10d::ReduceOp::MAX);
-    return r[0].item<double>();
-  };
-  if (hevi_consensus) return hevi_consensus->reduce_max(x, across);
-  return across(x);
-}
-
 void MeshBlockImpl::saturation_adjust_(torch::Tensor hydro_u) {
   phydro->peos->apply_conserved_limiter_(hydro_u, /*whole_column=*/true);
 
@@ -805,25 +777,7 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
   // implicit vertical stage from predictor (R, Rs): Q = R + D
   auto implicit_stage = [&](int j, torch::Tensor const &R,
                             torch::Tensor const &Rs) {
-    int const nmax = icorr->hevi_max_solves();
-    double const tol = icorr->hevi_tolerance();
-    int const nmin =
-        tol > 0. ? std::min(ImplicitOptionsImpl::kHeviMinSolves, nmax) : nmax;
-    double const atol =
-        ImplicitOptionsImpl::kHeviAtolEps * machine_epsilon(R.scalar_type());
-    // per-row scale of the absolute floor: density for the mass and species
-    // rows, the energy for IPR, sqrt(rho E) (about rho c) for the momenta
-    auto Rabs = R.index(interior).abs().amax({1, 2, 3});
-    auto scale = Rabs.clone();
-    {
-      auto rho_s = Rabs[IDN], e_s = Rabs[IPR];
-      scale.narrow(0, IVX, 3).fill_(0.);
-      scale.narrow(0, IVX, 3) += (rho_s * e_s).sqrt();
-      if (scale.size(0) > ICY)
-        scale.narrow(0, ICY, scale.size(0) - ICY).fill_(0.);
-      if (scale.size(0) > ICY)
-        scale.narrow(0, ICY, scale.size(0) - ICY) += rho_s;
-    }
+    int const nsolves = icorr->hevi_iterations();
 
     hydro_u.copy_(R);
     if (has_scalar) scalar_s.copy_(Rs);
@@ -833,38 +787,16 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
         has_scalar ? scalar_s / hydro_u[IDN].unsqueeze(0) : torch::Tensor();
     phydro->hevi_mode = 2;
     auto D = inner(phydro->forward(g * dt, hydro_u, vars));
-    int solves = 1;
-    double metric = 0., previous = 0.;
-    bool stalled = false;
-    // further corrections towards Q = R + g dt V(Q), with the Jacobian at
-    // the current iterate: D <- D + (I + g dt J)^-1 (g dt V(R + D) - D)
-    while (solves < nmax) {
+    // nsolves - 1 further corrections towards Q = R + g dt V(Q), with the
+    // Jacobian at the current iterate:
+    // D <- D + (I + g dt J)^-1 (g dt V(R + D) - D)
+    for (int solves = 1; solves < nsolves; ++solves) {
       hydro_u.copy_(R + D);
       refresh_ghosts();
       phydro->hevi_rhs_offset = D;
       auto dD = inner(phydro->forward(g * dt, hydro_u, vars));
       phydro->hevi_rhs_offset = torch::Tensor();
       D = D + dD;
-      ++solves;
-      if (tol > 0. && solves >= nmin) {
-        // every conserved variable: max|dD| <= tol max|D| + atol max|R|
-        auto num = dD.index(interior).abs().amax({1, 2, 3});
-        auto den = tol * D.index(interior).abs().amax({1, 2, 3}) + atol * scale;
-        auto ratio = torch::where(num == 0., torch::zeros_like(num), num / den);
-        double local = ratio.max().item<double>();
-        if (!std::isfinite(local)) local = 1.e300;
-        previous = metric;
-        metric = hevi_global_max(local);
-        if (metric <= 1.) break;
-        // past the minimum, a correction larger than the last one means the
-        // iteration has stopped contracting (a coarse tall column at a large
-        // step diverges here: more solves make it worse); keep the last
-        // correction, whose forward the fixer and the tracers book, and stop
-        if (solves > nmin && metric > previous) {
-          stalled = true;
-          break;
-        }
-      }
     }
     phydro->hevi_mode = 0;
     // the last forward was at R + D_prev: its x1 fluxes and the solve's mass
@@ -888,13 +820,6 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
       auto dry = phydro->forcing_dry_increment();
       if (dry.defined()) Ds = Ds + inner(r * dry.unsqueeze(0));
     }
-    auto stats = hevi_solve_stats;
-    stats[0] += 1.;
-    stats[1] += solves;
-    stats[2] = std::max(stats[2].item<double>(), double(solves));
-    if (tol > 0. && metric > 1. && !stalled) stats[3] += 1.;
-    if (stalled) stats[4] += 1.;
-
     hydro_u.copy_(R);
     _hevi_v[j] = D / g;
     hydro_u.add_(D);
@@ -907,9 +832,6 @@ void MeshBlockImpl::advance_hevi_ark2(Variables &vars, double dt, int stage) {
     }
     apply_boundaries(vars, hydro_u, scalar_s);
   };
-
-  if (!hevi_solve_stats.defined())
-    hevi_solve_stats = torch::zeros({5}, torch::kFloat64);
 
   if (stage == 0) {
     if (phydro->pdiffusion && phydro->pdiffusion->options->implicit_radial()) {

@@ -327,24 +327,16 @@ snapy_add_python_test(test_gravity_work_radial_exact_hevi SCRIPT test_gravity_wo
 set_tests_properties(test_implicit_gravity_tall_column_cubed_hevi_python
                      test_gravity_work_radial_exact_hevi_python
                      PROPERTIES ENVIRONMENT "SNAP_TEST_IMPLICIT_INTEGRATOR=hevi-ark2")
-snapy_add_python_test(test_hevi_ark2_options TIMEOUT 60 LABELS "python;implicit")
-snapy_add_python_test(test_hevi_iterations TIMEOUT 300 LABELS "python;hydro;implicit")
-# hevi-ark2, the default of implicit-scheme 9 under rk3: the wind mode at dt0 (and its
-# growth on the rk opt-out), tracers, constant forcing, and the rk path's step-end operators
-snapy_add_python_test(test_hevi_eigenmode TIMEOUT 900 LABELS "python;hydro;implicit")
+# hevi-ark2, the default of implicit-scheme 9 under rk3: options and rk-path parity,
+# tracers and forcing, the wind mode at dt0 (and its growth on the rk opt-out; each
+# entry builds its seed on the rk path first), and the near-floor columns
+snapy_add_python_test(test_hevi_options TIMEOUT 300 LABELS "python;implicit;thermo;solid")
+snapy_add_python_test(test_hevi_conservation TIMEOUT 300
+                      LABELS "python;scalar;forcing;implicit")
+snapy_add_python_test(test_hevi_eigenmode TIMEOUT 1500 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_hevi_eigenmode_rk SCRIPT test_hevi_eigenmode.py
-                      ARGS --integrator rk TIMEOUT 600 LABELS "python;hydro;implicit")
-snapy_add_python_test(test_hevi_scalar_conservation TIMEOUT 300
-                      LABELS "python;scalar;implicit")
-snapy_add_python_test(test_hevi_constant_forcing TIMEOUT 300
-                      LABELS "python;forcing;implicit")
-snapy_add_python_test(test_hevi_rk_parity TIMEOUT 300
-                      LABELS "python;implicit;thermo;solid")
-# the near-floor Limit: the stage iteration does not contract near the density floor
+                      ARGS --integrator rk TIMEOUT 1200 LABELS "python;hydro;implicit")
 snapy_add_python_test(test_hevi_coarse_column TIMEOUT 300
-                      LABELS "python;hydro;implicit;gravity")
-# converged hevi-ark2 follows the operator's own e^{H/2} transient on a short column
-snapy_add_python_test(test_hevi_short_column_transient TIMEOUT 300
                       LABELS "python;hydro;implicit;gravity")
 snapy_add_python_test(test_implicit_options_type TIMEOUT 60 LABELS "python;implicit")
 snapy_add_python_test(test_shear_cfl TIMEOUT 60 LABELS "python;hydro;implicit")

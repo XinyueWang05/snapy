@@ -31,7 +31,6 @@ struct ImplicitOptionsImpl {
        << "* shear_cfl = " << shear_cfl() << "\n"
        << "* integrator = " << integrator() << "\n"
        << "* integrator_iterations = " << integrator_iterations() << "\n"
-       << "* integrator_tolerance = " << integrator_tolerance() << "\n"
        << "* integrator_auto = " << integrator_auto() << "\n";
   }
 
@@ -55,51 +54,21 @@ struct ImplicitOptionsImpl {
   //! with integration/type rk3 runs hevi-ark2 (implicit-integrator: rk opts
   //! out and restores the rk path)
   ADD_ARG(bool, integrator_auto) = false;
-  //! hevi-ark2: relative tolerance of the stage solves; < 0: key absent.
-  //! With a tolerance > 0 the stage iterates until every conserved row's
-  //! correction satisfies max|dD| <= tol max|D| + kHeviAtolEps eps scale
-  //! (scale: the row's max |R|; sqrt(rho E) for the momenta)
-  //! (at least kHeviMinSolves, the measured fixed-solve floor, at most
-  //! hevi_max_solves(); past the minimum it also stops once the correction
-  //! stops contracting); 0 switches the stop off and runs hevi_iterations()
-  //! fixed solves
-  ADD_ARG(double, integrator_tolerance) = -1.;
   //! hevi-ark2: solves per implicit stage. 1: one linearised solve about
   //! the predictor; n > 1: n - 1 further corrections towards the stage's
   //! implicit solution, D <- D + (I + g dt J)^-1 (g dt V(R + D) - D).
-  //! 0 (default): the fixed count is kHeviDefaultIterations. On a rest column
-  //! from the discretely balanced state, 1 solve grows at vertical acoustic
-  //! Courant >= 1.65 and 3 solves at >= 197; 4 stay at round-off up to 250.
-  //! 5: the smallest fixed count that matches converged ARS at dt0 on all 22
-  //! linear-model arms (docs/user_guide/configuration.rst, Limits). The
-  //! iteration does not converge monotonically in the count
+  //! 0 (default): kHeviDefaultIterations. The iteration is a defect
+  //! correction and does not converge monotonically in the count
+  //! (docs/user_guide/configuration.rst, Limits)
+  ADD_ARG(int, integrator_iterations) = 0;
+
  public:
   static constexpr int kHeviDefaultIterations = 5;
-  static constexpr int kHeviMaxIterations = 8;
-  static constexpr int kHeviMinSolves = 4;
-  static constexpr double kHeviAtolEps = 1.e3;
-  //! fixed solves per stage when the tolerance stop is off
+  //! fixed solves per implicit stage
   int hevi_iterations() const {
     return integrator_iterations() > 0 ? integrator_iterations()
                                        : kHeviDefaultIterations;
   }
-  //! the tolerance in use (0: fixed hevi_iterations() solves). The stop is
-  //! on only with implicit-integrator-tolerance > 0: by default the stages
-  //! run the measured kHeviDefaultIterations fixed solves. Fewer than 4 grow
-  //! on a balanced rest column at vertical acoustic Courant >= 65.6 (cubed
-  //! tall column, face-work operator box); 5 and more redo on a 45-level,
-  //! 40-scale-height column at dt 1500 s, as the rk path does (Limits)
-  double hevi_tolerance() const {
-    return integrator_tolerance() >= 0. ? integrator_tolerance() : 0.;
-  }
-  //! solves per stage at most (tolerance stop) or exactly (fixed)
-  int hevi_max_solves() const {
-    if (hevi_tolerance() > 0.)
-      return integrator_iterations() > 0 ? integrator_iterations()
-                                         : kHeviMaxIterations;
-    return hevi_iterations();
-  }
-  ADD_ARG(int, integrator_iterations) = 0;
 };
 using ImplicitOptions = std::shared_ptr<ImplicitOptionsImpl>;
 

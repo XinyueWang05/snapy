@@ -10,10 +10,11 @@ weno5, lmars, rk3, cfl 0.3, implicit-scheme 9, uniform wind u = 400 m/s (Mach 0.
 dt0 = the block's max_time_step (1.313 s here). From noise this box grows on the rk path
 with an e-folding time of about 3 h (rms w 5.8e-7 -> 5.2e-5 from 1 h to 8 h), into a
 wavenumber-1 mode (lambda = 80 km) with w peaked at about 0.85 of the height.
-test_hevi_eigenmode_seed.csv holds that mode: the k = 1 Fourier profile of every primitive
-variable of the rk-path state after 8 h from 1e-6 K noise (seed 20261025), scaled to a
-k = 1 max|w| of 1e-6 m/s. The test adds it to the balanced column, runs HOURS at dt0
-and measures the wavenumber-1 amplitude of w (max over z) at the start and the end.
+The seed is that mode, built here: the rk path runs SEED_HOURS at dt0 from 1e-6 K
+temperature noise (torch generator seed 20261025), and the k = 1 Fourier profile of every
+primitive variable, scaled to a k = 1 max|w| of 1e-6 m/s, is the seed. The test adds it to
+the balanced column, runs HOURS at dt0 and measures the wavenumber-1 amplitude of w (max
+over z) at the start and the end.
 (An analytic w-only seed of the same shape decays on the rk path: it projects mostly
 onto damped modes.)
 
@@ -38,6 +39,7 @@ import yaml
 G, T0, ZT, PS = 8.87, 100.0, 450.0e3, 1.0e6
 NX1, NX2, DX, U = 100, 16, 5.0e3, 400.0
 DECAY, GROW = 1.0, 2.0
+SEED_HOURS, SEED_NOISE, SEED_RNG = 8.0, 1.0e-6, 20261025
 
 
 def config(integrator):
@@ -71,21 +73,15 @@ def k1_amplitude(w, ng):
     return (2.0 / NX2 * torch.fft.rfft(ww, dim=0)[1].abs()).max().item()
 
 
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--integrator", default=None, help="implicit-integrator key (default: none)")
-    p.add_argument("--hours", type=float, default=3.0)
-    a = p.parse_args()
-
+def balanced_box(integrator):
+    """the block and its balanced column with the uniform wind (primitives, ghosts filled)"""
     import snapy
     from snapy import MeshBlock, MeshBlockOptions, kIDN, kIPR, kIV1
 
-    torch.set_default_dtype(torch.float64)
-    torch.set_num_threads(1)
     with tempfile.TemporaryDirectory() as tmp:
         f = os.path.join(tmp, "deck.yaml")
         with open(f, "w") as fh:
-            yaml.safe_dump(config(a.integrator), fh)
+            yaml.safe_dump(config(integrator), fh)
         b = MeshBlock(MeshBlockOptions.from_yaml(f))
     b.to(torch.device("cpu"), torch.float64)
     eos = b.module("hydro.eos")
@@ -105,14 +101,41 @@ def main():
     w[..., il:iu] = wb
     w[..., :il], w[..., iu:] = wb[..., :1], wb[..., -1:]
     w[kIV1 + 1] = U
-    seed = torch.zeros(5, NX1, dtype=torch.complex128)
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "test_hevi_eigenmode_seed.csv")) as fh:
-        for line in fh:
-            if line.startswith("#") or line.startswith("var"):
-                continue
-            var, lev, re, im = line.split(",")
-            seed[int(var), int(lev)] = complex(float(re), float(im))
+    return b, w
+
+
+def build_seed():
+    """k = 1 profile of the rk-path state after SEED_HOURS from noise, max k = 1 |w| 1e-6"""
+    from snapy import kIDN, kIV1
+
+    b, w = balanced_box("rk")
+    ng, il, iu = 3, 3, 3 + NX1
+    gen = torch.Generator().manual_seed(SEED_RNG)
+    dT = SEED_NOISE * torch.randn((1, NX2, NX1), generator=gen, dtype=torch.float64)
+    w[kIDN, :, ng:ng + NX2, il:iu] *= T0 / (T0 + dT)
+    v, _ = b.initialize({"hydro_w": w})
+    dt0 = b.max_time_step(v)
+    for _ in range(round(SEED_HOURS * 3600.0 / dt0)):
+        for s in range(len(b.module("intg").stages)):
+            b.forward(v, dt0, s)
+        b.check_redo(v)
+    k1 = torch.fft.rfft(v["hydro_w"][:, 0, ng:ng + NX2, il:iu], dim=1)[:, 1, :]  # (var, x1)
+    return k1 * (1.0e-6 / ((2.0 / NX2) * k1[kIV1].abs().max()))
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--integrator", default=None, help="implicit-integrator key (default: none)")
+    p.add_argument("--hours", type=float, default=3.0)
+    a = p.parse_args()
+
+    from snapy import kIV1
+
+    torch.set_default_dtype(torch.float64)
+    torch.set_num_threads(1)
+    seed = build_seed()
+    b, w = balanced_box(a.integrator)
+    ng, il, iu = 3, 3, 3 + NX1
     phase = torch.exp(2j * math.pi * torch.arange(NX2, dtype=torch.float64) / NX2)
     dq = (2.0 / NX2) * (seed.unsqueeze(1) * phase.view(1, -1, 1)).real  # (var, x2, x1)
     w[:, 0, ng:ng + NX2, il:iu] += dq
@@ -132,12 +155,11 @@ def main():
     finite = finite and bool(torch.isfinite(v["hydro_u"]).all())
     a_end = k1_amplitude(v["hydro_w"][kIV1], ng) if finite else float("inf")
     ratio = a_end / a_start
-    stats = b.hevi_solve_stats().tolist() if hasattr(b, "hevi_solve_stats") else None
-    hevi = bool(stats and stats[0] > 0)
+    name = b.options.hydro().icorr().integrator()
+    hevi = name == "hevi-ark2"
     print("integrator key %s -> %s: dt0 %.4f s, %d steps (%.2f h), k=1 |w| %.3e -> %.3e "
-          "(ratio %.3f), wall %.0f s, solve stats %s"
-          % (a.integrator, "hevi-ark2" if hevi else "rk", dt0, nstep, nstep * dt0 / 3600.0,
-             a_start, a_end, ratio, time.time() - w0, stats))
+          "(ratio %.3f), wall %.0f s" % (a.integrator, name, dt0, nstep, nstep * dt0 / 3600.0,
+                                        a_start, a_end, ratio, time.time() - w0))
     if a.integrator == "rk":
         ok = finite and ratio >= GROW
         print("PASSED (rk path grows)" if ok else "FAILED: rk path did not grow (ratio %.3f)" % ratio)
