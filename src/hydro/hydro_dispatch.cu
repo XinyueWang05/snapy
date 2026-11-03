@@ -13,7 +13,7 @@ template <typename T>
 __global__ void
 hydro_ref_x1_cuda_kernel(T const *w, T const *dx1f, T const *anchor,
                          T *psf_lo, T *psf_hi, T *pref, T *dsf, T *dref,
-                         int ncolumns, int nc1, int iu, T grav, bool uniform,
+                         int ncolumns, int nc1, int iu, T grav, int x1_grid,
                          bool phys_in, bool phys_out, bool wall_clamp) {
   int column = blockIdx.x;
 
@@ -25,7 +25,7 @@ hydro_ref_x1_cuda_kernel(T const *w, T const *dx1f, T const *anchor,
 
   for (int i = threadIdx.x; i < nc1; i += blockDim.x) {
     hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column, i,
-                           ncolumns, nc1, iu, grav, uniform, phys_in, phys_out,
+                           ncolumns, nc1, iu, grav, x1_grid, phys_in, phys_out,
                            wall_clamp);
   }
 }
@@ -36,7 +36,7 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
                        torch::Tensor const &psf_hi,
                        torch::Tensor const &pref, torch::Tensor const &dsf,
                        torch::Tensor const &dref, int iu, double grav,
-                       bool uniform, bool phys_in, bool phys_out, bool wall_clamp) {
+                       int x1_grid, bool phys_in, bool phys_out, bool wall_clamp) {
   at::cuda::CUDAGuard device_guard(w.device());
   int ncolumns = w.size(1) * w.size(2);
   int nc1 = w.size(3);
@@ -50,7 +50,7 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
         w.data_ptr<scalar_t>(), dx1f.data_ptr<scalar_t>(), anchor_ptr,
         psf_lo.data_ptr<scalar_t>(), psf_hi.data_ptr<scalar_t>(),
         pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),
-        dref.data_ptr<scalar_t>(), ncolumns, nc1, iu, scalar_t(grav), uniform,
+        dref.data_ptr<scalar_t>(), ncolumns, nc1, iu, scalar_t(grav), x1_grid,
         phys_in, phys_out, wall_clamp);
   });
   C10_CUDA_KERNEL_LAUNCH_CHECK();
