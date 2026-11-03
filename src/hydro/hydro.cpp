@@ -601,9 +601,17 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w) const {
   bool phys_out = pmb->options->is_physical_boundary(0, 0, 1);
 
   auto dx1f = pcoord->dx1f.contiguous();
+  // #280 (iv): the stretched cell-pressure rows, built once from this block's
+  // widths
+  if (stretched && !x1_rows_.defined()) {
+    x1_rows_ = hydro_ref_x1_stretched_rows(pcoord->dx1f, iu, phys_in, phys_out,
+                                           options->wb_wall_clamp());
+  }
+  torch::Tensor rows;
+  if (stretched) rows = x1_rows_.to(w.options()).contiguous();
   at::native::call_hydro_ref_x1(
       w.device().type(), w, dx1f, anchor, psf_lo, psf_hi, pref, dsf, dref, iu,
-      g, x1_grid, phys_in, phys_out, options->wb_wall_clamp());
+      g, x1_grid, phys_in, phys_out, options->wb_wall_clamp(), rows);
 
   // #289 (SNAP_WB_REF4): the cell part of the fourth-order density reference
   // (and on non-uniform x1 the cell pressure), before the seam exchange below

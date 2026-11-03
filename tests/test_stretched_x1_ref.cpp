@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <vector>
 
 // POSIX
 #include <unistd.h>
@@ -245,7 +246,8 @@ std::pair<torch::Tensor, torch::Tensor> column(int n, double q,
 
 }  // namespace
 
-// RED/GREEN for the log1p log-mean (#280). A stretched isothermal column
+// RED/GREEN for the keyed cell pressure (#280; the log1p log-mean, now the
+// six-face average (iv)). A stretched isothermal column
 // (nx1 = 128, cells 1.02x apart over 300 km, 107 km scale height, so dp/p is
 // 4.8e-3 to 6.0e-2 per cell) is balanced by the log-mean dp / ln(lo / hi)
 // only to its round-off floor eps (p / dp)^2, so at rtol 1e-13 the
@@ -289,24 +291,127 @@ TEST(StretchedX1Ref, balance_column_refuses_wb_ref4) {
                                  /*stretched=*/false));
 }
 
-// the same column without the key takes the plain log-mean: the two cell
-// pressures differ only by the round-off log1p removes
-TEST(StretchedX1Ref, keyed_and_unkeyed_log_means_agree_to_round_off) {
-  auto [w, dx1f] = column(32, 1.058, 3.e5);
-  auto sizes = w.sizes().slice(1).vec();
-  auto run = [&](int x1_grid) {
-    auto lo = torch::empty(sizes, w.options()), hi = torch::empty_like(lo);
-    auto pref = torch::empty_like(lo), dsf = torch::empty_like(lo),
-         dref = torch::empty_like(lo);
-    at::native::call_hydro_ref_x1(torch::kCPU, w, dx1f, torch::Tensor(), lo,
-                                  hi, pref, dsf, dref, 31, 22., x1_grid, true,
-                                  true, true);
-    return pref;
-  };
-  auto keyed = run(kX1RefStretched), plain = run(kX1RefNonUniform);
-  double rel = ((keyed - plain).abs() / plain).max().item<double>();
-  std::printf("keyed vs plain log-mean, max relative difference %.3e\n", rel);
-  EXPECT_LT(rel, 1.e-12);
+namespace {
+
+// the dry adiabat of the jupiter_gcm deck: g = 22, R = 3936.0434, cp = 3.5 R,
+// 600 K and 1e7 Pa at z = 0
+constexpr double kG = 22., kR = 3936.0434, kTs = 600., kPs = 1.e7;
+double adiabat_p(double z) {
+  return kPs * std::pow(1. - kG / (3.5 * kR) * z / kTs, 3.5);
+}
+double adiabat_rho(double z) {
+  return adiabat_p(z) / (kR * (kTs - kG / (3.5 * kR) * z));
+}
+
+//! the cell average of f over [a, b], 8-point Gauss-Legendre
+template <typename F>
+double cell_average(F f, double a, double b) {
+  static double const x[4] = {0.1834346424956498, 0.5255324099163290,
+                              0.7966664774136267, 0.9602898564975363};
+  static double const g[4] = {0.3626837833783620, 0.3137066458778873,
+                              0.2223810344533745, 0.1012285362903763};
+  double c = 0.5 * (a + b), h = 0.5 * (b - a), sum = 0.;
+  for (int k = 0; k < 4; ++k) sum += g[k] * (f(c - h * x[k]) + f(c + h * x[k]));
+  return 0.5 * sum;
+}
+
+//! |pref - pbar| / pbar per cell of the adiabat on the faces `f`, the scan
+//! anchored at the exact top face pressure so only the cell formula is seen
+std::vector<double> pref_error(std::vector<double> const& f, bool stretched,
+                               bool phys) {
+  int n = static_cast<int>(f.size()) - 1;
+  auto opt = torch::TensorOptions().dtype(torch::kFloat64);
+  auto w = torch::zeros({IPR + 1, 1, 1, n}, opt);
+  auto dx1f = torch::empty({n}, opt);
+  for (int i = 0; i < n; ++i) {
+    w[IDN][0][0][i] = cell_average(adiabat_rho, f[i], f[i + 1]);
+    w[IPR][0][0][i] = cell_average(adiabat_p, f[i], f[i + 1]);
+    dx1f[i] = f[i + 1] - f[i];
+  }
+  auto anchor = torch::full({1, 1, 1}, adiabat_p(f[n]), opt);
+  auto lo = torch::empty({1, 1, n}, opt), hi = torch::empty_like(lo);
+  auto pref = torch::empty_like(lo), dsf = torch::empty_like(lo),
+       dref = torch::empty_like(lo);
+  auto rows = stretched ? hydro_ref_x1_stretched_rows(dx1f, n - 1, phys, phys,
+                                                      true)
+                        : torch::Tensor();
+  at::native::call_hydro_ref_x1(
+      torch::kCPU, w, dx1f, anchor, lo, hi, pref, dsf, dref, n - 1, kG,
+      stretched ? kX1RefStretched : kX1RefUniform, phys, phys, true, rows);
+  std::vector<double> e(n);
+  for (int i = 0; i < n; ++i) {
+    double pbar = w[IPR][0][0][i].item<double>();
+    e[i] = std::abs(pref[0][0][i].item<double>() - pbar) / pbar;
+  }
+  return e;
+}
+
+std::vector<double> uniform_faces(double x0, double h, int n) {
+  std::vector<double> f(n + 1);
+  for (int k = 0; k <= n; ++k) f[k] = x0 + k * h;
+  return f;
+}
+
+}  // namespace
+
+// #280 (iv): on a stretched adiabat (32 cells over 300 km, each 1/1.058 of
+// the one below) every cell's reference pressure is within 2x of what the
+// uniform branch makes of a cell of the same width in the same place: the
+// same wall row on a uniform column from the same wall, or an interior cell
+// on a uniform patch around it (floor 1e-14)
+TEST(StretchedX1Ref, iv_adiabat_cells_within_2x_uniform) {
+  int n = 32;
+  double q = 1. / 1.058, L = 3.e5;
+  std::vector<double> f(n + 1);
+  for (int k = 0; k <= n; ++k)
+    f[k] = L * std::expm1(k * std::log(q)) / std::expm1(n * std::log(q));
+  f[n] = L;
+  auto es = pref_error(f, true, true);
+  double worst = 0.;
+  for (int i = 0; i < n; ++i) {
+    double h = f[i + 1] - f[i], eu;
+    if (i < 2) {  // bottom wall rows
+      eu = pref_error(uniform_faces(0., h, 8), false, true)[i];
+    } else if (i >= n - 2) {  // top wall rows
+      eu = pref_error(uniform_faces(L - 8 * h, h, 8), false, true)[8 - n + i];
+    } else {  // interior: the six-face row of a uniform patch
+      eu = pref_error(uniform_faces(f[i] - 4 * h, h, 9), false, false)[4];
+    }
+    double ratio = es[i] / std::max(eu, 1.e-14);
+    worst = std::max(worst, ratio);
+    std::printf("cell %2d h %8.1f stretched %.3e uniform %.3e ratio %.3f\n", i,
+                h, es[i], eu, ratio);
+    EXPECT_LE(ratio, 2.) << "cell " << i;
+  }
+  std::printf("worst ratio %.3f\n", worst);
+}
+
+// (iv) on a uniform face list is the uniform branch: its rows are w6 inside
+// and w6e at the walls (reversed at the top)
+TEST(StretchedX1Ref, iv_rows_on_uniform_faces_are_the_uniform_weights) {
+  int n = 12;
+  auto rows = hydro_ref_x1_stretched_rows(
+      torch::full({n}, 2.5e3, torch::kFloat64), n - 1, true, true, true);
+  double const w6[6] = {11. / 1440., -31. / 480., 401. / 720.,
+                        401. / 720., -31. / 480., 11. / 1440.};
+  double const w6e[2][6] = {
+      {95. / 288., 1427. / 1440., -133. / 240., 241. / 720., -173. / 1440.,
+       3. / 160.},
+      {-3. / 160., 637. / 1440., 511. / 720., -43. / 240., 77. / 1440.,
+       -11. / 1440.}};
+  double dw = 0.;
+  for (int i = 0; i < n; ++i) {
+    int start = i < 2 ? 0 : (i >= n - 2 ? n - 5 : i - 2);
+    EXPECT_EQ(rows[i][0].item<double>(), start) << "cell " << i;
+    for (int m = 0; m < 6; ++m) {
+      double expect = i < 2        ? w6e[i][m]
+                      : i >= n - 2 ? w6e[n - 1 - i][5 - m]
+                                   : w6[m];
+      dw = std::max(dw, std::abs(rows[i][1 + m].item<double>() - expect));
+    }
+  }
+  std::printf("max |dw| against the uniform weights: %.3e\n", dw);
+  EXPECT_EQ(dw, 0.);
 }
 
 int main(int argc, char** argv) {
