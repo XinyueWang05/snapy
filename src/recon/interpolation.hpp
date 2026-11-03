@@ -57,6 +57,21 @@ class InterpImpl {
 
   virtual int stencils() const { return 1; }
 
+  //! Install route A per-face x1 coefficients (snapy#280 stage 1).
+  /*!
+   * \param[in] x1f  this block's face vector, nc1 + 1 entries.  Row m of the
+   *                 tables belongs to output element m, i.e. to the 5-cell
+   *                 window x1f[m .. m+5]; see src/recon/x1_coeffs.hpp.
+   *
+   * The default is a no-op, so every interpolator that route A does not cover
+   * (dc, plm, ppm, cp3, weno3 -- note Sec. 4.7) keeps today's behaviour and a
+   * caller does not have to know which one it holds.
+   */
+  virtual void set_x1_coeffs(torch::Tensor const& /*x1f*/) {}
+
+  //! True once per-face coefficients are installed.
+  virtual bool has_x1_coeffs() const { return false; }
+
   virtual std::pair<torch::Tensor, torch::Tensor> forward(
       torch::Tensor w, int dim,
       torch::optional<torch::Tensor> wl = torch::nullopt,
@@ -203,6 +218,13 @@ class Center5InterpImpl : public torch::nn::Cloneable<Center5InterpImpl>,
   //! data
   torch::Tensor cm, cp;
 
+  //! route A per-face rows, (nout, 5) each; empty until set_x1_coeffs
+  torch::Tensor cm_x1, cp_x1;
+
+  //! dtype/device casts of the two tables; NOT registered buffers, so a
+  //! `clone()` starts empty and rebuilds them on demand (x1_coeffs.hpp)
+  torch::Tensor cm_x1_cast, cp_x1_cast;
+
   //! Constructor to initialize the layer
   Center5InterpImpl() {
     options->type("cp5");
@@ -218,6 +240,13 @@ class Center5InterpImpl : public torch::nn::Cloneable<Center5InterpImpl>,
 
   int stencils() const override { return 5; }
 
+  void set_x1_coeffs(torch::Tensor const& x1f) override;
+  bool has_x1_coeffs() const override { return cm_x1.numel() > 0; }
+
+  //! route A per-face path; `src` is cm_x1 or cp_x1 (snapy#280 Sec. 4.3)
+  void forward_nu(torch::Tensor const& w, int dim, torch::Tensor const& out,
+                  torch::Tensor const& src, torch::Tensor& cache);
+
   void left(torch::Tensor w, int dim, torch::Tensor const& out) override;
   void right(torch::Tensor w, int dim, torch::Tensor const& out) override;
 };
@@ -228,6 +257,13 @@ class Weno5InterpImpl : public torch::nn::Cloneable<Weno5InterpImpl>,
  public:
   //! data
   torch::Tensor cm, cp;
+
+  //! route A per-face rows, (nout, 48) each; empty until set_x1_coeffs
+  torch::Tensor cm_x1, cp_x1;
+
+  //! dtype/device casts of the two tables; NOT registered buffers, so a
+  //! `clone()` starts empty and rebuilds them on demand (x1_coeffs.hpp)
+  torch::Tensor cm_x1_cast, cp_x1_cast;
 
   //! Constructor to initialize the layer
   Weno5InterpImpl() {
@@ -243,6 +279,13 @@ class Weno5InterpImpl : public torch::nn::Cloneable<Weno5InterpImpl>,
   using InterpImpl::forward;
 
   int stencils() const override { return 5; }
+
+  void set_x1_coeffs(torch::Tensor const& x1f) override;
+  bool has_x1_coeffs() const override { return cm_x1.numel() > 0; }
+
+  //! route A per-face path; `src` is cm_x1 or cp_x1 (snapy#280 Sec. 4.3)
+  void forward_nu(torch::Tensor const& w, int dim, torch::Tensor const& out,
+                  torch::Tensor const& src, torch::Tensor& cache);
 
   void left(torch::Tensor w, int dim, torch::Tensor const& out) override;
   void right(torch::Tensor w, int dim, torch::Tensor const& out) override;
