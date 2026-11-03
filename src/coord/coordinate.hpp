@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <iosfwd>
+#include <vector>
 
 // torch
 #include <torch/nn/cloneable.h>
@@ -54,6 +55,8 @@ struct CoordinateOptionsImpl {
        << "* nx2 = " << nx2() << "\n"
        << "* nx3 = " << nx3() << "\n"
        << "* nghost = " << nghost() << "\n";
+    if (stretched_x1())
+      os << "* x1f = " << x1f_interior().size() << " stretched faces\n";
   }
 
   int nc1() const { return nx1() > 1 ? nx1() + 2 * nghost() : 1; }
@@ -89,8 +92,25 @@ struct CoordinateOptionsImpl {
     return (global_x3max() - global_x3min()) / global_nx3();
   }
 
+  //! true when the deck set `cells/x1rat` or `geometry/x1f` (#280)
+  bool stretched_x1() const { return !x1f_interior().empty(); }
+
+  //! The global x1 face vector, ghosts included (#280).
+  /*!
+   * Faces g = -ng .. gnx + ng at index g + ng, with ng = nghost() + extra:
+   * gnx + 2 ng + 1 values. Uniform: today's `linspace`. Stretched: the
+   * interior faces of `x1f_interior` and, at both ends, ghosts that mirror
+   * the interior widths (ghost rule (c)): x_{-m} = 2 x_0 - x_m and
+   * x_{n+m} = 2 x_n - x_{n-m}. Every block slices its `x1f` from it, and the
+   * x1 metrics derive from it; nothing else rebuilds the x1 grid.
+   */
+  torch::Tensor global_x1f(int extra = 0) const;
+
   //! Index of this block's FIRST INTERIOR CELL in the global grid.
-  int ix1() const { return _offset(x1min() - global_x1min(), dx1()); }
+  int ix1() const {
+    return stretched_x1() ? _face_index(x1min())
+                          : _offset(x1min() - global_x1min(), dx1());
+  }
   int ix2() const { return _offset(x2min() - global_x2min(), dx2()); }
   int ix3() const { return _offset(x3min() - global_x3min(), dx3()); }
 
@@ -116,6 +136,10 @@ struct CoordinateOptionsImpl {
   ADD_ARG(int, nghost) = 1;
   ADD_ARG(int, interp_order) = 2;
 
+  //! global interior x1 faces, x1min .. x1max (nx1 + 1 values); empty means
+  //! uniform. Set from `geometry/x1f` or built from `cells/x1rat`.
+  ADD_ARG(std::vector<double>, x1f_interior) = {};
+
  private:
   //! Fill one axis' sentinel from this block, or check this block against it.
   static void _resolve_axis(char const* ax, double lo, double hi, int nx,
@@ -126,6 +150,12 @@ struct CoordinateOptionsImpl {
   static int _offset(double span, double dx) {
     return dx == 0. ? 0 : static_cast<int>(std::lround(span / dx));
   }
+
+  //! index of the interior face nearest to x on a stretched x1 grid
+  int _face_index(double x) const;
+
+  //! `_resolve_axis` for a stretched x1: block bounds must be faces
+  void _resolve_x1_faces();
 };
 using CoordinateOptions = std::shared_ptr<CoordinateOptionsImpl>;
 

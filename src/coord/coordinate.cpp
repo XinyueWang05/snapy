@@ -67,7 +67,7 @@ CoordinateOptions CoordinateOptionsImpl::from_yaml(
   auto node = config["geometry"];
   if (!node) return op;  // return default options
 
-  check_keys(node, "geometry", {"type", "bounds", "cells"});
+  check_keys(node, "geometry", {"type", "bounds", "cells", "x1f"});
   op->type(node["type"].as<std::string>("cartesian"));
 
   double x1min = 0, x2min = 0, x3min = 0, x1max = 1, x2max = 1, x3max = 1;
@@ -116,6 +116,7 @@ CoordinateOptions CoordinateOptionsImpl::from_yaml(
   // it. The block must be given those bounds too, or ixN() offsets it out of
   // its own one-cell face array.
   if (!node["cells"]) {
+    TORCH_CHECK(!node["x1f"], "geometry/x1f needs geometry/cells/nx1");
     op->x1min() = x1min, op->x1max() = x1max, op->global_nx1() = 1;
     op->x2min() = x2min, op->x2max() = x2max, op->global_nx2() = 1;
     op->x3min() = x3min, op->x3max() = x3max, op->global_nx3() = 1;
@@ -123,10 +124,51 @@ CoordinateOptions CoordinateOptionsImpl::from_yaml(
   }
 
   check_keys(node["cells"], "geometry/cells",
-             {"nx1", "nx2", "nx3", "nghost", "interp_order"});
+             {"nx1", "nx2", "nx3", "nghost", "interp_order", "x1rat"});
   op->global_nx1() = node["cells"]["nx1"].as<int>(1);
   op->global_nx2() = node["cells"]["nx2"].as<int>(1);
   op->global_nx3() = node["cells"]["nx3"].as<int>(1);
+
+  // #280: a stretched x1, as a ratio or as an explicit list of interior faces
+  auto x1rat = node["cells"]["x1rat"];
+  auto x1f = node["x1f"];
+  TORCH_CHECK(!(x1rat && x1f),
+              "geometry: give cells/x1rat or x1f, not both (#280)");
+  int gnx1 = op->global_nx1();
+  std::vector<double> faces;
+  if (x1f) {
+    faces = x1f.as<std::vector<double>>();
+    TORCH_CHECK(static_cast<int>(faces.size()) == gnx1 + 1, "geometry/x1f has ",
+                faces.size(), " faces; cells/nx1 = ", gnx1, " needs ",
+                gnx1 + 1);
+    auto bounds = node["bounds"];
+    TORCH_CHECK(!(bounds && bounds["x1min"]) || faces.front() == x1min,
+                "geometry/x1f starts at ", faces.front(),
+                " but bounds/x1min = ", x1min);
+    TORCH_CHECK(!(bounds && bounds["x1max"]) || faces.back() == x1max,
+                "geometry/x1f ends at ", faces.back(),
+                " but bounds/x1max = ", x1max);
+  } else if (x1rat) {
+    // q = h_{k+1}/h_k, the ratio along +x1:
+    // x_k = x1min + L (q^k - 1)/(q^n - 1), with x_n pinned to x1max
+    double q = x1rat.as<double>();
+    TORCH_CHECK(q > 0., "geometry/cells/x1rat must be > 0, got ", q);
+    if (q != 1.) {  // q = 1 is the uniform grid: keep today's path
+      double lq = std::log(q), den = std::expm1(gnx1 * lq);
+      for (int k = 0; k < gnx1; ++k)
+        faces.push_back(x1min + (x1max - x1min) * std::expm1(k * lq) / den);
+      faces.push_back(x1max);
+    }
+  }
+  if (!faces.empty()) {
+    for (size_t k = 1; k < faces.size(); ++k)
+      TORCH_CHECK(faces[k] > faces[k - 1],
+                  "stretched x1 faces must increase strictly; face ", k, " = ",
+                  faces[k], " <= ", faces[k - 1]);
+    op->x1f_interior(faces);
+    op->global_x1min() = faces.front();
+    op->global_x1max() = faces.back();
+  }
 
   auto layout = LayoutOptionsImpl::from_yaml(filename);
   auto playout =
@@ -164,6 +206,14 @@ CoordinateOptions CoordinateOptionsImpl::from_yaml(
   op->nghost() = node["cells"]["nghost"].as<int>(1);
   op->interp_order() = node["cells"]["interp_order"].as<int>(2);
   op->repartition(layout);
+
+  // ghost rule (c) mirrors nghost + 1 interior widths per end (the extra one
+  // defines dx1v[0]); a block of one cell has no x1 faces to stretch
+  TORCH_CHECK(
+      !op->stretched_x1() || (gnx1 >= op->nghost() + 1 && op->nx1() > 1),
+      "a stretched x1 needs nx1 >= nghost + 1 and more than one x1 ",
+      "cell per block; got nx1 = ", gnx1, ", nghost = ", op->nghost(),
+      ", block nx1 = ", op->nx1());
 
   // the per-block cell counts are known only after the repartition; an axis
   // is collapsed by its total count, not by one block's share of it
@@ -224,9 +274,37 @@ void CoordinateOptionsImpl::_resolve_axis(char const* ax, double lo, double hi,
               "] (n = ", gnx, ")");
 }
 
+int CoordinateOptionsImpl::_face_index(double x) const {
+  auto const& f = x1f_interior();
+  auto it = std::lower_bound(f.begin(), f.end(), x);
+  if (it == f.end()) return static_cast<int>(f.size()) - 1;
+  if (it != f.begin() && x - *(it - 1) < *it - x) --it;
+  return static_cast<int>(it - f.begin());
+}
+
+void CoordinateOptionsImpl::_resolve_x1_faces() {
+  auto const& f = x1f_interior();
+  int n = static_cast<int>(f.size()) - 1;
+  TORCH_CHECK(global_nx1() == 0 || global_nx1() == n,
+              "[CoordinateOptions] global_nx1 = ", global_nx1(), " but ",
+              "x1f_interior has ", n + 1, " faces");
+  global_nx1() = n, global_x1min() = f.front(), global_x1max() = f.back();
+
+  // a stretched block is a run of whole cells: its bounds are faces
+  int i0 = _face_index(x1min()), i1 = _face_index(x1max());
+  TORCH_CHECK(f[i0] == x1min() && f[i1] == x1max() && i1 - i0 == nx1(),
+              "[CoordinateOptions] block x1 = [", x1min(), ", ", x1max(),
+              "] with nx1 = ", nx1(), " is not exactly ", nx1(),
+              " cells of the stretched global x1 grid");
+}
+
 void CoordinateOptionsImpl::resolve_global_grid() {
-  _resolve_axis("x1", x1min(), x1max(), nx1(), global_x1min(), global_x1max(),
-                global_nx1());
+  if (stretched_x1()) {
+    _resolve_x1_faces();
+  } else {
+    _resolve_axis("x1", x1min(), x1max(), nx1(), global_x1min(), global_x1max(),
+                  global_nx1());
+  }
   _resolve_axis("x2", x2min(), x2max(), nx2(), global_x2min(), global_x2max(),
                 global_nx2());
   _resolve_axis("x3", x3min(), x3max(), nx3(), global_x3min(), global_x3max(),
@@ -267,8 +345,14 @@ void CoordinateOptionsImpl::repartition(LayoutOptions const& layout) {
   int nb2 = layout->px();
   int nb3 = layout->py();
 
-  x1min(global_x1min() + lx1 * (global_x1max() - global_x1min()) / nb1);
-  x1max(x1min() + (global_x1max() - global_x1min()) / nb1);
+  if (stretched_x1()) {  // equal cell counts, bounds read off the faces
+    int n = global_nx1() / nb1;
+    x1min(x1f_interior()[lx1 * n]);
+    x1max(x1f_interior()[(lx1 + 1) * n]);
+  } else {
+    x1min(global_x1min() + lx1 * (global_x1max() - global_x1min()) / nb1);
+    x1max(x1min() + (global_x1max() - global_x1min()) / nb1);
+  }
 
   x2min(global_x2min() + lx2 * (global_x2max() - global_x2min()) / nb2);
   x2max(x2min() + (global_x2max() - global_x2min()) / nb2);
@@ -297,12 +381,38 @@ CoordinateImpl::CoordinateImpl(const CoordinateOptions& options_,
   // exactly 1 ULP. Every metric term is a function of these coordinates, and
   // the geometric source coefficients amplify that ULP by ~7 orders. Sliced
   // from a global array, a face has one value whoever owns it.
-  x1f = block_faces_(op->global_x1min(), op->global_x1max(), op->global_nx1(),
-                     op->nx1(), op->ix1(), op->nghost());
+  if (op->stretched_x1()) {
+    x1f = op->global_x1f()
+              .narrow(0, op->ix1(), op->nx1() + 2 * op->nghost() + 1)
+              .clone();
+  } else {
+    x1f = block_faces_(op->global_x1min(), op->global_x1max(), op->global_nx1(),
+                       op->nx1(), op->ix1(), op->nghost());
+  }
   x2f = block_faces_(op->global_x2min(), op->global_x2max(), op->global_nx2(),
                      op->nx2(), op->ix2(), op->nghost());
   x3f = block_faces_(op->global_x3min(), op->global_x3max(), op->global_nx3(),
                      op->nx3(), op->ix3(), op->nghost());
+}
+
+torch::Tensor CoordinateOptionsImpl::global_x1f(int extra) const {
+  int gnx = global_nx1(), ng = nghost() + extra;
+  TORCH_CHECK(gnx > 0, "global_x1f() before resolve_global_grid()");
+  if (!stretched_x1()) {  // today's faces, as block_faces_ builds them
+    double gmin = global_x1min(), gmax = global_x1max();
+    auto dx = (gmax - gmin) / gnx;
+    return torch::linspace(gmin - ng * dx, gmax + ng * dx, gnx + 2 * ng + 1,
+                           torch::kFloat64);
+  }
+
+  // ghost rule (c): mirror the faces about each wall, so the ghost widths
+  // mirror the interior widths and an index mirror is a geometric one
+  TORCH_CHECK(gnx >= ng, "ghost rule (c) mirrors ", ng, " widths per end, ",
+              "but x1 has only ", gnx, " cells");
+  auto f = torch::tensor(x1f_interior(), torch::kFloat64);
+  auto lo = 2. * f[0] - f.slice(0, 1, ng + 1).flip(0);
+  auto hi = 2. * f[gnx] - f.slice(0, gnx - ng, gnx).flip(0);
+  return torch::cat({lo, f, hi});
 }
 
 torch::Tensor CoordinateImpl::block_faces_(double gmin, double gmax, int gnx,
