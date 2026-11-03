@@ -186,7 +186,8 @@ TEST(StretchedX1Ref, refuses_gnomonic_equiangle) {
 // test_stretched_x1_ref_x1_centroid with SNAP_X1_CENTROID_EXACT=1
 TEST(StretchedX1Ref, refuses_wb_ref4_switch) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
-  refuses("is not supported on a stretched x1 (geometry/x1f or cells/x1rat");
+  refuses("SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies it) is not "
+          "supported on a stretched x1 (geometry/x1f or cells/x1rat, #280)");
 }
 
 namespace {
@@ -201,7 +202,7 @@ std::pair<torch::Tensor, torch::Tensor> column(int n, double q,
   auto dx1f = faces.slice(0, 1) - faces.slice(0, 0, n);
   auto zc = 0.5 * (faces.slice(0, 1) + faces.slice(0, 0, n));
   auto w = torch::zeros({IPR + 1, 1, 1, n}, opt);
-  double H = 2.e4, g = 22.;
+  double H = 1.07e5, g = 22.;
   w[IDN][0][0].copy_(1.e7 / (g * H) * torch::exp(-zc / H));
   w[IPR][0][0].copy_(1.e7 * torch::exp(-zc / H));
   return {w, dx1f};
@@ -209,18 +210,23 @@ std::pair<torch::Tensor, torch::Tensor> column(int n, double q,
 
 }  // namespace
 
-// RED/GREEN for the log1p log-mean (#280). A fine stretched column (nx1 =
-// 128, cells 1.058x apart, 3e5 m over a 2e4 m scale height) is balanced by
-// the log-mean dp / ln(lo / hi) only to its round-off floor eps (p / dp)^2,
-// about 1e-10 here, so at rtol 1e-13 the projection throws; dp / log1p(dp /
-// hi) floors at eps p / dp and converges.
+// RED/GREEN for the log1p log-mean (#280). A stretched isothermal column
+// (nx1 = 128, cells 1.02x apart over 300 km, 107 km scale height, so dp/p is
+// 4.8e-3 to 6.0e-2 per cell) is balanced by the log-mean dp / ln(lo / hi)
+// only to its round-off floor eps (p / dp)^2, so at rtol 1e-13 the
+// projection throws (5.4e-12 measured); dp / log1p(dp / hi) floors at
+// eps p / dp and converges (4.3e-14). The unkeyed call is today's arithmetic,
+// which a keyed grid used before this change.
 TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
-  auto [w, dx1f] = column(128, 1.058, 3.e5);
+  auto [w, dx1f] = column(128, 1.02, 3.e5);
   auto [wb, err, sweeps] =
       balance_column(w, dx1f, 22., /*wall_clamp=*/true, /*rtol=*/1.e-13,
                      /*max_iter=*/400, "cartesian", /*stretched=*/true);
   std::printf("keyed nx1 = 128: residual %.3e after %d sweeps\n", err, sweeps);
   EXPECT_LT(err, 1.e-13);
+  EXPECT_THROW(balance_column(w, dx1f, 22., true, 1.e-13, 400, "cartesian",
+                              /*stretched=*/false),
+               c10::Error);
 }
 
 // the same column without the key takes the plain log-mean: the two cell
