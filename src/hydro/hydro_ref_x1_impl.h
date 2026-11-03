@@ -109,11 +109,33 @@ inline DISPATCH_MACRO T hydro_ref_x1_rop_smooth(T const* w, int ncells,
   return (v[0] + T(4) * v[1] + T(6) * v[2] + T(4) * v[3] + v[4]) / T(16);
 }
 
+//! #280 (iv): the first of the six faces the uniform branch below averages for
+//! cell i (the same choice of interior row, one-sided wall rows and their
+//! conditions), or -1 where it keeps the two-face mean
+inline DISPATCH_MACRO int hydro_ref_x1_six_face_start(int i, int nc1, int iu,
+                                                      bool phys_in,
+                                                      bool phys_out,
+                                                      bool wall_clamp) {
+  int il = nc1 - 1 - iu;
+  bool thin = (iu - il + 1) < 5;
+  bool fits = iu >= 4;
+  bool wall_in = wall_clamp && phys_in && i >= il && i < il + 2;
+  bool wall_out = wall_clamp && phys_out && i > iu - 2 && i <= iu;
+  int start = -1;
+  if (i >= 2 && i < nc1 - 2 && !wall_in && !wall_out) start = i - 2;
+  if (wall_in && fits && !(thin && phys_out)) start = il;
+  if (wall_out && fits && !(thin && phys_in)) start = iu + 1 - 5;
+  if (!phys_in && i < 2) start = 0;
+  if (!phys_out && i >= nc1 - 2) start = nc1 - 5;
+  return start;
+}
+
 template <typename T>
 inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
     T const* w, T const* dx1f, T const* psf_lo, T const* psf_hi, T* pref,
     T* dsf, T* dref, int column, int i, int ncolumns, int nc1, int iu, T grav,
-    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp) {
+    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
+    T const* rows) {
   bool uniform = x1_grid == kX1RefUniform;
   int ncells = ncolumns * nc1;
   int flat = column * nc1;
@@ -182,13 +204,21 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
       use_six_faces(nc1 - 5, w6e[row], true);
     }
   } else if (x1_grid == kX1RefStretched) {
-    // #280, a keyed stretched x1: the same log-mean, with ln(lo/hi) taken as
-    // log1p(dp/hi), which it is exactly for the scan's own step lo = hi + dp.
-    // Its round-off floor is eps p/dp instead of eps (p/dp)^2, which is what
-    // keeps a finely resolved stretched column at rest
-    T dp = grav * w[IDN * ncells + flat + i] * dx1f[i];
-    T x = dp / hi;
-    cell_pref = fabs(x) < T(1.e-6) ? T(0.5) * (lo + hi) : dp / log1p(x);
+    // #280 (iv), a keyed stretched x1: the cell average of the degree-5
+    // Lagrange interpolant through the same six faces, with per-cell weights
+    // built once from the widths (hydro_ref_x1_stretched_rows); row i is
+    // (start, w_0..w_5). Same bracket guard as the uniform branch
+    T lower = lo < hi ? lo : hi;
+    T upper = lo > hi ? lo : hi;
+    int start = static_cast<int>(rows[7 * i]);
+    if (start >= 0) {
+      T value = T(0);
+      for (int m = 0; m < 6; ++m) {
+        value += rows[7 * i + 1 + m] *
+                 hydro_ref_x1_face(psf_lo, psf_hi, flat, start + m, nc1);
+      }
+      if (value >= lower && value <= upper) cell_pref = value;
+    }
   } else {
     T dp = grav * w[IDN * ncells + flat + i] * dx1f[i];
     T ratio = lo / hi;
@@ -215,13 +245,14 @@ template <typename T>
 inline DISPATCH_MACRO void hydro_ref_x1_impl(
     T const* w, T const* dx1f, T const* anchor, T* psf_lo, T* psf_hi, T* pref,
     T* dsf, T* dref, int column, int ncolumns, int nc1, int iu, T grav,
-    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp) {
+    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
+    T const* rows) {
   hydro_ref_x1_scan_impl(w, dx1f, anchor, psf_lo, psf_hi, column, ncolumns, nc1,
                          iu, grav);
   for (int i = 0; i < nc1; ++i) {
     hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column, i,
                            ncolumns, nc1, iu, grav, x1_grid, phys_in, phys_out,
-                           wall_clamp);
+                           wall_clamp, rows);
   }
 }
 
