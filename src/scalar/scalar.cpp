@@ -33,6 +33,21 @@ void ScalarImpl::reset() {
 
   pcoord = pmb->pcoord;
   precon = ReconstructImpl::create(options->recon(), this);
+
+  //// ---- #280: x1 gets its own reconstruction ---- ////
+  // One module served DIM1, DIM2 and DIM3 here, so a stretched deck left the
+  // tracers reconstructing x1 on uniform coefficients while the hydro
+  // variables used the coordinate's own rows.  Installing the rows on
+  // `precon` is not an option: weno5.cpp:75,98 take the route-A path for any
+  // dimension once a table is there, so x2/x3 would be reconstructed with x1
+  // coefficients.  Same shape as the hydro wiring (hydro.cpp, the guarded
+  // block after `recon1` is created): same options, a uniform grid installs
+  // nothing and keeps the shipped arithmetic, and `precon` is never given
+  // faces.
+  precon1 = ReconstructImpl::create(options->recon(), this, "recon1");
+  if (pcoord && pcoord->options->stretched_x1()) {
+    precon1->set_x1_faces(pcoord->x1f);
+  }
   priemann = RiemannSolverImpl::create(options->riemann(), this);
 
   if (options->thermo()) {
@@ -72,7 +87,7 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   auto r = u / rho;
 
   if (_flux1.defined()) {
-    auto rlr = precon->forward(r, DIM1);
+    auto rlr = precon1->forward(r, DIM1);
     _flux1.set_(
         priemann->forward(rlr[ILT], rlr[IRT], DIM1, pmb->phydro->flux1()[IDN]));
   }
