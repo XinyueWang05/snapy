@@ -11,11 +11,14 @@ Owed to **Xinyue** (§1–§4, §6) and to **Jiheng** (§5).
 
 ## 1. Face and window convention
 
+Line numbers below are at the base commit `2d9fa419` unless the file is one
+this branch adds.
+
 Three facts from the shipped code, in order:
 
 * `src/coord/cartesian.cpp:26-27` — face `k` is the **lower** face of cell `k`,
   so a block with `nc1` cells has `nc1 + 1` faces.
-* `src/recon/interpolation.hpp:79-80` — `forward` makes the output smaller than
+* `src/recon/interpolation.hpp:64-65` — `forward` makes the output smaller than
   the input by `stencils() - 1 = 4` along `dim`, so the output has `nc1 - 4`
   elements. Output element `m` is the five-cell window `m .. m+4`, bounded by
   the six faces `m .. m+5`.
@@ -27,7 +30,7 @@ Three facts from the shipped code, in order:
   ```
 
   with `il = 3`, `iu = nc1 - 3` for a 5-point stencil
-  (`src/recon/reconstruct.cpp:127-129`). Both slices are handed to the **same**
+  (`src/recon/reconstruct.cpp:86-88`). Both slices are handed to the **same**
   `forward` call, so output element `m` lands at `wlr[IRT][il-1+m] = wlr[IRT][m+2]`
   and at `wlr[ILT][il+m] = wlr[ILT][m+3]`.
 
@@ -164,7 +167,7 @@ One row of `(nx1+1 - 5, 5)` per side, same face convention: `cm` row `m`
 targets face `m+2`, `cp` row `m` targets face `m+3`. Column `n = 0..4` is the
 coefficient of window cell `m+n`, i.e. the row is the degree-4 (five-cell)
 reconstruction at the target face, replacing the shipped constants
-`{-1/20, 9/20, 47/60, -13/60, 1/30}` at `src/recon/cp5.cpp:13-15`.
+`{-1/20, 9/20, 47/60, -13/60, 1/30}` at `src/recon/cp5.cpp:14-16`.
 
 It is **built as `sum_r d_r p_r`** from the WENO5 row (note §4.2), not from an
 independent six-node primitive function: that identity is what makes WENO5
@@ -195,11 +198,77 @@ Plainly:
   change a reconstruction. The `_nu` kernels, their dispatch and the CUDA side
   are stage B.
 
-There is no API to hand in a row table you built yourself in Python
+There is no typed API to hand in a row table you built yourself
 (`set_x1_faces` takes faces, not coefficients), and I did not add one: the
 coefficients are a function of the faces, and a second entry point would be a
-second definition of the same thing. If Xinyue needs to drive the module with
-rows she wrote, say so and I will add a `set_x1_rows` next to it.
+second definition of the same thing. But the buffer **is** the live tensor, so
+rows written from Python do stick — `recon.buffer("interp1.cm_x1")[3, 45:] =
+torch.tensor([.25, .5, .25])` reads back as `[0.25, 0.5, 0.25]` — which is
+enough to drive a harness today. If Xinyue wants a supported entry point rather
+than an in-place write, say so and I will add `set_x1_rows` next to it.
+
+**Which interpolator is which.** For a `weno5` deck, `interp1` is `Weno5Interp`
+and `interp2` is `Center5Interp` — `src/recon/interpolation.cpp:29-36` branches
+on the last character of the module name. So on `recon1` the 48-column table
+lives on `interp1` (density and passive scalars,
+`src/recon/reconstruct.cpp:139,157`) and the 5-column cp5 table on `interp2`
+(the velocities, `:147`). Both are filled by one `set_x1_faces` call.
+
+### The snippet I actually ran
+
+```python
+import torch, sys
+sys.path.insert(0, "<repo>/python")
+import snapy
+
+# 1. the free builder: no mesh, no block
+nx1, nghost = 32, 3
+nc1 = nx1 + 2 * nghost
+q = 1.03
+h = torch.cumsum(torch.tensor([0.0] + [q**i for i in range(nc1)],
+                              dtype=torch.float64), 0)
+x1f = h * 120.0                                   # nc1 + 1 = 39 faces
+
+cm, cp   = snapy.weno5_x1_coeffs(x1f)             # (34, 48) each
+cm5, cp5 = snapy.cp5_x1_coeffs(x1f)               # (34, 5)  each
+
+# 2. through a Reconstruct module
+opts = snapy.ReconstructOptions()
+opts.interp(snapy.InterpOptions("weno5"))
+recon = snapy.Reconstruct(opts)
+recon.set_x1_faces(x1f)
+assert torch.equal(recon.buffer("interp1.cm_x1"), cm)
+assert torch.equal(recon.buffer("interp2.cp_x1"), cp5)
+
+# 3. the dotted name from a Hydro
+mesh   = snapy.Mesh(snapy.MeshOptions.from_yaml(deck))   # cartesian, weno5
+block  = mesh.blocks[0]
+phydro = block.module("hydro")
+phydro.module("recon1").set_x1_faces(block.buffer("coord.x1f"))
+c = phydro.buffer("recon1.interp1.cm_x1")
+```
+
+Output:
+
+```
+weno5 cm (34, 48) torch.float64  cp (34, 48)
+cp5   cm (34, 5)   cp (34, 5)
+row 0 linear weights d = [0.3179458049678741, 0.590659866631633, 0.09139432840049298]
+row 0 candidate row sums = [1.0, 1.0000000000000002, 0.9999999999999993]
+recon.buffer('interp1.cm_x1') -> (34, 48)
+recon.buffer('interp2.cm_x1') -> (34, 5)
+buffers match the free builder exactly
+after in-place write, row 3 d = [0.25, 0.5, 0.25]
+block x1f numel = 39 (nc1+1 = 39 )
+before: recon1.interp1.cm_x1 -> (0, 48)
+after : recon1.interp1.cm_x1 -> (34, 48) torch.float64 cpu
+        recon1.interp2.cm_x1 -> (34, 5)
+row 0 d = [0.3, 0.6, 0.1]
+```
+
+The last line is the uniform deck's own face vector coming back as the shipped
+`0.3 / 0.6 / 0.1`, and `(0, 48)` before the call is the empty registered
+buffer.
 
 ---
 
@@ -212,10 +281,10 @@ they need exactly **three** ghost faces beyond each interior end and no more.
 Read off the real indices, not assumed:
 
 * output element `m` is the cell window `m .. m+4`
-  (`src/recon/interpolation.hpp:79-80`, `stencils() == 5` at
+  (`src/recon/interpolation.hpp:64-65`, `stencils() == 5` at
   `src/recon/interpolation.hpp:245`), bounded by faces `m .. m+5`;
 * `left()` targets face `m+2`, `right()` targets face `m+3`
-  (`src/recon/reconstruct.cpp:54-55`, `il = 3` from `:127-128`);
+  (`src/recon/reconstruct.cpp:54-55`, `il = 3` from `:86-87`);
 * so a face `f` is produced twice: as `right()` of `m = f-3`, whose window
   needs faces `f-3 .. f+2`, and as `left()` of `m = f-2`, needing
   `f-2 .. f+3`. Union: faces `f-3 .. f+3`;
