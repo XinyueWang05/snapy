@@ -207,13 +207,13 @@ CoordinateOptions CoordinateOptionsImpl::from_yaml(
   op->interp_order() = node["cells"]["interp_order"].as<int>(2);
   op->repartition(layout);
 
-  // ghost rule (c) mirrors nghost + 1 interior widths per end (the extra one
-  // defines dx1v[0]); a block of one cell has no x1 faces to stretch
+  // ghost rule (c) mirrors x1f_ghosts() interior widths per end; a block of
+  // one cell has no x1 faces to stretch
   TORCH_CHECK(
-      !op->stretched_x1() || (gnx1 >= op->nghost() + 1 && op->nx1() > 1),
-      "a stretched x1 needs nx1 >= nghost + 1 and more than one x1 ",
-      "cell per block; got nx1 = ", gnx1, ", nghost = ", op->nghost(),
-      ", block nx1 = ", op->nx1());
+      !op->stretched_x1() || (gnx1 >= op->x1f_ghosts() && op->nx1() > 1),
+      "a stretched x1 needs nx1 >= ", op->x1f_ghosts(),
+      " (max(nghost, 3) + 1) and more than one x1 cell per block; got nx1 = ",
+      gnx1, ", nghost = ", op->nghost(), ", block nx1 = ", op->nx1());
 
   // the per-block cell counts are known only after the repartition; an axis
   // is collapsed by its total count, not by one block's share of it
@@ -383,7 +383,8 @@ CoordinateImpl::CoordinateImpl(const CoordinateOptions& options_,
   // from a global array, a face has one value whoever owns it.
   if (op->stretched_x1()) {
     x1f = op->global_x1f()
-              .narrow(0, op->ix1(), op->nx1() + 2 * op->nghost() + 1)
+              .narrow(0, op->ix1() - op->nghost() + op->x1f_ghosts(),
+                      op->nx1() + 2 * op->nghost() + 1)
               .clone();
   } else {
     x1f = block_faces_(op->global_x1min(), op->global_x1max(), op->global_nx1(),
@@ -395,14 +396,19 @@ CoordinateImpl::CoordinateImpl(const CoordinateOptions& options_,
                      op->nx3(), op->ix3(), op->nghost());
 }
 
-torch::Tensor CoordinateOptionsImpl::global_x1f(int extra) const {
-  int gnx = global_nx1(), ng = nghost() + extra;
+torch::Tensor CoordinateOptionsImpl::global_x1f() const {
+  int gnx = global_nx1(), ng = x1f_ghosts();
   TORCH_CHECK(gnx > 0, "global_x1f() before resolve_global_grid()");
-  if (!stretched_x1()) {  // today's faces, as block_faces_ builds them
+  if (!stretched_x1()) {
+    // today's faces, as block_faces_ builds them, so a block's slice is bit
+    // for bit its x1f; continued by the cell width to G faces per end
     double gmin = global_x1min(), gmax = global_x1max();
     auto dx = (gmax - gmin) / gnx;
-    return torch::linspace(gmin - ng * dx, gmax + ng * dx, gnx + 2 * ng + 1,
-                           torch::kFloat64);
+    int n0 = nghost(), more = ng - n0;
+    auto core = torch::linspace(gmin - n0 * dx, gmax + n0 * dx,
+                                gnx + 2 * n0 + 1, torch::kFloat64);
+    auto k = torch::arange(1, more + 1, torch::kFloat64) * dx;
+    return torch::cat({core[0] - k.flip(0), core, core[-1] + k});
   }
 
   // ghost rule (c): mirror the faces about each wall, so the ghost widths

@@ -206,8 +206,38 @@ TEST(StretchedX1, refuses_bad_keys) {
   // bounds that disagree with the list
   refused(card("{nx1: 8, nghost: 3}", face_list(kFaces),
                "{x1min: 0., x1max: 15.}"));
-  // too few cells to mirror nghost + 1 widths
+  // too few cells to mirror x1f_ghosts() = max(nghost, 3) + 1 widths
   refused(card("{nx1: 3, nghost: 3, x1rat: 0.95}"));
   // a list without cells
   refused("geometry:\n  type: cartesian\n" + face_list(kFaces));
+}
+
+// global_x1f() carries 3 faces per end beyond the interior plus one more
+// mirrored face for dx1v, whatever nghost is: 4 per end for nghost <= 3, so
+// global face g sits at index g + 4. Route A reads its stencils from it.
+TEST(StretchedX1, global_faces_do_not_depend_on_nghost) {
+  int const G = 4;
+  for (int ng : {1, 2, 3}) {
+    auto cells = "{nx1: 8, nghost: " + std::to_string(ng);
+    // stretched: rule (c) mirrored faces, 4 per end
+    auto op = load(card(cells + "}", face_list(kFaces)));
+    auto g = op->global_x1f();
+    ASSERT_EQ(g.size(0), 8 + 2 * G + 1) << "nghost " << ng;
+    EXPECT_TRUE(torch::equal(g, as_tensor(mirrored(kFaces, G))))
+        << "nghost " << ng;
+    Cartesian st(op);
+    EXPECT_TRUE(torch::equal(st->x1f, g.narrow(0, G - ng, 8 + 2 * ng + 1)));
+    expect_metrics(st, mirrored(kFaces, G), G - ng - 1);
+
+    // uniform: the block's faces are a slice of it, bit for bit
+    auto uop = load(card(cells + "}"));
+    auto ug = uop->global_x1f();
+    ASSERT_EQ(ug.size(0), 8 + 2 * G + 1) << "nghost " << ng;
+    Cartesian un(uop);
+    EXPECT_TRUE(torch::equal(un->x1f, ug.narrow(0, G - ng, 8 + 2 * ng + 1)));
+    double dx = 2.;
+    EXPECT_TRUE(torch::equal(
+        un->x1f, torch::linspace(-ng * dx, 16. + ng * dx, 8 + 2 * ng + 1,
+                                 torch::kFloat64)));
+  }
 }

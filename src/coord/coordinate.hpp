@@ -1,6 +1,7 @@
 #pragma once
 
 // C/C++
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <iosfwd>
@@ -95,16 +96,21 @@ struct CoordinateOptionsImpl {
   //! true when the deck set `cells/x1rat` or `geometry/x1f` (#280)
   bool stretched_x1() const { return !x1f_interior().empty(); }
 
+  //! Faces per end that `global_x1f` carries beyond the interior: the
+  //! 3 a WENO5 stencil needs, or nghost if larger, plus one more for dx1v.
+  int x1f_ghosts() const { return std::max(nghost(), 3) + 1; }
+
   //! The global x1 face vector, ghosts included (#280).
   /*!
-   * Faces g = -ng .. gnx + ng at index g + ng, with ng = nghost() + extra:
-   * gnx + 2 ng + 1 values. Uniform: today's `linspace`. Stretched: the
-   * interior faces of `x1f_interior` and, at both ends, ghosts that mirror
-   * the interior widths (ghost rule (c)): x_{-m} = 2 x_0 - x_m and
-   * x_{n+m} = 2 x_n - x_{n-m}. Every block slices its `x1f` from it, and the
-   * x1 metrics derive from it; nothing else rebuilds the x1 grid.
+   * Faces g = -G .. gnx + G at index g + G, with G = x1f_ghosts(), whatever
+   * nghost is: gnx + 2 G + 1 values. Stretched: the interior faces of
+   * `x1f_interior` and ghosts that mirror the interior widths (ghost rule
+   * (c)): x_{-m} = 2 x_0 - x_m and x_{n+m} = 2 x_n - x_{n-m}. Uniform: today's
+   * `linspace` over -nghost .. gnx + nghost, continued by the cell width. A
+   * block's `x1f` is the slice from index ix1 - nghost + G; the x1 metrics
+   * derive from it, and nothing else rebuilds the x1 grid.
    */
-  torch::Tensor global_x1f(int extra = 0) const;
+  torch::Tensor global_x1f() const;
 
   //! Index of this block's FIRST INTERIOR CELL in the global grid.
   int ix1() const {
