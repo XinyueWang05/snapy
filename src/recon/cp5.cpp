@@ -6,6 +6,7 @@
 
 #include "interpolation.hpp"
 #include "recon_dispatch.hpp"
+#include "x1_coeffs.hpp"
 
 namespace snap {
 
@@ -14,6 +15,21 @@ void Center5InterpImpl::reset() {
                                             -13. / 60., 1. / 30.},
                                            torch::kFloat64));
   cp = register_buffer("cp", cm.flip({0}));
+
+  // Route A tables (snapy#280 stage 1); see Weno5InterpImpl::reset for why
+  // they are registered empty here rather than created on demand.
+  cm_x1 = register_buffer("cm_x1",
+                          torch::zeros({0, kPoly5NuCoeff}, torch::kFloat64));
+  cp_x1 = register_buffer("cp_x1",
+                          torch::zeros({0, kPoly5NuCoeff}, torch::kFloat64));
+}
+
+void Center5InterpImpl::set_x1_coeffs(torch::Tensor const& x1f) {
+  auto rows = cp5_x1_coeffs(x1f);
+
+  auto opts = cm.options();
+  cm_x1.set_data(rows.first.to(opts).contiguous());
+  cp_x1.set_data(rows.second.to(opts).contiguous());
 }
 
 void Center5InterpImpl::left(torch::Tensor w, int dim,
