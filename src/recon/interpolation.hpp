@@ -221,6 +221,10 @@ class Center5InterpImpl : public torch::nn::Cloneable<Center5InterpImpl>,
   //! route A per-face rows, (nout, 5) each; empty until set_x1_coeffs
   torch::Tensor cm_x1, cp_x1;
 
+  //! dtype/device casts of the two tables; NOT registered buffers, so a
+  //! `clone()` starts empty and rebuilds them on demand (x1_coeffs.hpp)
+  torch::Tensor cm_x1_cast, cp_x1_cast;
+
   //! Constructor to initialize the layer
   Center5InterpImpl() {
     options->type("cp5");
@@ -239,6 +243,10 @@ class Center5InterpImpl : public torch::nn::Cloneable<Center5InterpImpl>,
   void set_x1_coeffs(torch::Tensor const& x1f) override;
   bool has_x1_coeffs() const override { return cm_x1.numel() > 0; }
 
+  //! route A per-face path; `src` is cm_x1 or cp_x1 (snapy#280 Sec. 4.3)
+  void forward_nu(torch::Tensor const& w, int dim, torch::Tensor const& out,
+                  torch::Tensor const& src, torch::Tensor& cache);
+
   void left(torch::Tensor w, int dim, torch::Tensor const& out) override;
   void right(torch::Tensor w, int dim, torch::Tensor const& out) override;
 };
@@ -252,6 +260,10 @@ class Weno5InterpImpl : public torch::nn::Cloneable<Weno5InterpImpl>,
 
   //! route A per-face rows, (nout, 48) each; empty until set_x1_coeffs
   torch::Tensor cm_x1, cp_x1;
+
+  //! dtype/device casts of the two tables; NOT registered buffers, so a
+  //! `clone()` starts empty and rebuilds them on demand (x1_coeffs.hpp)
+  torch::Tensor cm_x1_cast, cp_x1_cast;
 
   //! Constructor to initialize the layer
   Weno5InterpImpl() {
@@ -270,6 +282,10 @@ class Weno5InterpImpl : public torch::nn::Cloneable<Weno5InterpImpl>,
 
   void set_x1_coeffs(torch::Tensor const& x1f) override;
   bool has_x1_coeffs() const override { return cm_x1.numel() > 0; }
+
+  //! route A per-face path; `src` is cm_x1 or cp_x1 (snapy#280 Sec. 4.3)
+  void forward_nu(torch::Tensor const& w, int dim, torch::Tensor const& out,
+                  torch::Tensor const& src, torch::Tensor& cache);
 
   void left(torch::Tensor w, int dim, torch::Tensor const& out) override;
   void right(torch::Tensor w, int dim, torch::Tensor const& out) override;

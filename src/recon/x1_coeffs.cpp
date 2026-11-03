@@ -1,6 +1,9 @@
 // C/C++
 #include <cmath>
 
+// torch
+#include <ATen/native/ReduceOpsUtils.h>
+
 // snap
 #include "x1_coeffs.hpp"
 
@@ -251,6 +254,49 @@ torch::Tensor x1_coeffs_row_view(torch::Tensor const& c,
   std::vector<int64_t> strides(sizes.size(), 0);
   strides[dim] = c.size(1);
   return c.as_strided(sizes, strides, c.storage_offset());
+}
+
+at::TensorIterator x1_nu_iterator(torch::Tensor const& w, int dim,
+                                  torch::Tensor const& out,
+                                  torch::Tensor const& c) {
+  TORCH_CHECK(dim >= 0 && dim < out.dim(), "[x1_coeffs] bad dim ", dim);
+  TORCH_CHECK(c.scalar_type() == w.scalar_type() && c.device() == w.device(),
+              "[x1_coeffs] coefficient table is ", c.scalar_type(), " on ",
+              c.device(), " but the state is ", w.scalar_type(), " on ",
+              w.device());
+
+  std::vector<int64_t> squash_dim = {0};
+  if (w.device().is_cuda()) {
+    squash_dim.push_back(dim);
+  }
+
+  auto config = at::TensorIteratorConfig();
+  config.resize_outputs(false)
+      .check_all_same_dtype(true)
+      .declare_static_shape(out.sizes(), squash_dim)
+      .add_output(out)
+      .add_input(w);
+
+  // CPU only: see the comment on this function in x1_coeffs.hpp.
+  if (!w.device().is_cuda()) {
+    config.add_input(x1_coeffs_row_view(c, out, dim));
+  }
+
+  return config.build();
+}
+
+void x1_coeffs_check_rows(at::TensorIterator const& iter,
+                          torch::Tensor const& c, int dim, int ncoeff,
+                          char const* what) {
+  TORCH_CHECK(c.dim() == 2 && c.size(1) == ncoeff, "[", what,
+              "] expected a (nout, ", ncoeff, ") coefficient table, got ",
+              c.sizes());
+  TORCH_CHECK(c.is_contiguous(), "[", what,
+              "] coefficient table must be contiguous");
+  int64_t nout = at::native::ensure_nonempty_size(iter.output(), dim);
+  TORCH_CHECK(c.size(0) == nout, "[", what, "] coefficient table has ",
+              c.size(0), " rows but the output has ", nout,
+              " faces along dimension ", dim);
 }
 
 }  // namespace snap

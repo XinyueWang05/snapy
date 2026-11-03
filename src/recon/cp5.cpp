@@ -6,6 +6,7 @@
 
 #include "interpolation.hpp"
 #include "recon_dispatch.hpp"
+#include "recon_dispatch_nu.hpp"
 #include "x1_coeffs.hpp"
 
 namespace snap {
@@ -30,10 +31,38 @@ void Center5InterpImpl::set_x1_coeffs(torch::Tensor const& x1f) {
   auto opts = cm.options();
   cm_x1.set_data(rows.first.to(opts).contiguous());
   cp_x1.set_data(rows.second.to(opts).contiguous());
+
+  // the dtype/device casts belong to the old table
+  cm_x1_cast = torch::Tensor();
+  cp_x1_cast = torch::Tensor();
+}
+
+//! Route A: run the per-face kernel with `src` as the coefficient table.
+void Center5InterpImpl::forward_nu(torch::Tensor const& w, int dim,
+                                   torch::Tensor const& out,
+                                   torch::Tensor const& src,
+                                   torch::Tensor& cache) {
+  TORCH_CHECK(out.size(dim) == src.size(0),
+              "[cp5] per-face x1 coefficients are installed but dimension ",
+              dim, " has ", out.size(dim), " outputs while the table has ",
+              src.size(0),
+              " rows; route A covers the x1 dimension only, so `recon23` must "
+              "not be given a face vector (note Sec. 4.7)");
+
+  auto const& c = x1_coeffs_for(src, cache, w);
+  auto iter = x1_nu_iterator(w, dim, out, c);
+  at::native::call_poly5_nu(out.device().type(), iter, c, dim);
 }
 
 void Center5InterpImpl::left(torch::Tensor w, int dim,
                              torch::Tensor const& out) {
+  // route A (snapy#280): only when a face vector has been installed.  With no
+  // table the function below is byte for byte the shipped one.
+  if (has_x1_coeffs()) {
+    forward_nu(w, dim, out, cm_x1, cm_x1_cast);
+    return;
+  }
+
   std::vector<int64_t> squash_dim = {0};
   if (w.device().is_cuda()) {
     squash_dim.push_back(dim);
@@ -52,6 +81,11 @@ void Center5InterpImpl::left(torch::Tensor w, int dim,
 
 void Center5InterpImpl::right(torch::Tensor w, int dim,
                               torch::Tensor const& out) {
+  if (has_x1_coeffs()) {
+    forward_nu(w, dim, out, cp_x1, cp_x1_cast);
+    return;
+  }
+
   std::vector<int64_t> squash_dim = {0};
   if (w.device().is_cuda()) {
     squash_dim.push_back(dim);
