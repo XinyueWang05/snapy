@@ -109,10 +109,11 @@ void build_and_step(std::string const& text) {
 void refuses(std::string const& message, std::string const& forcing = "}",
              std::string const& inner = "reflecting",
              std::string const& outer = "reflecting",
-             std::string const& geometry = "cartesian") {
+             std::string const& geometry = "cartesian",
+             std::string const& recon = "weno5") {
   bool threw = false;
   try {
-    build_and_step(card(true, forcing, inner, outer, geometry));
+    build_and_step(card(true, forcing, inner, outer, geometry, recon));
   } catch (c10::Error const& e) {
     threw = true;
     EXPECT_NE(std::string(e.what()).find(message), std::string::npos)
@@ -122,7 +123,7 @@ void refuses(std::string const& message, std::string const& forcing = "}",
   EXPECT_TRUE(threw) << "a stretched x1 did not refuse: " << message;
   if (geometry == "cartesian") {
     EXPECT_NO_THROW(
-        build_and_step(card(false, forcing, inner, outer, geometry)));
+        build_and_step(card(false, forcing, inner, outer, geometry, recon)));
   } else {  // the uniform twin need not be a runnable deck; it must not refuse
     try {
       build_and_step(card(false, forcing, inner, outer, geometry));
@@ -148,6 +149,35 @@ TEST(StretchedX1Ref, refuses_curvature_correction) {
           ", gravity-work: face-wallc}");
 }
 
+TEST(StretchedX1Ref, refuses_curvature_correction_cp5) {
+  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
+          "supported on a stretched x1",
+          ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
+          "cp5");
+}
+
+TEST(StretchedX1Ref, refuses_curvature_correction_cp3) {
+  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
+          "supported on a stretched x1",
+          ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
+          "cp3");
+}
+
+// ctest test_stretched_x1_ref_radial_exact_off runs this with
+// SNAP_GRAVITY_WORK_RADIAL_EXACT=0: gravity-work face (the default) then keeps
+// the dx^2/12 curvature correction, which a stretched x1 refuses
+TEST(StretchedX1Ref, refuses_curvature_with_radial_exact_off) {
+  if (HydroImpl::gravity_work_radial_exact())
+    GTEST_SKIP() << "SNAP_GRAVITY_WORK_RADIAL_EXACT is on";
+  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
+          "supported on a stretched x1");
+}
+
+TEST(StretchedX1Ref, refuses_diffusion_kappa_iso_only) {
+  refuses("[Diffusion] not supported on a stretched x1",
+          "}\n  diffusion: {kappa_iso: 1.e-3}");
+}
+
 TEST(StretchedX1Ref, refuses_diffusion) {
   refuses("[Diffusion] not supported on a stretched x1",
           "}\n  diffusion: {nu_iso: 1.e-3}");
@@ -170,6 +200,11 @@ TEST(StretchedX1Ref, refuses_periodic_x1) {
 TEST(StretchedX1Ref, refuses_outflow_x1_outer) {
   refuses("the x1-outer boundary is not reflecting", "}", "reflecting",
           "outflow");
+}
+
+TEST(StretchedX1Ref, refuses_outflow_x1_inner) {
+  refuses("the x1-inner boundary is not reflecting", "}", "outflow",
+          "reflecting");
 }
 
 TEST(StretchedX1Ref, refuses_spherical_polar) {
@@ -227,6 +262,31 @@ TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
   EXPECT_THROW(balance_column(w, dx1f, 22., true, 1.e-13, 400, "cartesian",
                               /*stretched=*/false),
                c10::Error);
+}
+
+// ctest test_stretched_x1_ref_wb_ref4 (and _x1_centroid) runs this with the
+// switch set: balance_column refuses it on a stretched column, and does not on
+// a uniform one
+TEST(StretchedX1Ref, balance_column_refuses_wb_ref4) {
+  if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
+  std::string message =
+      "balance_column: SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies "
+      "it) is not supported on a stretched x1 (#280)";
+  auto [w, dx1f] = column(32, 1.058, 3.e5);
+  bool threw = false;
+  try {
+    balance_column(w, dx1f, 22., true, 1.e-10, 120, "cartesian",
+                   /*stretched=*/true);
+  } catch (c10::Error const& e) {
+    threw = true;
+    EXPECT_NE(std::string(e.what()).find(message), std::string::npos)
+        << e.what();
+  }
+  EXPECT_TRUE(threw) << "balance_column did not refuse REF4 on a stretched x1";
+  auto [wu, dxu] = column(32, 1.0 + 1.e-12, 3.e5);  // uniform to round-off
+  dxu.fill_(3.e5 / 32.);
+  EXPECT_NO_THROW(balance_column(wu, dxu, 22., true, 1.e-10, 120, "cartesian",
+                                 /*stretched=*/false));
 }
 
 // the same column without the key takes the plain log-mean: the two cell

@@ -31,10 +31,17 @@ foreach(_arm "wb_ref4;SNAP_WB_REF4=1" "x1_centroid;SNAP_X1_CENTROID_EXACT=1")
   list(GET _arm 1 _env)
   add_test(NAME test_stretched_x1_ref_${_name}.${buildl}
            COMMAND test_stretched_x1_ref.${buildl}
-                   --gtest_filter=StretchedX1Ref.refuses_wb_ref4_switch)
+                   --gtest_filter=StretchedX1Ref.refuses_wb_ref4_switch:StretchedX1Ref.balance_column_refuses_wb_ref4)
   set_tests_properties(test_stretched_x1_ref_${_name}.${buildl}
                        PROPERTIES ENVIRONMENT "${_env}")
 endforeach()
+# with the radial-exact work off, gravity-work face keeps the dx^2/12
+# curvature correction, which a stretched x1 refuses
+add_test(NAME test_stretched_x1_ref_radial_exact_off.${buildl}
+         COMMAND test_stretched_x1_ref.${buildl}
+                 --gtest_filter=StretchedX1Ref.refuses_curvature_with_radial_exact_off)
+set_tests_properties(test_stretched_x1_ref_radial_exact_off.${buildl}
+                     PROPERTIES ENVIRONMENT "SNAP_GRAVITY_WORK_RADIAL_EXACT=0")
 setup_test(test_radial_face_moments)
 setup_test(test_hydrostatic)
 setup_test(test_hydro_options)
