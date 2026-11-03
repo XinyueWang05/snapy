@@ -277,9 +277,12 @@ at::TensorIterator x1_nu_iterator(torch::Tensor const& w, int dim,
       .add_output(out)
       .add_input(w);
 
-  // CPU only: see the comment on this function in x1_coeffs.hpp.
+  // CPU only: see the comment on this function in x1_coeffs.hpp.  The view has
+  // to be a named lvalue; `add_input(TensorBase&&)` is deleted.
+  torch::Tensor rows;
   if (!w.device().is_cuda()) {
-    config.add_input(x1_coeffs_row_view(c, out, dim));
+    rows = x1_coeffs_row_view(c, out, dim);
+    config.add_input(rows);
   }
 
   return config.build();

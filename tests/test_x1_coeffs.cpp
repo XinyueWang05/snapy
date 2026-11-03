@@ -20,6 +20,7 @@
 #include <snap/recon/x1_coeffs.hpp>
 
 // tests
+#include "device_testing.hpp"
 
 using namespace snap;
 
@@ -46,6 +47,28 @@ torch::Tensor faces_geometric(int n, double q, double h0 = 1.) {
   for (int i = 1; i < n; ++i) {
     y[i] = y[i - 1] + h;
     h *= q;
+  }
+  return torch::tensor(y, torch::kFloat64);
+}
+
+//! A face vector whose width RATIOS change from window to window.
+/*!
+ * A geometric grid is self similar: h_{m+n} = h_m q^n for every m, so the
+ * per-face rows -- which depend only on the width ratios inside the window --
+ * are IDENTICAL for every m.  On such a grid a row-to-face shift is invisible,
+ * exactly as it is on a uniform one.  Every stage-B face-index check therefore
+ * runs on this one instead.
+ */
+torch::Tensor faces_irregular(int n, double h0 = 1., int seed = 7) {
+  std::vector<double> y(n);
+  y[0] = 0.;
+  uint64_t st = static_cast<uint64_t>(seed) + 0x9e3779b97f4a7c15ULL;
+  for (int i = 1; i < n; ++i) {
+    // a cheap deterministic generator; the point is only that consecutive
+    // widths are unrelated, so no two windows share their ratios
+    st = st * 6364136223846793005ULL + 1442695040888963407ULL;
+    double r = static_cast<double>((st >> 11) & 0xfffff) / 1048576.;  // [0,1)
+    y[i] = y[i - 1] + h0 * (0.55 + 0.9 * r);
   }
   return torch::tensor(y, torch::kFloat64);
 }
@@ -423,6 +446,444 @@ TEST(X1Coeffs, ghost_faces_needed_by_the_stencils) {
       EXPECT_GE(lo, 0);
       EXPECT_LE(hi, x1f.numel() - 1);
     }
+  }
+}
+
+// ===========================================================================
+// STAGE B: the _nu kernels, their dispatch, and the face index they consume.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 13. The module path on every device and dtype.
+//     a) a UNIFORM face vector through the _nu kernels agrees with the shipped
+//        kernels to round-off; the two differ only in where the row comes from.
+//     b) on a STRETCHED grid cp5 reconstructs a degree-4 polynomial exactly at
+//        both output faces.  (b) is the end-to-end face-index check: the two
+//        sides swapped, or shifted by one, fails it by O(h).
+// ---------------------------------------------------------------------------
+TEST_P(DeviceTest, module_nu_path) {
+  const int nc1 = 24;
+  const int nvar = 3;
+
+  for (double q : {1.0, 1.08}) {
+    auto x1f = faces_geometric(nc1 + 1, q, 0.6);
+    auto f = x1f.accessor<double, 1>();
+
+    std::vector<std::vector<double>> cs;
+    for (int j = 0; j < nvar; ++j) {
+      cs.push_back({1.3 + j, 0.21, -0.04, 0.006, 0.0011});
+    }
+
+    auto u = torch::zeros({nvar, 1, 1, nc1}, torch::kFloat64);
+    for (int j = 0; j < nvar; ++j) u[j][0][0] = cell_avg_poly(x1f, cs[j]);
+    auto w = u.to(device, dtype);
+
+    Weno5Interp weno;
+    Center5Interp cp5;
+    weno->to(device, dtype);
+    cp5->to(device, dtype);
+
+    auto shape = w.sizes().vec();
+    shape[3] -= 4;
+    ASSERT_EQ(shape[3], x1f.numel() - 5);
+
+    // the shipped uniform path first
+    auto ml = torch::empty(shape, w.options());
+    auto mr = torch::empty(shape, w.options());
+    ASSERT_FALSE(weno->has_x1_coeffs());
+    weno->left(w, 3, ml);
+    weno->right(w, 3, mr);
+
+    weno->set_x1_coeffs(x1f);
+    cp5->set_x1_coeffs(x1f);
+    ASSERT_TRUE(weno->has_x1_coeffs());
+    EXPECT_EQ(weno->cm_x1.size(0), shape[3]);
+    EXPECT_EQ(weno->cm_x1.size(1), kWeno5NuCoeff);
+    EXPECT_EQ(cp5->cm_x1.size(1), kPoly5NuCoeff);
+
+    auto nl = torch::empty(shape, w.options());
+    auto nr = torch::empty(shape, w.options());
+    weno->left(w, 3, nl);
+    weno->right(w, 3, nr);
+
+    auto pl = torch::empty(shape, w.options());
+    auto pr = torch::empty(shape, w.options());
+    cp5->left(w, 3, pl);
+    cp5->right(w, 3, pr);
+
+    double tol = dtype == torch::kFloat64 ? 1.e-10 : 2.e-4;
+    double umax = u.abs().max().item<double>();
+
+    if (q == 1.0) {
+      double dl = (nl - ml).abs().max().item<double>();
+      double dr = (nr - mr).abs().max().item<double>();
+      std::cout << "  " << torch::Device(device).str() << " "
+                << torch::toString(dtype)
+                << " uniform: max|_nu - shipped| = " << dl << " / " << dr
+                << std::endl;
+      EXPECT_LT(dl, tol * std::max(umax, 1.));
+      EXPECT_LT(dr, tol * std::max(umax, 1.));
+    }
+
+    // cp5 is linear, so it is exact on degree-4 data at its own target face
+    auto plc = pl.to(torch::kCPU, torch::kFloat64);
+    auto prc = pr.to(torch::kCPU, torch::kFloat64);
+    for (int j = 0; j < nvar; ++j) {
+      for (int64_t m = 0; m < shape[3]; ++m) {
+        EXPECT_NEAR(plc[j][0][0][m].item<double>(), poly_at(cs[j], f[m + 2]),
+                    tol * std::max(umax, 1.))
+            << "q " << q << " cp5 left, row " << m;
+        EXPECT_NEAR(prc[j][0][0][m].item<double>(), poly_at(cs[j], f[m + 3]),
+                    tol * std::max(umax, 1.))
+            << "q " << q << " cp5 right, row " << m;
+      }
+    }
+
+    // WENO5 on smooth data is a convex combination of three third-order
+    // candidates, so it is not exact; it must still be far closer to its own
+    // target face than to the neighbouring one.
+    auto nlc = nl.to(torch::kCPU, torch::kFloat64);
+    for (int64_t m = 0; m < shape[3]; ++m) {
+      double got = nlc[0][0][0][m].item<double>();
+      double own = std::abs(got - poly_at(cs[0], f[m + 2]));
+      double other = std::abs(got - poly_at(cs[0], f[m + 3]));
+      EXPECT_LT(own, other) << "q " << q << " weno5 left, row " << m;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 14. THE OFF-BY-ONE TEST.  Shift the row-to-face mapping by one and the
+//     results must move by O(h du/dx), far above round-off.  This is the test
+//     that would fail if reconstruct.cpp:54-55's two slices (one index apart,
+//     the same five cells) were read the other way round, or if a kernel took
+//     row m+1 for output m.  It runs on a NON-UNIFORM grid on purpose: on a
+//     uniform one every row is the same and the shift is invisible, which is
+//     exactly why no existing test catches this.
+// ---------------------------------------------------------------------------
+TEST(X1Coeffs, a_shifted_row_to_face_mapping_is_detected) {
+  const int nc1 = 40;
+  auto x1f = faces_irregular(nc1 + 1, 0.5, 11);
+  auto f = x1f.accessor<double, 1>();
+  std::vector<double> c{0.7, 0.33, -0.051, 0.0071, 0.00042};
+
+  auto u = torch::zeros({1, 1, 1, nc1}, torch::kFloat64);
+  u[0][0][0] = cell_avg_poly(x1f, c);
+  auto shape = u.sizes().vec();
+  shape[3] -= 4;
+  const int64_t nout = shape[3];
+
+  // the shipped UNIFORM rows on this stretched grid: what a build without
+  // route A would use, and wrong by O(h^2 u'') here.  This is the control
+  // that says the test data can see a wrong row at all.
+  Center5Interp uni;
+  auto bad_uniform = torch::empty(shape, u.options());
+  uni->left(u, 3, bad_uniform);
+
+  Center5Interp cp5;
+  cp5->set_x1_coeffs(x1f);
+  auto good = torch::empty(shape, u.options());
+  cp5->left(u, 3, good);
+
+  double worst_good = 0., worst_uniform = 0.;
+  for (int64_t m = 0; m < nout; ++m) {
+    double want = poly_at(c, f[m + 2]);
+    worst_good =
+        std::max(worst_good, std::abs(good[0][0][0][m].item<double>() - want));
+    worst_uniform = std::max(
+        worst_uniform, std::abs(bad_uniform[0][0][0][m].item<double>() - want));
+  }
+  const double umax = u.abs().max().item<double>();
+  EXPECT_LT(worst_good, 1.e-13 * umax);
+  EXPECT_GT(worst_uniform, 1.e-6 * umax)
+      << "the uniform rows happen to be right on this grid; pick a sharper q";
+
+  // (a) THE SIDES SWAPPED.  cp_x1 row m targets face m+3 out of the same five
+  //     cells as cm_x1 row m, which targets face m+2 (x1_coeffs.hpp:28-29).
+  //     Feeding left() the cp table must therefore move every output to the
+  //     NEXT face exactly -- the one error a uniform grid cannot show, since
+  //     there cp is cm.flip and both sides give the same number.
+  ASSERT_FALSE(torch::equal(cp5->cm_x1, cp5->cp_x1));
+  cp5->cm_x1.copy_(cp5->cp_x1);
+  auto swapped = torch::empty(shape, u.options());
+  cp5->left(u, 3, swapped);
+
+  double worst_swap_own = 0., worst_swap_next = 0.;
+  for (int64_t m = 0; m < nout; ++m) {
+    double got = swapped[0][0][0][m].item<double>();
+    worst_swap_own =
+        std::max(worst_swap_own, std::abs(got - poly_at(c, f[m + 2])));
+    worst_swap_next =
+        std::max(worst_swap_next, std::abs(got - poly_at(c, f[m + 3])));
+  }
+  // it is exact at the NEXT face and far from its own: the mapping moved
+  EXPECT_LT(worst_swap_next, 1.e-13 * umax);
+  EXPECT_GT(worst_swap_own, 1.e-3 * umax);
+
+  // (b) THE TABLE SHIFTED BY ONE ROW.  Row m then carries window m+1's
+  //     coefficients while the kernel still reads cells m..m+4, so the answer
+  //     is not a reconstruction of anything; it only has to be FAR from the
+  //     correct one, which is what a shifted mapping would silently produce.
+  auto rows = cp5_x1_coeffs(x1f).first;
+  ASSERT_EQ(rows.size(0), nout);
+  auto shifted = rows.roll(-1, 0).contiguous();
+  ASSERT_FALSE(torch::equal(shifted, rows));
+  cp5->cm_x1.copy_(shifted);
+  ASSERT_TRUE(torch::equal(cp5->cm_x1, shifted))
+      << "the test could not install a modified table";
+
+  auto wrong = torch::empty(shape, u.options());
+  cp5->left(u, 3, wrong);
+
+  double worst_shift = 0.;
+  for (int64_t m = 0; m + 1 < nout; ++m) {
+    worst_shift = std::max(
+        worst_shift,
+        std::abs(wrong[0][0][0][m].item<double>() - poly_at(c, f[m + 2])));
+  }
+  std::cout << "  worst |cp5 - exact at its own face|: correct rows "
+            << worst_good << ", shipped uniform rows " << worst_uniform
+            << ", sides swapped " << worst_swap_own << ", rows shifted by one "
+            << worst_shift << std::endl;
+
+  EXPECT_GT(worst_shift, 1.e-3 * umax);
+}
+
+// ---------------------------------------------------------------------------
+// 15. THE CPU SUB-RANGE TEST.  `iter.for_each` splits by grain size and a
+//     sub-range can begin part-way along a line, so the loop counter in
+//     recon_dispatch.cpp:114-123 is NOT the face index.  Route A takes the row
+//     base from a third iterator operand instead (x1_coeffs.hpp,
+//     x1_nu_iterator).  This test makes the split actually happen -- many
+//     lines, several thread counts -- and checks cp5 exactness at EVERY
+//     element.  Any index slip is an O(h) error.
+//
+//     It also runs the same thing on a state whose x1 dimension is NOT the
+//     innermost one in memory, which makes TensorIterator reorder dimensions.
+// ---------------------------------------------------------------------------
+TEST(X1Coeffs, cpu_face_index_under_threading_and_reordering) {
+  const int nvar = 4, nc3 = 6, nc2 = 13, nc1 = 211;
+  auto x1f = faces_irregular(nc1 + 1, 0.43, 23);
+  auto f = x1f.accessor<double, 1>();
+
+  std::vector<std::vector<double>> cs;
+  for (int j = 0; j < nvar; ++j) {
+    cs.push_back({0.9 + 0.3 * j, 0.17, -0.031, 0.0042, 0.00071});
+  }
+
+  auto u = torch::zeros({nvar, nc3, nc2, nc1}, torch::kFloat64);
+  for (int j = 0; j < nvar; ++j) {
+    auto cell = cell_avg_poly(x1f, cs[j]);
+    for (int k = 0; k < nc3; ++k) {
+      for (int i = 0; i < nc2; ++i) u[j][k][i] = cell * (1. + 0.05 * i);
+    }
+  }
+
+  Center5Interp cp5;
+  cp5->set_x1_coeffs(x1f);
+
+  auto shape = u.sizes().vec();
+  shape[3] -= 4;
+
+  auto worst_of = [&](torch::Tensor const& l, torch::Tensor const& r) {
+    double worst = 0.;
+    for (int j = 0; j < nvar; ++j) {
+      for (int k = 0; k < nc3; ++k) {
+        for (int i = 0; i < nc2; ++i) {
+          double s = 1. + 0.05 * i;
+          for (int64_t m = 0; m < shape[3]; ++m) {
+            worst = std::max(worst, std::abs(l[j][k][i][m].item<double>() -
+                                             s * poly_at(cs[j], f[m + 2])));
+            worst = std::max(worst, std::abs(r[j][k][i][m].item<double>() -
+                                             s * poly_at(cs[j], f[m + 3])));
+          }
+        }
+      }
+    }
+    return worst;
+  };
+
+  double umax = u.abs().max().item<double>();
+  const int saved = at::get_num_threads();
+
+  for (int nthreads : {1, 2, saved > 4 ? saved : 4}) {
+    at::set_num_threads(nthreads);
+
+    auto l = torch::empty(shape, u.options());
+    auto r = torch::empty(shape, u.options());
+    cp5->left(u, 3, l);
+    cp5->right(u, 3, r);
+    double worst = worst_of(l, r);
+
+    // a state whose x1 stride is not 1: TensorIterator is free to reorder
+    auto perm = u.permute({0, 3, 1, 2}).contiguous().permute({0, 2, 3, 1});
+    ASSERT_NE(perm.stride(3), 1);
+    auto pshape = shape;
+    auto pl = torch::empty(pshape, u.options());
+    auto pr = torch::empty(pshape, u.options());
+    cp5->left(perm, 3, pl);
+    cp5->right(perm, 3, pr);
+    double worst_perm = worst_of(pl, pr);
+
+    std::cout << "  nthreads = " << nthreads << "  worst |cp5 - exact| = "
+              << worst << " (contiguous) / " << worst_perm << " (x1 strided)"
+              << "  = " << worst / (kEps * umax) << " / "
+              << worst_perm / (kEps * umax) << " eps*max|u|" << std::endl;
+
+    // scaled by max|u|, the G1 form.  A one-face slip would cost
+    // O(h du/dx), about ten orders of magnitude larger than this.
+    EXPECT_LT(worst, 256. * kEps * umax) << "nthreads = " << nthreads;
+    EXPECT_LT(worst_perm, 256. * kEps * umax) << "nthreads = " << nthreads;
+  }
+  at::set_num_threads(saved);
+}
+
+// ---------------------------------------------------------------------------
+// 16. reconstruct.cpp:54-55 end to end, on a NON-UNIFORM grid.
+//     The two output slices are one index apart while both iterators read the
+//     same five cells.  Driven through `Reconstruct::forward`, the IRT state
+//     at interface i and the ILT state at interface i must BOTH be the
+//     reconstruction at face i -- from the right and from the left.  With cp5
+//     on degree-4 data they are the same number, so the whole chain
+//     (slice offsets, cm vs cp, row m -> face m+2 / m+3) is checked at once.
+// ---------------------------------------------------------------------------
+TEST(X1Coeffs, reconstruct_forward_face_index_on_a_stretched_grid) {
+  const int nghost = 3, nx1 = 32;
+  const int nc1 = nx1 + 2 * nghost;
+  auto x1f = faces_irregular(nc1 + 1, 0.31, 5);
+  auto f = x1f.accessor<double, 1>();
+  std::vector<double> c{1.1, 0.27, -0.038, 0.0051, 0.00033};
+
+  auto opts = ReconstructOptionsImpl::create();
+  opts->interp()->type("cp5");
+  Reconstruct recon(opts);
+  recon->set_x1_faces(x1f);
+
+  auto u = torch::zeros({1, 1, 1, nc1}, torch::kFloat64);
+  u[0][0][0] = cell_avg_poly(x1f, c);
+
+  auto wlr = recon->forward(u, 3, /*floor=*/false);
+
+  // reconstruct.cpp:120-132: il = 3, iu = nc1 - 3, and output element m lands
+  // at IRT index m+2 and ILT index m+3
+  // reconstruct.cpp:60-64 then overwrites the dummy regions 0..il-1 and
+  // iu+1.. with copies of the edge value, so only il..iu carry a stencil
+  const int il = 3, iu = nc1 - 3;
+  double worst_rt = 0., worst_lt = 0.;
+  for (int i = il; i <= iu; ++i) {
+    double want = poly_at(c, f[i]);
+    worst_rt = std::max(
+        worst_rt, std::abs(wlr[IRT][0][0][0][i].item<double>() - want));
+    worst_lt = std::max(
+        worst_lt, std::abs(wlr[ILT][0][0][0][i].item<double>() - want));
+  }
+  std::cout << "  Reconstruct::forward, irregular widths: worst |IRT - exact| = "
+            << worst_rt << ", worst |ILT - exact| = " << worst_lt << std::endl;
+
+  double umax = u.abs().max().item<double>();
+  EXPECT_LT(worst_rt, 1.e-13 * umax);
+  EXPECT_LT(worst_lt, 1.e-13 * umax);
+}
+
+// ---------------------------------------------------------------------------
+// 17. A dimension that is not x1 is refused rather than silently given the
+//     wrong rows (note Sec. 4.7: `recon23` must not be given a face vector).
+// ---------------------------------------------------------------------------
+TEST(X1Coeffs, a_non_x1_dimension_is_refused) {
+  auto x1f = faces_geometric(21, 1.03);
+  Weno5Interp weno;
+  Center5Interp cp5;
+  weno->set_x1_coeffs(x1f);
+  cp5->set_x1_coeffs(x1f);
+
+  // 20 cells along x1, 9 along x2: dim 2 has a different output count
+  auto u = torch::rand({2, 1, 9, 20}, torch::kFloat64) + 1.;
+  auto out = torch::empty({2, 1, 5, 20}, torch::kFloat64);
+  EXPECT_THROW(weno->left(u, 2, out), c10::Error);
+  EXPECT_THROW(cp5->right(u, 2, out), c10::Error);
+}
+
+// ---------------------------------------------------------------------------
+// 18. CUDA against CPU on BOTH device launch paths.
+//     `recon_tile_width_nu` keeps the one-block-per-line kernel for a line of
+//     at most 1024 cells and switches to the tiled kernel above that
+//     (recon_dispatch.cu:19-21).  The two recover the face index differently,
+//     `threadIdx.x` versus `start + threadIdx.x`, so both are exercised; the
+//     CPU recovers it a third way, through the iterator operand, so agreement
+//     between them is independent evidence.
+// ---------------------------------------------------------------------------
+TEST(X1Coeffs, cuda_matches_cpu_on_both_launch_paths) {
+  if (!snapy_cuda_test_enabled()) {
+    GTEST_SKIP() << "CUDA is not available";
+  }
+
+  for (int nc1 : {64, 1100, 2600}) {  // 64 -> block path, > 1024 -> tiled path
+    const int nvar = 5, nc3 = 2, nc2 = 3;
+    auto x1f = faces_irregular(nc1 + 1, 0.5, 31 + nc1);
+
+    auto u = torch::zeros({nvar, nc3, nc2, nc1}, torch::kFloat64);
+    auto xv = 0.5 * (x1f.slice(0, 0, nc1) + x1f.slice(0, 1, nc1 + 1));
+    for (int j = 0; j < nvar; ++j) {
+      auto line = 2.0 + 0.3 * j + torch::sin(0.07 * xv + 0.4 * j) +
+                  0.2 * torch::cos(0.013 * xv);
+      for (int k = 0; k < nc3; ++k) {
+        for (int i = 0; i < nc2; ++i) u[j][k][i] = line * (1. + 0.05 * i);
+      }
+    }
+
+    auto shape = u.sizes().vec();
+    shape[3] -= 4;
+
+    Weno5Interp wc;
+    Center5Interp pc;
+    wc->set_x1_coeffs(x1f);
+    pc->set_x1_coeffs(x1f);
+
+    auto wl = torch::empty(shape, u.options());
+    auto wr = torch::empty(shape, u.options());
+    auto pl = torch::empty(shape, u.options());
+    auto pr = torch::empty(shape, u.options());
+    wc->left(u, 3, wl);
+    wc->right(u, 3, wr);
+    pc->left(u, 3, pl);
+    pc->right(u, 3, pr);
+
+    Weno5Interp wg;
+    Center5Interp pg;
+    wg->to(torch::kCUDA, torch::kFloat64);
+    pg->to(torch::kCUDA, torch::kFloat64);
+    wg->set_x1_coeffs(x1f);
+    pg->set_x1_coeffs(x1f);
+    ASSERT_TRUE(wg->cm_x1.device().is_cuda());
+
+    auto g = u.to(torch::kCUDA);
+    auto gwl = torch::empty(shape, g.options());
+    auto gwr = torch::empty(shape, g.options());
+    auto gpl = torch::empty(shape, g.options());
+    auto gpr = torch::empty(shape, g.options());
+    wg->left(g, 3, gwl);
+    wg->right(g, 3, gwr);
+    pg->left(g, 3, gpl);
+    pg->right(g, 3, gpr);
+
+    double dwl = (gwl.cpu() - wl).abs().max().item<double>();
+    double dwr = (gwr.cpu() - wr).abs().max().item<double>();
+    double dpl = (gpl.cpu() - pl).abs().max().item<double>();
+    double dpr = (gpr.cpu() - pr).abs().max().item<double>();
+    int64_t nbit = (gwl.cpu() == wl).sum().item<int64_t>() +
+                   (gwr.cpu() == wr).sum().item<int64_t>() +
+                   (gpl.cpu() == pl).sum().item<int64_t>() +
+                   (gpr.cpu() == pr).sum().item<int64_t>();
+    int64_t ntot = 4 * gwl.numel();
+    std::cout << "  nc1 = " << nc1 << (nc1 > 1024 ? " (tiled)" : " (block)")
+              << "  max|cuda - cpu|  weno5 " << dwl << " / " << dwr << "  cp5 "
+              << dpl << " / " << dpr << "   bitwise equal " << nbit << " / "
+              << ntot << std::endl;
+
+    EXPECT_LT(dwl, 1.e-12) << "nc1 = " << nc1;
+    EXPECT_LT(dwr, 1.e-12) << "nc1 = " << nc1;
+    EXPECT_LT(dpl, 1.e-12) << "nc1 = " << nc1;
+    EXPECT_LT(dpr, 1.e-12) << "nc1 = " << nc1;
   }
 }
 
