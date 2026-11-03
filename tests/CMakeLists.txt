@@ -11,6 +11,7 @@ setup_test(test_vic_partial_tangential)
 setup_test(test_radiating_boundary)
 setup_test(test_plm)
 setup_test(test_weno)
+setup_test(test_x1_coeffs)
 setup_test(test_riemann)
 if(CUDA)
   setup_test(test_weno5_cuda_line)
@@ -682,4 +683,29 @@ if(NOT CUDA)
       set_tests_properties(${_t} PROPERTIES DISABLED TRUE)
     endif()
   endforeach()
+endif()
+
+# ---------------------------------------------------------------------------
+# G3 control driver (snapy#280 stage 1).  Built on demand, NOT registered as a
+# ctest test: it takes a deck, a step count and an output directory on the
+# command line.  The same file is built in a tree at the base commit and the
+# two dumps are compared tensor by tensor; it uses no API newer than 2d9fa419.
+# ---------------------------------------------------------------------------
+add_executable(g3_decks.${buildl} EXCLUDE_FROM_ALL g3_decks.cpp)
+set_target_properties(g3_decks.${buildl}
+                      PROPERTIES COMPILE_FLAGS ${CMAKE_CXX_FLAGS_${buildu}})
+target_include_directories(
+  g3_decks.${buildl}
+  PRIVATE ${CMAKE_BINARY_DIR}
+          ${KINTERA_INCLUDE_DIR}
+          ${SNAP_INCLUDE_DIR}
+          ${HARP_INCLUDE_DIR}
+          ${NETCDF_INCLUDES}
+          ${TORCH_INCLUDE_DIR}
+          ${TORCH_API_INCLUDE_DIR})
+target_link_libraries(g3_decks.${buildl}
+  PRIVATE snapy::snap
+          $<IF:$<BOOL:${CUDAToolkit_FOUND}>,snapy::snap_cu,>)
+if (UNIX AND NOT APPLE)
+  target_link_options(g3_decks.${buildl} PRIVATE -Wl,--no-as-needed)
 endif()
