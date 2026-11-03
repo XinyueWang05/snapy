@@ -209,7 +209,8 @@ double project(MeshBlock block, torch::Tensor w, double grav, int* sweeps) {
   double residual;
   std::tie(balanced, residual, *sweeps) =
       balance_column(wi.contiguous(), dx, grav, /*wall_clamp=*/true,
-                     kBalanceRtol, /*max_iter=*/400, pcoord->options->type());
+                     kBalanceRtol, /*max_iter=*/400, pcoord->options->type(),
+                     pcoord->options->stretched_x1());
   wi.copy_(balanced);
   return residual;
 }

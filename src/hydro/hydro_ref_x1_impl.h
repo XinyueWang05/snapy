@@ -10,6 +10,8 @@
 // snap
 #include <snap/snap.h>
 
+#include "hydro_dispatch.hpp"
+
 namespace snap {
 
 template <typename T>
@@ -111,7 +113,8 @@ template <typename T>
 inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
     T const* w, T const* dx1f, T const* psf_lo, T const* psf_hi, T* pref,
     T* dsf, T* dref, int column, int i, int ncolumns, int nc1, int iu, T grav,
-    bool uniform, bool phys_in, bool phys_out, bool wall_clamp) {
+    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp) {
+  bool uniform = x1_grid == kX1RefUniform;
   int ncells = ncolumns * nc1;
   int flat = column * nc1;
   int il = nc1 - 1 - iu;
@@ -178,6 +181,14 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
       int row = 4 - sigma;
       use_six_faces(nc1 - 5, w6e[row], true);
     }
+  } else if (x1_grid == kX1RefStretched) {
+    // #280, a keyed stretched x1: the same log-mean, with ln(lo/hi) taken as
+    // log1p(dp/hi), which it is exactly for the scan's own step lo = hi + dp.
+    // Its round-off floor is eps p/dp instead of eps (p/dp)^2, which is what
+    // keeps a finely resolved stretched column at rest
+    T dp = grav * w[IDN * ncells + flat + i] * dx1f[i];
+    T x = dp / hi;
+    cell_pref = fabs(x) < T(1.e-6) ? T(0.5) * (lo + hi) : dp / log1p(x);
   } else {
     T dp = grav * w[IDN * ncells + flat + i] * dx1f[i];
     T ratio = lo / hi;
@@ -204,12 +215,12 @@ template <typename T>
 inline DISPATCH_MACRO void hydro_ref_x1_impl(
     T const* w, T const* dx1f, T const* anchor, T* psf_lo, T* psf_hi, T* pref,
     T* dsf, T* dref, int column, int ncolumns, int nc1, int iu, T grav,
-    bool uniform, bool phys_in, bool phys_out, bool wall_clamp) {
+    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp) {
   hydro_ref_x1_scan_impl(w, dx1f, anchor, psf_lo, psf_hi, column, ncolumns, nc1,
                          iu, grav);
   for (int i = 0; i < nc1; ++i) {
     hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column, i,
-                           ncolumns, nc1, iu, grav, uniform, phys_in, phys_out,
+                           ncolumns, nc1, iu, grav, x1_grid, phys_in, phys_out,
                            wall_clamp);
   }
 }

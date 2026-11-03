@@ -72,7 +72,8 @@ int main(int argc, char **argv) {
     col[IPR][0][0].copy_((rho * temperature).slice(0, ng, ng + n));
     auto [balanced, balance_error, sweeps] =
         balance_column(col, c->dx1f.slice(0, ng, ng + n).contiguous(), gravity,
-                       true, 1.e-11, 200, "cartesian");
+                       true, 1.e-11, 200, "cartesian",
+                       c->options->stretched_x1());
     // Re-pin midpoint density after the homogeneous balance projection.
     // Cubic interpolation avoids introducing an O(dz^2) reference-density bias.
     auto rb = balanced[IDN][0][0];

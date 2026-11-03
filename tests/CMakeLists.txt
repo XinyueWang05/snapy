@@ -25,6 +25,18 @@ setup_test(test_cubed_sphere_exchange)
 setup_test(test_coordinate)
 setup_test(test_stretched_x1)
 setup_test(test_deck_x1_wiring)
+setup_test(test_stretched_x1_ref)
+# #280: the REF4 switch (or SNAP_X1_CENTROID_EXACT, which implies it) is
+# refused on a stretched x1; the switch is read once per process
+foreach(_arm "wb_ref4;SNAP_WB_REF4=1" "x1_centroid;SNAP_X1_CENTROID_EXACT=1")
+  list(GET _arm 0 _name)
+  list(GET _arm 1 _env)
+  add_test(NAME test_stretched_x1_ref_${_name}.${buildl}
+           COMMAND test_stretched_x1_ref.${buildl}
+                   --gtest_filter=StretchedX1Ref.refuses_wb_ref4_switch)
+  set_tests_properties(test_stretched_x1_ref_${_name}.${buildl}
+                       PROPERTIES ENVIRONMENT "${_env}")
+endforeach()
 setup_test(test_radial_face_moments)
 setup_test(test_hydrostatic)
 setup_test(test_hydro_options)

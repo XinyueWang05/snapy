@@ -96,6 +96,12 @@ namespace snap {
 //! absolute index i > 0 rather than on i > il. `dsf` plays no part in the
 //! fixed point, so the balance is unaffected; nothing else here depends on it.
 //!
+//! `stretched` is the grid key's classification (#280): pass
+//! `coord->options->stretched_x1()` of the grid the column comes from. A
+//! stretched x1 is non-uniform in every block whatever its widths, and its
+//! log-mean takes the log1p form, so the fixed point found here is the one
+//! the solver enforces only when this flag matches the solver's grid.
+//!
 //! Under SNAP_X1_CENTROID_EXACT a spherical-polar block's reference works on
 //! plain means converted from its r^2 means, which this column does not model:
 //! the caller then passes geometry "cartesian", and anything else (unknown, or
@@ -103,6 +109,6 @@ namespace snap {
 std::tuple<torch::Tensor, double, int> balance_column(
     torch::Tensor const& w, torch::Tensor const& dx1f, double grav,
     bool wall_clamp = true, double rtol = 1.e-10, int max_iter = 120,
-    std::string const& geometry = "");
+    std::string const& geometry = "", bool stretched = false);
 
 }  // namespace snap
