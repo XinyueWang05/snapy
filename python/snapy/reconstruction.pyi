@@ -120,3 +120,47 @@ class Reconstruct:
     def buffer(self, name: str) -> torch.Tensor:
         """Get a named buffer."""
         ...
+
+    def set_x1_faces(self, x1f: torch.Tensor) -> None:
+        """
+        Install route A per-face x1 coefficients from a face vector (#280).
+
+        Args:
+            x1f: strictly increasing face vector, nc1 + 1 entries; face k is
+                the lower face of cell k.
+
+        Stage A builds and exposes the rows only: they are readable as the
+        buffers "interp1.cm_x1", "interp1.cp_x1", "interp2.cm_x1" and
+        "interp2.cp_x1", and the x1 sweep still runs the shipped uniform
+        kernels.  The kernels that consume these rows are stage B.
+        """
+        ...
+
+def weno5_x1_coeffs(x1f: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Per-face WENO5 coefficient rows for a face vector (#280 route A).
+
+    Args:
+        x1f: strictly increasing face vector with at least 6 entries.
+
+    Returns:
+        (cm, cp), each of shape (x1f.numel() - 5, 48), float64.  Row m belongs
+        to the five cells bounded by x1f[m:m+6]; cm targets face x1f[m+2] (the
+        IRT state) and cp targets face x1f[m+3] (the ILT state).  Columns 0-44
+        are the nine 5-entry rows c1..c9 the kernel walks, columns 45-47 are
+        the linear weights d0, d1, d2.
+    """
+    ...
+
+def cp5_x1_coeffs(x1f: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Per-face cp5 coefficient rows for a face vector (#280 route A).
+
+    Args:
+        x1f: strictly increasing face vector with at least 6 entries.
+
+    Returns:
+        (cm, cp), each of shape (x1f.numel() - 5, 5), float64, with the same
+        face convention as weno5_x1_coeffs.
+    """
+    ...
