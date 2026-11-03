@@ -25,6 +25,7 @@ setup_test(test_cubed_sphere_exchange)
 setup_test(test_coordinate)
 setup_test(test_stretched_x1)
 setup_test(test_deck_x1_wiring)
+setup_test(test_scalar_x1_wiring)
 setup_test(test_stretched_x1_ref)
 # #280: the REF4 switch (or SNAP_X1_CENTROID_EXACT, which implies it) is
 # refused on a stretched x1; the switch is read once per process

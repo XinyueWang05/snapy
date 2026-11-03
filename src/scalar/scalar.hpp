@@ -102,7 +102,12 @@ class ScalarImpl : public torch::nn::Cloneable<ScalarImpl> {
 
   //! submodules
   Coordinate pcoord = nullptr;
+  //! reconstruction for x2/x3 (and for x1 on a uniform grid, which installs
+  //! nothing on `precon1`, so the two modules hold the same arithmetic)
   Reconstruct precon = nullptr;
+  //! #280: the x1 reconstruction, the only module route A may be given a face
+  //! vector (note Sec. 4.7)
+  Reconstruct precon1 = nullptr;
   RiemannSolver priemann = nullptr;
   torch::Tensor _flux1, _flux2, _flux3, _div;
   //! cumulative count of (cell, tracer) entries with positivity theta < 1
