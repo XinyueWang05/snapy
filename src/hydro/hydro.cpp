@@ -34,6 +34,13 @@ void HydroImpl::reset() {
 
   //// ---- (3) set up reconstruction-x1 model ---- ////
   precon1 = ReconstructImpl::create(options->recon1(), this, "recon1");
+  // #280: a deck that declared a stretched x1 (cells/x1rat or geometry/x1f)
+  // reconstructs on this block's own faces (reconstruct.cpp, above
+  // set_x1_faces). A uniform grid installs nothing, so it keeps the shipped
+  // arithmetic, and `recon23` is never given faces: route A is x1 only.
+  if (pmb->pcoord && pmb->pcoord->options->stretched_x1()) {
+    precon1->set_x1_faces(pmb->pcoord->x1f);
+  }
   if (options->verbose()) {
     SINFO(Hydro) << "Reconstruction-x1 type: "
                  << precon1->pinterp1->options->type() << "\n";
