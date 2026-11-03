@@ -4,7 +4,11 @@
 #include <utility>
 
 // torch
+#include <ATen/TensorIterator.h>
 #include <torch/torch.h>
+
+// snap
+#include "x1_coeffs_device.h"
 
 //! \file x1_coeffs.hpp
 //! Route A per-face WENO5 / cp5 coefficients for a non-uniform x1 grid
@@ -64,10 +68,7 @@
 
 namespace snap {
 
-//! columns of one per-face WENO5 row: 9*5 candidate/smoothness + 3 linear
-constexpr int kWeno5NuCoeff = 48;
-//! columns of one per-face cp5 row
-constexpr int kPoly5NuCoeff = 5;
+// kWeno5NuCoeff / kPoly5NuCoeff live in x1_coeffs_device.h, included above.
 
 //! Per-face WENO5 coefficient rows built from a face vector.
 /*!
@@ -109,5 +110,41 @@ torch::Tensor const& x1_coeffs_for(torch::Tensor const& src,
  */
 torch::Tensor x1_coeffs_row_view(torch::Tensor const& c,
                                  torch::Tensor const& out, int dim);
+
+//! The `TensorIterator` of one route A `left()`/`right()` call.
+/*!
+ * Same configuration as the shipped `Weno5InterpImpl::left`
+ * (src/recon/weno5.cpp:51-57) plus, ON THE CPU ONLY, a third operand: the
+ * zero-stride row view above.
+ *
+ * WHY THE THIRD OPERAND (snapy#280 review item (b)).  `call_weno5_cpu` walks
+ * its sub-range with a plain counter (src/recon/recon_dispatch.cpp:114-123).
+ * `iter.for_each` hands out sub-ranges by grain size, a sub-range may begin
+ * part-way along a line, and the iterator is free to reorder and coalesce
+ * dimensions, so that counter is NOT the x1 index.  With the row view as an
+ * operand the kernel instead reads `data[2] + i * strides[2]`, which
+ * `TensorIterator` computes with the SAME offset arithmetic it uses for the
+ * state.  That is correct for any start, any order and any thread count.
+ *
+ * It also pins the iteration structure: coalescing dimension `k` into `dim`
+ * would need `stride[dim] == stride[k] * shape[k]`, i.e. `NCoeff == 0`, so the
+ * x1 dimension can no longer be merged into another one.
+ *
+ * On CUDA the iterator keeps two operands and `dim` stays squashed: there the
+ * kernel recovers the face index from `threadIdx.x`, which is exact because
+ * `stencil_kernel` gives one block to one whole line.
+ */
+at::TensorIterator x1_nu_iterator(torch::Tensor const& w, int dim,
+                                  torch::Tensor const& out,
+                                  torch::Tensor const& c);
+
+//! The coefficient table must have one contiguous row per output element.
+/*!
+ * Shared by the CPU and the CUDA dispatch so that both refuse the same
+ * malformed table with the same message.
+ */
+void x1_coeffs_check_rows(at::TensorIterator const& iter,
+                          torch::Tensor const& c, int dim, int ncoeff,
+                          char const* what);
 
 }  // namespace snap
