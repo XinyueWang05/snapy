@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <vector>
 
 // POSIX
 #include <unistd.h>
@@ -109,10 +110,11 @@ void build_and_step(std::string const& text) {
 void refuses(std::string const& message, std::string const& forcing = "}",
              std::string const& inner = "reflecting",
              std::string const& outer = "reflecting",
-             std::string const& geometry = "cartesian") {
+             std::string const& geometry = "cartesian",
+             std::string const& recon = "weno5") {
   bool threw = false;
   try {
-    build_and_step(card(true, forcing, inner, outer, geometry));
+    build_and_step(card(true, forcing, inner, outer, geometry, recon));
   } catch (c10::Error const& e) {
     threw = true;
     EXPECT_NE(std::string(e.what()).find(message), std::string::npos)
@@ -122,7 +124,7 @@ void refuses(std::string const& message, std::string const& forcing = "}",
   EXPECT_TRUE(threw) << "a stretched x1 did not refuse: " << message;
   if (geometry == "cartesian") {
     EXPECT_NO_THROW(
-        build_and_step(card(false, forcing, inner, outer, geometry)));
+        build_and_step(card(false, forcing, inner, outer, geometry, recon)));
   } else {  // the uniform twin need not be a runnable deck; it must not refuse
     try {
       build_and_step(card(false, forcing, inner, outer, geometry));
@@ -148,6 +150,35 @@ TEST(StretchedX1Ref, refuses_curvature_correction) {
           ", gravity-work: face-wallc}");
 }
 
+TEST(StretchedX1Ref, refuses_curvature_correction_cp5) {
+  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
+          "supported on a stretched x1",
+          ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
+          "cp5");
+}
+
+TEST(StretchedX1Ref, refuses_curvature_correction_cp3) {
+  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
+          "supported on a stretched x1",
+          ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
+          "cp3");
+}
+
+// ctest test_stretched_x1_ref_radial_exact_off runs this with
+// SNAP_GRAVITY_WORK_RADIAL_EXACT=0: gravity-work face (the default) then keeps
+// the dx^2/12 curvature correction, which a stretched x1 refuses
+TEST(StretchedX1Ref, refuses_curvature_with_radial_exact_off) {
+  if (HydroImpl::gravity_work_radial_exact())
+    GTEST_SKIP() << "SNAP_GRAVITY_WORK_RADIAL_EXACT is on";
+  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
+          "supported on a stretched x1");
+}
+
+TEST(StretchedX1Ref, refuses_diffusion_kappa_iso_only) {
+  refuses("[Diffusion] not supported on a stretched x1",
+          "}\n  diffusion: {kappa_iso: 1.e-3}");
+}
+
 TEST(StretchedX1Ref, refuses_diffusion) {
   refuses("[Diffusion] not supported on a stretched x1",
           "}\n  diffusion: {nu_iso: 1.e-3}");
@@ -170,6 +201,11 @@ TEST(StretchedX1Ref, refuses_periodic_x1) {
 TEST(StretchedX1Ref, refuses_outflow_x1_outer) {
   refuses("the x1-outer boundary is not reflecting", "}", "reflecting",
           "outflow");
+}
+
+TEST(StretchedX1Ref, refuses_outflow_x1_inner) {
+  refuses("the x1-inner boundary is not reflecting", "}", "outflow",
+          "reflecting");
 }
 
 TEST(StretchedX1Ref, refuses_spherical_polar) {
@@ -210,7 +246,8 @@ std::pair<torch::Tensor, torch::Tensor> column(int n, double q,
 
 }  // namespace
 
-// RED/GREEN for the log1p log-mean (#280). A stretched isothermal column
+// RED/GREEN for the keyed cell pressure (#280; the log1p log-mean, now the
+// six-face average (iv)). A stretched isothermal column
 // (nx1 = 128, cells 1.02x apart over 300 km, 107 km scale height, so dp/p is
 // 4.8e-3 to 6.0e-2 per cell) is balanced by the log-mean dp / ln(lo / hi)
 // only to its round-off floor eps (p / dp)^2, so at rtol 1e-13 the
@@ -229,24 +266,152 @@ TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
                c10::Error);
 }
 
-// the same column without the key takes the plain log-mean: the two cell
-// pressures differ only by the round-off log1p removes
-TEST(StretchedX1Ref, keyed_and_unkeyed_log_means_agree_to_round_off) {
+// ctest test_stretched_x1_ref_wb_ref4 (and _x1_centroid) runs this with the
+// switch set: balance_column refuses it on a stretched column, and does not on
+// a uniform one
+TEST(StretchedX1Ref, balance_column_refuses_wb_ref4) {
+  if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
+  std::string message =
+      "balance_column: SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies "
+      "it) is not supported on a stretched x1 (#280)";
   auto [w, dx1f] = column(32, 1.058, 3.e5);
-  auto sizes = w.sizes().slice(1).vec();
-  auto run = [&](int x1_grid) {
-    auto lo = torch::empty(sizes, w.options()), hi = torch::empty_like(lo);
-    auto pref = torch::empty_like(lo), dsf = torch::empty_like(lo),
-         dref = torch::empty_like(lo);
-    at::native::call_hydro_ref_x1(torch::kCPU, w, dx1f, torch::Tensor(), lo,
-                                  hi, pref, dsf, dref, 31, 22., x1_grid, true,
-                                  true, true);
-    return pref;
-  };
-  auto keyed = run(kX1RefStretched), plain = run(kX1RefNonUniform);
-  double rel = ((keyed - plain).abs() / plain).max().item<double>();
-  std::printf("keyed vs plain log-mean, max relative difference %.3e\n", rel);
-  EXPECT_LT(rel, 1.e-12);
+  bool threw = false;
+  try {
+    balance_column(w, dx1f, 22., true, 1.e-10, 120, "cartesian",
+                   /*stretched=*/true);
+  } catch (c10::Error const& e) {
+    threw = true;
+    EXPECT_NE(std::string(e.what()).find(message), std::string::npos)
+        << e.what();
+  }
+  EXPECT_TRUE(threw) << "balance_column did not refuse REF4 on a stretched x1";
+  auto [wu, dxu] = column(32, 1.0 + 1.e-12, 3.e5);  // uniform to round-off
+  dxu.fill_(3.e5 / 32.);
+  EXPECT_NO_THROW(balance_column(wu, dxu, 22., true, 1.e-10, 120, "cartesian",
+                                 /*stretched=*/false));
+}
+
+namespace {
+
+// the dry adiabat of the jupiter_gcm deck: g = 22, R = 3936.0434, cp = 3.5 R,
+// 600 K and 1e7 Pa at z = 0
+constexpr double kG = 22., kR = 3936.0434, kTs = 600., kPs = 1.e7;
+double adiabat_p(double z) {
+  return kPs * std::pow(1. - kG / (3.5 * kR) * z / kTs, 3.5);
+}
+double adiabat_rho(double z) {
+  return adiabat_p(z) / (kR * (kTs - kG / (3.5 * kR) * z));
+}
+
+//! the cell average of f over [a, b], 8-point Gauss-Legendre
+template <typename F>
+double cell_average(F f, double a, double b) {
+  static double const x[4] = {0.1834346424956498, 0.5255324099163290,
+                              0.7966664774136267, 0.9602898564975363};
+  static double const g[4] = {0.3626837833783620, 0.3137066458778873,
+                              0.2223810344533745, 0.1012285362903763};
+  double c = 0.5 * (a + b), h = 0.5 * (b - a), sum = 0.;
+  for (int k = 0; k < 4; ++k) sum += g[k] * (f(c - h * x[k]) + f(c + h * x[k]));
+  return 0.5 * sum;
+}
+
+//! |pref - pbar| / pbar per cell of the adiabat on the faces `f`, the scan
+//! anchored at the exact top face pressure so only the cell formula is seen
+std::vector<double> pref_error(std::vector<double> const& f, bool stretched,
+                               bool phys) {
+  int n = static_cast<int>(f.size()) - 1;
+  auto opt = torch::TensorOptions().dtype(torch::kFloat64);
+  auto w = torch::zeros({IPR + 1, 1, 1, n}, opt);
+  auto dx1f = torch::empty({n}, opt);
+  for (int i = 0; i < n; ++i) {
+    w[IDN][0][0][i] = cell_average(adiabat_rho, f[i], f[i + 1]);
+    w[IPR][0][0][i] = cell_average(adiabat_p, f[i], f[i + 1]);
+    dx1f[i] = f[i + 1] - f[i];
+  }
+  auto anchor = torch::full({1, 1, 1}, adiabat_p(f[n]), opt);
+  auto lo = torch::empty({1, 1, n}, opt), hi = torch::empty_like(lo);
+  auto pref = torch::empty_like(lo), dsf = torch::empty_like(lo),
+       dref = torch::empty_like(lo);
+  auto rows = stretched ? hydro_ref_x1_stretched_rows(dx1f, n - 1, phys, phys,
+                                                      true)
+                        : torch::Tensor();
+  at::native::call_hydro_ref_x1(
+      torch::kCPU, w, dx1f, anchor, lo, hi, pref, dsf, dref, n - 1, kG,
+      stretched ? kX1RefStretched : kX1RefUniform, phys, phys, true, rows);
+  std::vector<double> e(n);
+  for (int i = 0; i < n; ++i) {
+    double pbar = w[IPR][0][0][i].item<double>();
+    e[i] = std::abs(pref[0][0][i].item<double>() - pbar) / pbar;
+  }
+  return e;
+}
+
+std::vector<double> uniform_faces(double x0, double h, int n) {
+  std::vector<double> f(n + 1);
+  for (int k = 0; k <= n; ++k) f[k] = x0 + k * h;
+  return f;
+}
+
+}  // namespace
+
+// #280 (iv): on a stretched adiabat (32 cells over 300 km, each 1/1.058 of
+// the one below) every cell's reference pressure is within 2x of what the
+// uniform branch makes of a cell of the same width in the same place: the
+// same wall row on a uniform column from the same wall, or an interior cell
+// on a uniform patch around it (floor 1e-14)
+TEST(StretchedX1Ref, iv_adiabat_cells_within_2x_uniform) {
+  int n = 32;
+  double q = 1. / 1.058, L = 3.e5;
+  std::vector<double> f(n + 1);
+  for (int k = 0; k <= n; ++k)
+    f[k] = L * std::expm1(k * std::log(q)) / std::expm1(n * std::log(q));
+  f[n] = L;
+  auto es = pref_error(f, true, true);
+  double worst = 0.;
+  for (int i = 0; i < n; ++i) {
+    double h = f[i + 1] - f[i], eu;
+    if (i < 2) {  // bottom wall rows
+      eu = pref_error(uniform_faces(0., h, 8), false, true)[i];
+    } else if (i >= n - 2) {  // top wall rows
+      eu = pref_error(uniform_faces(L - 8 * h, h, 8), false, true)[8 - n + i];
+    } else {  // interior: the six-face row of a uniform patch
+      eu = pref_error(uniform_faces(f[i] - 4 * h, h, 9), false, false)[4];
+    }
+    double ratio = es[i] / std::max(eu, 1.e-14);
+    worst = std::max(worst, ratio);
+    std::printf("cell %2d h %8.1f stretched %.3e uniform %.3e ratio %.3f\n", i,
+                h, es[i], eu, ratio);
+    EXPECT_LE(ratio, 2.) << "cell " << i;
+  }
+  std::printf("worst ratio %.3f\n", worst);
+}
+
+// (iv) on a uniform face list is the uniform branch: its rows are w6 inside
+// and w6e at the walls (reversed at the top)
+TEST(StretchedX1Ref, iv_rows_on_uniform_faces_are_the_uniform_weights) {
+  int n = 12;
+  auto rows = hydro_ref_x1_stretched_rows(
+      torch::full({n}, 2.5e3, torch::kFloat64), n - 1, true, true, true);
+  double const w6[6] = {11. / 1440., -31. / 480., 401. / 720.,
+                        401. / 720., -31. / 480., 11. / 1440.};
+  double const w6e[2][6] = {
+      {95. / 288., 1427. / 1440., -133. / 240., 241. / 720., -173. / 1440.,
+       3. / 160.},
+      {-3. / 160., 637. / 1440., 511. / 720., -43. / 240., 77. / 1440.,
+       -11. / 1440.}};
+  double dw = 0.;
+  for (int i = 0; i < n; ++i) {
+    int start = i < 2 ? 0 : (i >= n - 2 ? n - 5 : i - 2);
+    EXPECT_EQ(rows[i][0].item<double>(), start) << "cell " << i;
+    for (int m = 0; m < 6; ++m) {
+      double expect = i < 2        ? w6e[i][m]
+                      : i >= n - 2 ? w6e[n - 1 - i][5 - m]
+                                   : w6[m];
+      dw = std::max(dw, std::abs(rows[i][1 + m].item<double>() - expect));
+    }
+  }
+  std::printf("max |dw| against the uniform weights: %.3e\n", dw);
+  EXPECT_EQ(dw, 0.);
 }
 
 int main(int argc, char** argv) {

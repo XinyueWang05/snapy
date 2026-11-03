@@ -161,7 +161,7 @@ void dispatch(Inputs const& in, RefOutput const& out, bool uniform,
   at::native::call_hydro_ref_x1(in.w.device().type(), in.w, in.dx1f, in.anchor,
                                 out.psf_lo, out.psf_hi, out.pref, out.dsf,
                                 out.dref, iu, 1.0, uniform, phys_in, phys_out,
-                                wall_clamp);
+                                wall_clamp, torch::Tensor());
 }
 
 //! the cells a block owns: [il, iu]. tensor_reference has no clamped branch on
@@ -348,7 +348,8 @@ TEST(HydroRefX1Dispatch,
   auto a = allocate_output(big.w);
   at::native::call_hydro_ref_x1(torch::kCPU, big.w, big.dx1f, torch::Tensor(),
                                 a.psf_lo, a.psf_hi, a.pref, a.dsf, a.dref,
-                                ng + 11, g, true, true, false, true);
+                                ng + 11, g, true, true, false, true,
+                                torch::Tensor());
 
   // the bottom FOUR of those cells as their own block -- same wall, same
   // column, and the seam anchor the relay would have handed it (hydro.cpp's
@@ -358,7 +359,8 @@ TEST(HydroRefX1Dispatch,
   auto b = allocate_output(small.w);
   at::native::call_hydro_ref_x1(torch::kCPU, small.w, small.dx1f, anchor,
                                 b.psf_lo, b.psf_hi, b.pref, b.dsf, b.dref,
-                                ng + 3, g, true, true, false, true);
+                                ng + 3, g, true, true, false, true,
+                                torch::Tensor());
 
   auto want = a.pref.narrow(-1, ng, 4);
   auto got = b.pref.narrow(-1, ng, 4);
