@@ -1,4 +1,4 @@
-# snapy#280 route A, stage A — the per-face coefficient layout
+# snapy#280 route A — the per-face coefficient layout
 
 Branch `feat/280-stage1-piece2-route-a` on `happysky19/snapy`, cut from
 `chengcli/snapy` main `2d9fa419be56513159c695267b68753d5b223b31`.
@@ -356,7 +356,91 @@ refusal list are Xinyue's piece 3 and are not on this branch.
 `left()` and `right()` run the shipped uniform kernels, unchanged. The `_nu`
 kernels (`interp_impl_nu.h/.cuh`), their dispatch
 (`recon_dispatch_nu.{hpp,cpp,cu}`), the CUDA build and the G3 bitwise deck are
-stage B. A note for that job, not solved here: `call_weno5_cpu`'s
-`iter.for_each` lambda (`src/recon/recon_dispatch.cpp:114-123`) does not track
-the x1 index, and `for_each` may start a sub-range mid-line, so the loop
-counter is **not** reliably the face index.
+stage B, below.
+
+---
+
+## 8. Stage B — how each backend finds the face index
+
+Three code paths consume the rows and each recovers the face index its own
+way. All three are exact, and that they agree is checked numerically.
+
+### 8.1 CUDA: `threadIdx.x` is the output index
+
+`stencil_kernel` (`src/utils/loops.cuh:91-108`) gives **one block to one whole
+line**: `block.x` is set to the x1 size of the input and `grid.x` comes out as
+`len[2] / block.x == 1`. So `threadIdx.x` ranges over the line and, for the
+threads that stay active (`id <= nt - 5`), it *is* the output index along x1.
+The row is `coeff + 48 * id`.
+
+The tiled launcher keeps the same invariant — `TORCH_CHECK(grid.x == 1)` at
+`src/recon/recon_dispatch.cu:83`, copied verbatim into
+`stencil_kernel_tiled_nu` — and walks the line in tiles, so there the index is
+`start + threadIdx.x`. Both are checked against the CPU in
+`X1Coeffs.cuda_matches_cpu_on_both_launch_paths`, with `nc1 = 64` on the block
+path and `nc1 = 1100, 2600` on the tiled path.
+
+### 8.2 CPU: the loop counter is *not* the face index
+
+`call_weno5_cpu` walks its sub-range with a plain counter
+(`src/recon/recon_dispatch.cpp:114-123`). That counter cannot be used for the
+row, for three independent reasons:
+
+1. `iter.for_each` splits the work by grain size and hands each thread a
+   sub-range that **may begin part-way along a line**;
+2. `TensorIterator` is free to **reorder** dimensions, so the innermost loop is
+   not necessarily x1;
+3. it may **coalesce** dimensions, so one step of `i` need not be one step in
+   x1 at all.
+
+Route A therefore adds a **third operand**: a view of the table whose element
+at face `f` is `c[f][0]`, with stride `NCoeff` along `dim` and stride 0
+everywhere else (`snap::x1_coeffs_row_view`). The row pointer is then
+`data[2] + i * strides[2]`, computed by `TensorIterator` with the *same*
+offset arithmetic it uses for the state. This is correct for any sub-range
+start, any dimension order and any thread count, because it never mentions the
+loop counter's meaning.
+
+It also *pins* the structure: coalescing dimension `k` into `dim` would need
+`stride[dim] == stride[k] * shape[k]`, i.e. `NCoeff == 0`, so x1 can no longer
+be merged into a neighbour. A per-chunk assertion in
+`src/recon/recon_dispatch_nu.cpp` checks, at O(1) cost, that the pointers a
+sub-range produced really do land on row boundaries inside the table.
+
+On CUDA the iterator keeps two operands and `dim` stays squashed, exactly as
+the shipped path has it.
+
+### 8.3 Why every face-index test runs on an *irregular* grid
+
+**A geometric grid cannot detect a row-to-face shift either.** The rows depend
+only on the width *ratios* inside the window, and a geometric grid has
+`h_{m+n} = h_m q^n`, so every window has the same ratios and every row is
+identical. Shifting the whole table by one row then changes nothing: measured
+on `q = 1.06`, the worst change was `5.5e-12`, pure round-off.
+
+Uniform **and** geometric grids are both blind here, so
+`tests/test_x1_coeffs.cpp` grew a `faces_irregular()` whose consecutive widths
+are unrelated, and every stage-B face-index check uses it. On that grid, worst
+`|cp5 - exact at its own face|`:
+
+| table fed to `left()`                | worst error |
+| ------------------------------------ | ----------- |
+| the correct per-face rows            | `5.7e-14`   |
+| the shipped uniform rows             | `1.20`      |
+| the two sides swapped (`cp` for `cm`)| `10.23`     |
+| the table shifted by one row         | `2.40`      |
+
+### 8.4 `reconstruct.cpp:54-55`, end to end
+
+The two output slices are one index apart while both iterators read the same
+five cells: `outl = wlr[IRT].slice(dim, il-1, iu+1)` and
+`outr = wlr[ILT].slice(dim, il, iu+2)`. Driven through
+`Reconstruct::forward` on irregular widths with `cp5` and degree-4 data, the
+IRT state at interface `i` and the ILT state at interface `i` must both be the
+reconstruction at face `i`; measured `4.4e-15` and `1.1e-14`. Only `il..iu`
+are read, because `:60-64` overwrites the dummy regions with copies of the
+edge value.
+
+A dimension that is not x1 is refused rather than silently given the wrong
+rows (`out.size(dim) != table rows`), which is the guard that keeps `recon23`
+honest if it is ever handed a face vector.
