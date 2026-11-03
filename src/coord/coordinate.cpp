@@ -382,6 +382,11 @@ CoordinateImpl::CoordinateImpl(const CoordinateOptions& options_,
   // the geometric source coefficients amplify that ULP by ~7 orders. Sliced
   // from a global array, a face has one value whoever owns it.
   if (op->stretched_x1()) {
+    // #280 stage 1: only the Cartesian metrics are built from the faces
+    TORCH_CHECK(op->type() == "cartesian",
+                "a stretched x1 (geometry/x1f or cells/x1rat) is supported "
+                "only on a cartesian geometry in stage 1 (#280); got '",
+                op->type(), "'");
     x1f = op->global_x1f()
               .narrow(0, op->ix1() - op->nghost() + op->x1f_ghosts(),
                       op->nx1() + 2 * op->nghost() + 1)

@@ -14,7 +14,8 @@ namespace snap {
 
 std::tuple<torch::Tensor, double, int> balance_column(
     torch::Tensor const& w, torch::Tensor const& dx1f, double grav,
-    bool wall_clamp, double rtol, int max_iter, std::string const& geometry) {
+    bool wall_clamp, double rtol, int max_iter, std::string const& geometry,
+    bool stretched) {
   TORCH_CHECK(grav > 0., "balance_column: grav is a downward magnitude (> 0)");
   TORCH_CHECK(w.dim() == 4, "balance_column: w must be (nvar, nc3, nc2, nx1)");
   TORCH_CHECK(w.size(0) > IPR, "balance_column: w has no pressure channel");
@@ -62,10 +63,16 @@ std::tuple<torch::Tensor, double, int> balance_column(
   auto dref = torch::empty(sizes, w.options());
   torch::Tensor anchor;  // undefined: the kernel builds its own top anchor
 
-  // the same test the solver applies to its own grid (hydro.cpp)
+  // the same classification the solver applies to its own grid (hydro.cpp):
+  // from the grid key on a stretched x1 (#280), else probed
   auto d = dxf.to(torch::kCPU).to(torch::kFloat64);
   bool uniform =
+      !stretched &&
       (d.max() - d.min()).item<double>() < 1.e-10 * d.mean().item<double>();
+  int x1_grid = stretched ? kX1RefStretched : int(uniform);
+  TORCH_CHECK(!(stretched && wb_ref4_enabled()),
+              "balance_column: SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which "
+              "implies it) is not supported on a stretched x1 (#280); unset it");
   auto wgt = grav * dxf;
   // #289 (SNAP_WB_REF4): on a non-uniform grid the switch changes the cell
   // reference pressure, so the fixed point is the switched reference's, and
@@ -85,7 +92,7 @@ std::tuple<torch::Tensor, double, int> balance_column(
   for (; sweeps <= max_iter; ++sweeps) {
     at::native::call_hydro_ref_x1(wb.device().type(), wb, dxf, anchor, psf_lo,
                                   psf_hi, pref, dsf, dref, nc1 - 1, grav,
-                                  uniform, /*phys_in=*/true, /*phys_out=*/true,
+                                  x1_grid, /*phys_in=*/true, /*phys_out=*/true,
                                   wall_clamp);
     if (ref4) wb_ref4_cells(st, wb, psf_lo, psf_hi, pref, dref);
     auto pp = prs - pref;

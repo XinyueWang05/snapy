@@ -15,7 +15,7 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
                       torch::Tensor const& anchor, torch::Tensor const& psf_lo,
                       torch::Tensor const& psf_hi, torch::Tensor const& pref,
                       torch::Tensor const& dsf, torch::Tensor const& dref,
-                      int iu, double grav, bool uniform, bool phys_in,
+                      int iu, double grav, int x1_grid, bool phys_in,
                       bool phys_out, bool wall_clamp) {
   int ncolumns = w.size(1) * w.size(2);
   int nc1 = w.size(3);
@@ -28,7 +28,7 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
             psf_lo.data_ptr<scalar_t>(), psf_hi.data_ptr<scalar_t>(),
             pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),
             dref.data_ptr<scalar_t>(), static_cast<int>(column), ncolumns, nc1,
-            iu, scalar_t(grav), uniform, phys_in, phys_out, wall_clamp);
+            iu, scalar_t(grav), x1_grid, phys_in, phys_out, wall_clamp);
       }
     });
   });
@@ -39,8 +39,13 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
                       torch::Tensor const& psf_lo, torch::Tensor const& psf_hi,
                       torch::Tensor const& pref, torch::Tensor const& dsf,
                       torch::Tensor const& dref, int iu, double grav,
-                      bool uniform, bool phys_in, bool phys_out,
+                      int x1_grid, bool phys_in, bool phys_out,
                       bool wall_clamp) {
+  // #280: the stretched-x1 path (and route A) has no MPS form in stage 1
+  TORCH_CHECK(x1_grid != kX1RefStretched,
+              "a stretched x1 (geometry/x1f or cells/x1rat) is not supported "
+              "on MPS (#280); run it on CPU or CUDA");
+  bool uniform = x1_grid == kX1RefUniform;
   int nc1 = w.size(-1);
   int il = nc1 - 1 - iu;
   auto rho = w[IDN];
