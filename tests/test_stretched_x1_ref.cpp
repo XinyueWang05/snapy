@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 // C/C++
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -196,6 +197,71 @@ TEST(StretchedX1Ref, refuses_top_cool) {
 
 TEST(StretchedX1Ref, refuses_periodic_x1) {
   refuses("needs reflecting x1 boundaries", "}", "periodic", "periodic");
+}
+
+namespace {
+
+// the card under a cubed layout, the one layout where x1-inner/x1-outer:
+// periodic set the layout's periodic_z(); x2/x3 periodic set periodic_x() and
+// periodic_y() under any layout. `axis` 2 or 3 widens that axis to 4 cells
+// and makes it periodic, x1 staying reflecting.
+std::string cubed_card(bool stretched, int axis) {
+  auto text = "distribute: {layout: cubed}\n" +
+              (axis == 1 ? card(stretched, "}", "periodic", "periodic")
+                         : card(stretched));
+  if (axis > 1) {
+    auto n = std::string("nx") + char('0' + axis);
+    text.replace(text.find(n + ": 1"), n.size() + 3, n + ": 4");
+    text += "    x" + std::to_string(axis) + "-inner: periodic\n    x" +
+            std::to_string(axis) + "-outer: periodic\n";
+  }
+  return text;
+}
+
+//! the layout flags the card's periodic faces set, read off the parsed options
+std::array<bool, 3> periodic_xyz(std::string const& text) {
+  auto fname = write_temp(text);
+  auto options = MeshBlockOptionsImpl::from_yaml(fname);
+  std::remove(fname.c_str());
+  auto layout = options->layout();
+  return {layout->periodic_x(), layout->periodic_y(), layout->periodic_z()};
+}
+
+}  // namespace
+
+// The layout's x1 wrap is periodic_z() (meshblock.cpp: lx1 is the layout's z
+// location, and periodic_z() nulls the x1 boundary functions). With them nulled
+// is_physical_boundary is false on both x1 faces, so the is_reflecting test in
+// _check_stretched_x1 passes and only its periodic_z() read can refuse.
+TEST(StretchedX1Ref, refuses_layout_periodic_x1) {
+  auto flags = periodic_xyz(cubed_card(true, 1));
+  EXPECT_FALSE(flags[0]);
+  EXPECT_FALSE(flags[1]);
+  EXPECT_TRUE(flags[2]);
+
+  bool threw = false;
+  try {
+    build_and_step(cubed_card(true, 1));
+  } catch (c10::Error const& e) {
+    threw = true;
+    EXPECT_NE(std::string(e.what()).find("needs reflecting x1 boundaries"),
+              std::string::npos)
+        << e.what();
+  }
+  EXPECT_TRUE(threw) << "a stretched x1 under the layout's x1 wrap ran";
+  EXPECT_NO_THROW(build_and_step(cubed_card(false, 1)));
+}
+
+// periodic x2 or x3 sets periodic_x() or periodic_y(), never periodic_z(), and
+// the stretched card with reflecting x1 then runs
+TEST(StretchedX1Ref, layout_periodic_x2_x3_pass_the_x1_check) {
+  for (int axis : {2, 3}) {
+    auto flags = periodic_xyz(cubed_card(true, axis));
+    EXPECT_EQ(flags[0], axis == 2) << "x" << axis;
+    EXPECT_EQ(flags[1], axis == 3) << "x" << axis;
+    EXPECT_FALSE(flags[2]) << "x" << axis;
+    EXPECT_NO_THROW(build_and_step(cubed_card(true, axis))) << "x" << axis;
+  }
 }
 
 TEST(StretchedX1Ref, refuses_outflow_x1_outer) {
