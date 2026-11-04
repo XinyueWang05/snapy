@@ -3,7 +3,7 @@
 //! ONE `Reconstruct` (scalar.cpp:35), so on a stretched deck its tracers take
 //! the x1 path on uniform coefficients while the hydro variables take the
 //! coordinate's own rows.  Installing the rows on that single module is not a
-//! fix: `weno5.cpp:75,98` take the route-A path for ANY dimension once a table
+//! fix: `weno5.cpp:56,79` take the route-A path for ANY dimension once a table
 //! is installed, so x2/x3 would be reconstructed with x1 coefficients (and
 //! throw outright when the x2 dimension is not the x1 length).
 //!
