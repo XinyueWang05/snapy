@@ -73,6 +73,29 @@ inline DISPATCH_MACRO T hydro_ref_x1_wall_rop(T r0, T r1, int k) {
   return e > T(0) ? e : r0;
 }
 
+//! #280, a keyed stretched x1: the same continuation with a real step count
+//! kk = d_k / ((dx0 + dx1) / 2), d_k the distance from the wall cell centre to
+//! ghost centre k over the mirrored widths (ghost m has the width of owned
+//! cell m-1 from the wall), dx0, dx1 the wall cell and its neighbour
+template <typename T>
+inline DISPATCH_MACRO T hydro_ref_x1_wall_rop_d(T r0, T r1, T kk) {
+  T e = r1 > r0 ? r0 * pow(r0 / r1, kk) : r0 + kk * (r0 - r1);
+  return e > T(0) ? e : r0;
+}
+
+//! kk of ghost k past the wall cell jw; dir = -1 below a lower wall, +1 above
+//! an upper wall; the mirrored widths are read from the owned cells
+template <typename T>
+inline DISPATCH_MACRO T hydro_ref_x1_wall_steps(T const* dx1f, int jw, int dir,
+                                                int k) {
+  T d = T(0.5) * dx1f[jw];
+  for (int m = 1; m <= k; ++m) {
+    T hm = dx1f[jw - dir * (m - 1)];
+    d += (m < k) ? hm : T(0.5) * hm;
+  }
+  return d / (T(0.5) * (dx1f[jw] + dx1f[jw - dir]));
+}
+
 //! rho/p smoothed by a 5-point binomial along x1: the reference must
 //! track the column profile at LARGE scales only. An unsmoothed local rho/p
 //! makes rho' degenerate with the pressure perturbation, so entropy/buoyancy
@@ -89,7 +112,9 @@ template <typename T>
 inline DISPATCH_MACRO T hydro_ref_x1_rop_smooth(T const* w, int ncells,
                                                 int flat, int nc1, int i,
                                                 int jlo, int jhi, bool ext_lo,
-                                                bool ext_hi) {
+                                                bool ext_hi,
+                                                T const* dx1f = nullptr,
+                                                bool stretched = false) {
   auto rop = [&](int j) {
     return w[IDN * ncells + flat + j] / w[IPR * ncells + flat + j];
   };
@@ -99,9 +124,17 @@ inline DISPATCH_MACRO T hydro_ref_x1_rop_smooth(T const* w, int ncells,
     if (j < jlo) {
       v[m + 2] = ext_lo ? hydro_ref_x1_wall_rop(rop(jlo), rop(jlo + 1), jlo - j)
                         : rop(jlo);
+      if (stretched && ext_lo)
+        v[m + 2] = hydro_ref_x1_wall_rop_d(
+            rop(jlo), rop(jlo + 1),
+            hydro_ref_x1_wall_steps(dx1f, jlo, -1, jlo - j));
     } else if (j > jhi) {
       v[m + 2] = ext_hi ? hydro_ref_x1_wall_rop(rop(jhi), rop(jhi - 1), j - jhi)
                         : rop(jhi);
+      if (stretched && ext_hi)
+        v[m + 2] = hydro_ref_x1_wall_rop_d(
+            rop(jhi), rop(jhi - 1),
+            hydro_ref_x1_wall_steps(dx1f, jhi, +1, j - jhi));
     } else {
       v[m + 2] = rop(j);
     }
@@ -231,10 +264,12 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
   int jhi = (wall_clamp && phys_out) ? iu : nc1 - 1;
   bool ext_lo = wall_clamp && phys_in && il + 1 <= iu;
   bool ext_hi = wall_clamp && phys_out && iu - 1 >= il;
+  bool stretched = x1_grid == kX1RefStretched;
   T rs = hydro_ref_x1_rop_smooth(w, ncells, flat, nc1, i, jlo, jhi, ext_lo,
-                                 ext_hi);
+                                 ext_hi, dx1f, stretched);
   T rf = i > 0 ? T(0.5) * (hydro_ref_x1_rop_smooth(w, ncells, flat, nc1, i - 1,
-                                                   jlo, jhi, ext_lo, ext_hi) +
+                                                   jlo, jhi, ext_lo, ext_hi,
+                                                   dx1f, stretched) +
                            rs)
                : rs;
   // #280, a keyed stretched x1: the face between cells i-1 and i (the lower
@@ -242,7 +277,7 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
   // ratios, the cell below weighted by the width of the cell above
   if (x1_grid == kX1RefStretched && i > 0) {
     T rs_dn = hydro_ref_x1_rop_smooth(w, ncells, flat, nc1, i - 1, jlo, jhi,
-                                      ext_lo, ext_hi);
+                                      ext_lo, ext_hi, dx1f, stretched);
     rf = (dx1f[i] * rs_dn + dx1f[i - 1] * rs) / (dx1f[i - 1] + dx1f[i]);
   }
   dref[flat + i] = cell_pref * rs;
