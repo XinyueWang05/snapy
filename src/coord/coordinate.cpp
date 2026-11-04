@@ -165,6 +165,21 @@ CoordinateOptions CoordinateOptionsImpl::from_yaml(
       TORCH_CHECK(faces[k] > faces[k - 1],
                   "stretched x1 faces must increase strictly; face ", k, " = ",
                   faces[k], " <= ", faces[k - 1]);
+    // #280 stage 1: neighbouring cells may differ only slowly.  An abrupt
+    // width jump is outside the contract route A's per-face rows were
+    // measured on, so it is refused here rather than left to show up as an
+    // unexplained loss of order.  Bound and its measurement:
+    // CoordinateOptionsImpl::kX1MaxWidthRatio.
+    for (size_t k = 1; k + 1 < faces.size(); ++k) {
+      double below = faces[k] - faces[k - 1], above = faces[k + 1] - faces[k];
+      double ratio = std::max(above / below, below / above);
+      TORCH_CHECK(ratio <= CoordinateOptionsImpl::kX1MaxWidthRatio,
+                  "stretched x1: the cell widths across face ", k,
+                  " differ by a factor ", ratio, " (", below, " and ", above,
+                  "), outside the stage-1 bound [1/",
+                  CoordinateOptionsImpl::kX1MaxWidthRatio, ", ",
+                  CoordinateOptionsImpl::kX1MaxWidthRatio, "] (#280)");
+    }
     op->x1f_interior(faces);
     op->global_x1min() = faces.front();
     op->global_x1max() = faces.back();
