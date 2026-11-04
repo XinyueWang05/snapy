@@ -13,13 +13,9 @@
 namespace snap {
 namespace {
 
-//! The row pointers a sub-range produced really are rows of this table.
-/*!
- * O(1) per `for_each` chunk, so it costs nothing, and it is the assertion that
- * the review item (b) argument is sound: whatever sub-range, order or thread
- * count `TensorIterator` picks, `data[2] + i * strides[2]` must land on a row
- * boundary inside the table.  A loop-counter-derived pointer would not.
- */
+//! The row pointers a sub-range produced really are rows of this table: O(1)
+//! per `for_each` chunk, and the standing assertion of the review item (b)
+//! argument (layout note Sec. 8.2).
 void check_chunk(char const* base, int64_t nrow, int64_t rowbytes,
                  char** data, const int64_t* strides, int64_t n,
                  char const* what) {
@@ -32,16 +28,11 @@ void check_chunk(char const* base, int64_t nrow, int64_t rowbytes,
               "] coefficient row pointer is outside the table");
 }
 
-//! The CPU half of route A, for a row of any width.
-/*!
- * Three operands: the output, the state, and the zero-stride row view built by
- * `x1_nu_iterator`.  `data[2] + i * strides[2]` is the base of THIS output
- * element's own row, with no reliance on `i` being the face index.
- *
- * WENO5 and cp5 differ only in the row width and in which host kernel walks
- * the row; `op` carries the second so that the iterator configuration, the
- * refusals and the chunk check exist once (snapy#280 review item 4).
- */
+//! The CPU half of route A for a row of any width: three operands, the third
+//! the zero-stride row view, so `data[2] + i * strides[2]` is this output
+//! element's own row without `i` being the face index (layout note Sec. 8.2).
+//! `op` carries the only other difference between weno5 and cp5, the host
+//! kernel that walks the row (snapy#280 review item 4).
 template <int NCoeff, typename Op>
 void call_nu_cpu(at::TensorIterator& iter, torch::Tensor const& coeff, int dim,
                  char const* what, Op op) {
@@ -99,11 +90,10 @@ void call_poly5_nu_cpu(at::TensorIterator& iter, torch::Tensor coeff, int dim) {
       });
 }
 
-// MPS is out of scope for stage 1 (note Sec. 8.3).  The shipped MPS path is a
-// single `wu.matmul(c)` against one shared row
-// (src/recon/recon_dispatch.cpp:127-168); a per-face rewrite would be a
-// different algorithm with no hardware here to check it on.  Refusing is
-// better than silently running uniform coefficients on a stretched grid.
+// MPS is out of scope for stage 1 (note Sec. 8.3): a per-face rewrite of the
+// shared-row `wu.matmul(c)` path would be a different algorithm with no
+// hardware here to check it on, so route A refuses rather than running
+// uniform coefficients on a stretched grid.
 void call_weno5_nu_mps(at::TensorIterator&, torch::Tensor, int, bool) {
   TORCH_CHECK(false,
               "[weno5_nu] a stretched x1 grid is not supported on the MPS "
