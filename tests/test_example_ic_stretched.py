@@ -73,6 +73,11 @@ def main():
     args = parser.parse_args()
     args.exe = os.path.abspath(args.exe)
 
+    # a configuration that does not build the examples has nothing to drive
+    if not os.path.exists(args.exe):
+        print(f"{args.exe} was not built")
+        sys.exit(125)
+
     import kintera
 
     # gas constant of the deck gas, as kintera weighs it
