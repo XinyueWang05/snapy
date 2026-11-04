@@ -99,7 +99,8 @@ namespace snap {
 //! `stretched` is the grid key's classification (#280): pass
 //! `coord->options->stretched_x1()` of the grid the column comes from. A
 //! stretched x1 is non-uniform in every block whatever its widths, and its
-//! log-mean takes the log1p form, so the fixed point found here is the one
+//! cell pressure is the six-face degree-5 Lagrange cell average with per-cell
+//! rows (hydro_ref_x1_stretched_rows), so the fixed point found here is the one
 //! the solver enforces only when this flag matches the solver's grid.
 //!
 //! Under SNAP_X1_CENTROID_EXACT a spherical-polar block's reference works on
