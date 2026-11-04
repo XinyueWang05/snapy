@@ -86,6 +86,18 @@ set_tests_properties(test_yamlcpp_cstdint_patch PROPERTIES
 setup_test(test_sedimentation_guards)
 setup_test(test_balance_column)
 setup_test(test_hydro_ref_x1)
+# snapy#280: the ONLY registered coverage of the kX1RefStretched arm of
+# hydro_ref_x1_cell_impl on a GPU.  test_hydro_ref_x1's own `cuda_matches_cpu`
+# goes through a `dispatch()` helper whose `rows` argument is hard-coded
+# undefined, so rows_ptr is nullptr on both sides and the branch #280 adds
+# never executes there.  Named separately so it can be selected and so a skip
+# is visible: the body gates on snapy_cuda_test_enabled() and SKIPS, it does
+# not fail, when no GPU is present.
+add_test(NAME test_hydro_ref_x1_stretched_cuda.${buildl}
+         COMMAND test_hydro_ref_x1.${buildl}
+                 --gtest_filter=HydroRefX1Dispatch.cuda_matches_cpu_on_the_stretched_rows)
+set_tests_properties(test_hydro_ref_x1_stretched_cuda.${buildl}
+                     PROPERTIES TIMEOUT 120 LABELS "hydro;gpu")
 setup_test(test_uranus_cycle1_abort)
 setup_test(test_pref_local_seam)
 # UCzhangxi/snapy#44: the same 4-vs-1 x1-block comparison (200 steps, 1e-12)
