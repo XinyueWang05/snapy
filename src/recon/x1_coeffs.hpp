@@ -59,12 +59,25 @@
 //! linear weights are face dependent too, so route A carries them in the same
 //! row: 45 + 3 = 48, exactly as the design note Sec. 4.2 "Storage" says.
 //!
-//! The smoothness rows ARE pre-scaled: c4..c9 store A_r and B_r divided by
-//! sqrt(13/12) and sqrt(1/4) respectively, so the kernel's own 13/12 and 1/4
-//! multipliers reproduce the Jiang & Shu indicator
+//! WHAT c4..c9 ACTUALLY HOLD (x1_coeffs.cpp, `ptype_row`).  Everything is in
+//! the window's normalised coordinate zeta = (x - y3)/h2, in which the target
+//! cell I_i is [-1, 0] and has unit width.  Writing candidate r as the
+//! quadratic p_r = a0 + a1 zeta + a2 zeta^2,
+//!
+//!   c4, c6, c8  ->  2 a2            = p_r''      (constant)
+//!   c5, c7, c9  ->  +-(2 a2 - 2 a1) = -+2 p_r'(-1/2), at I_i's centre
+//!
+//! i.e. plain derivative combinations, scaled by 2; the sign of the second
+//! row is `bsign` (x1_coeffs.cpp), the convention of the shipped literals,
+//! and beta is invariant under it.  They are NOT divided by anything: the
+//! kernel's own 13/12 and 1/4 multipliers then give
+//!   beta_r = 13/12 (2 a2)^2 + 1/4 (2 a2 - 2 a1)^2 = 13/3 a2^2 + (a1 - a2)^2,
+//! which IS the Jiang & Shu indicator
 //!   beta_r = sum_{m=1,2} h_i^{2m-1} int_{I_i} (p_r^{(m)})^2 dx
-//! unchanged.  beta is therefore dimensionless on any grid and the shipped
-//! absolute eps = 1e-6 keeps its uniform-grid meaning (note Sec. 4.2).
+//! evaluated at h_i = 1, exactly (checked to round-off over random windows).
+//! Because zeta makes h_i = 1 on every grid, beta is dimensionless there and
+//! the shipped absolute eps = 1e-6 keeps its uniform-grid meaning
+//! (note Sec. 4.2).
 
 namespace snap {
 
