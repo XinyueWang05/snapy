@@ -759,3 +759,7 @@ target_link_libraries(g3_decks.${buildl}
 if (UNIX AND NOT APPLE)
   target_link_options(g3_decks.${buildl} PRIVATE -Wl,--no-as-needed)
 endif()
+
+# run_hydro's initial column on a stretched x1 against the analytic adiabat (#280)
+snapy_add_python_test(test_example_ic_stretched TIMEOUT 120 LABELS "python;examples"
+  ARGS --exe ${CMAKE_BINARY_DIR}/bin/run_hydro.${buildl})
