@@ -76,34 +76,14 @@ void ReconstructImpl::reset() {
   pinterp2 = InterpImpl::create(options->interp(), this, "interp2");
 }
 
-// ===========================================================================
-// snapy#280 stage 1, piece 1 (grid key) -> piece 2 (route A).
-//
-// The caller is HydroImpl's setup, right after `recon1` is created
-// (src/hydro/hydro.cpp:36): a deck whose grid key the coordinate accepted
-// (`CoordinateOptions::stretched_x1()`, coordinate.hpp:97) hands this module
-// `pcoord->x1f`, which is already the block's slice of the global face vector
-// (src/coord/coordinate.cpp:383-391), so no extra communication and no second
-// face array is needed here.
-//
-// WHY THE BLOCK'S OWN FACES REACH FAR ENOUGH.  The WENO5/cp5 stencils close
-// on global faces -3 .. gnx+3, i.e. exactly THREE ghost faces beyond each
-// interior end, and no more.  Derivation from the indices in this file:
-//   * output element m is the window of cells m..m+4 (interpolation.hpp:64-65
-//     with stencils()==5), bounded by faces m..m+5;
-//   * left() targets face m+2 and right() targets face m+3 (lines 54-55
-//     below);
-//   * the first interior face f=0 is reached as right() of m=f-3=-3, whose
-//     window needs faces -3..2, and as left() of m=f-2=-2, needing -2..3;
-//   * the last interior face f=gnx is reached as left() of m=gnx-2, needing
-//     faces gnx-2..gnx+3, and as right() of m=gnx-3, needing gnx-3..gnx+2.
-// So the union is faces -3..gnx+3, and `global_x1f` carries
-// max(nghost, 3) + 1 ghost faces per end (`x1f_ghosts()`, coordinate.hpp:101),
-// which covers it for every weno5 deck -- those need nghost >= 3 anyway.
-//
-// The ONE extra face per end is NOT for these stencils: it is for dx1v[0] on
-// the stretched metric fill (cartesian.cpp:28, 58-60), piece 1's own item.
-// ===========================================================================
+//! Install route A per-face coefficients on both interpolators (snapy#280).
+/*!
+ * `x1f` is this block's own slice of the global face vector, handed over by
+ * HydroImpl's setup when the deck's grid key was accepted.  The block's own
+ * faces reach far enough for the WENO5/cp5 stencils (they close on global
+ * faces -3..gnx+3, against the max(nghost, 3) + 1 that `global_x1f` carries
+ * per end); the derivation is in the #280 design note, frozen at bc29594f.
+ */
 void ReconstructImpl::set_x1_faces(torch::Tensor const& x1f) {
   pinterp1->set_x1_coeffs(x1f);
   pinterp2->set_x1_coeffs(x1f);

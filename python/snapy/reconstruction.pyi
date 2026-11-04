@@ -129,10 +129,11 @@ class Reconstruct:
             x1f: strictly increasing face vector, nc1 + 1 entries; face k is
                 the lower face of cell k.
 
-        Stage A builds and exposes the rows only: they are readable as the
-        buffers "interp1.cm_x1", "interp1.cp_x1", "interp2.cm_x1" and
-        "interp2.cp_x1", and the x1 sweep still runs the shipped uniform
-        kernels.  The kernels that consume these rows are stage B.
+        Once installed, the x1 sweep of this module RUNS these rows: left()
+        and right() take the per-face kernels, and x2/x3 are refused outright
+        (route A covers x1 only).  The rows are then readable as the buffers
+        "interp1.cm_x1", "interp1.cp_x1", "interp2.cm_x1" and "interp2.cp_x1";
+        a module with no face vector registers none of them.
         """
         ...
 
