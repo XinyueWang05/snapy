@@ -87,7 +87,16 @@ void expect_metrics(Cartesian const& coord, std::vector<double> const& g,
       << coord->dx1v;
 }
 
-const std::vector<double> kFaces = {0., 1., 3., 4., 7., 8.5, 10., 11., 16.};
+// A non-self-similar interior face list: the widths rise and fall, so no two
+// are in a fixed ratio and nothing here can pass by accident on a geometric
+// grid. Widths 1.25, 1.75, 2.25, 1.75, 2.5, 2, 2.5, 2 -- quarter integers, so
+// every width and every mirrored ghost width is exact in binary and the
+// equalities below are bit for bit. The largest adjacent ratio is 2.5/1.75 =
+// 1.4286, inside the stage-1 bound kX1MaxWidthRatio = 1.5 (#280). The list
+// this replaced jumped 1 -> 5 at the last face and is refused at parse time
+// now; that refusal is tested in test_x1_qmax_guard.cpp.
+const std::vector<double> kFaces = {0.,  1.25, 3.,   5.25, 7.,
+                                    9.5, 11.5, 14.,  16.};
 
 std::string face_list(std::vector<double> const& f) {
   std::string s = "  x1f: [";
