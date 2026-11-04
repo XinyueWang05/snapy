@@ -34,49 +34,24 @@ void Weno5InterpImpl::reset() {
 }
 
 void Weno5InterpImpl::set_x1_coeffs(torch::Tensor const& x1f) {
-  auto rows = weno5_x1_coeffs(x1f);
-
-  // follow whatever dtype and device the module was moved to, as cm/cp do
-  auto opts = cm.options();
-  x1_install_tables(*this, cm_x1, cp_x1, rows.first.to(opts).contiguous(),
-                    rows.second.to(opts).contiguous());
-
-  // the dtype/device casts belong to the old table
-  cm_x1_cast = torch::Tensor();
-  cp_x1_cast = torch::Tensor();
+  x1_set_coeffs(*this, x1f, &weno5_x1_coeffs);
 }
 
 //! Route A: run the per-face kernel with `src` as the coefficient table.
 /*!
  * Factored out so that `left()` and `right()` differ only in which table they
- * pass, exactly as they differ only in `cm` vs `cp` on the uniform path.
+ * pass, exactly as they differ only in `cm` vs `cp` on the uniform path.  The
+ * refusals and the iterator are shared with cp5 (x1_coeffs.hpp).
  */
 void Weno5InterpImpl::forward_nu(torch::Tensor const& w, int dim,
                                  torch::Tensor const& out,
                                  torch::Tensor const& src,
                                  torch::Tensor& cache) {
-  // x1 is the LAST dimension of (nvar, nc3, nc2, nc1) everywhere in snap, so
-  // this is the whole of "dim is x1".  The row-count test below cannot stand
-  // in for it: on a block with nc2 == nc1 the x2 output has exactly as many
-  // elements as the table has rows, and the x1 coefficients would then be
-  // applied along x2 with no complaint (note Sec. 4.7).
-  TORCH_CHECK(dim == out.dim() - 1,
-              "[weno5] route A covers the x1 dimension only, so a module "
-              "holding per-face x1 coefficients must be given the last "
-              "dimension of a (nvar, nc3, nc2, nc1) state; got dim ", dim,
-              " of a ", out.dim(), "-dimensional output (note Sec. 4.7)");
-
-  TORCH_CHECK(out.size(dim) == src.size(0),
-              "[weno5] per-face x1 coefficients are installed but dimension ",
-              dim, " has ", out.size(dim), " outputs while the table has ",
-              src.size(0),
-              " rows; route A covers the x1 dimension only, so `recon23` must "
-              "not be given a face vector (note Sec. 4.7)");
-
-  auto const& c = x1_coeffs_for(src, cache, w);
-  auto iter = x1_nu_iterator(w, dim, out, c);
-  at::native::call_weno5_nu(out.device().type(), iter, c, dim,
-                            options->scale());
+  x1_forward_nu(w, dim, out, src, cache, "weno5",
+                [&](at::TensorIterator& iter, torch::Tensor const& c) {
+                  at::native::call_weno5_nu(out.device().type(), iter, c, dim,
+                                            options->scale());
+                });
 }
 
 void Weno5InterpImpl::left(torch::Tensor w, int dim, torch::Tensor const& out) {

@@ -23,15 +23,7 @@ void Center5InterpImpl::reset() {
 }
 
 void Center5InterpImpl::set_x1_coeffs(torch::Tensor const& x1f) {
-  auto rows = cp5_x1_coeffs(x1f);
-
-  auto opts = cm.options();
-  x1_install_tables(*this, cm_x1, cp_x1, rows.first.to(opts).contiguous(),
-                    rows.second.to(opts).contiguous());
-
-  // the dtype/device casts belong to the old table
-  cm_x1_cast = torch::Tensor();
-  cp_x1_cast = torch::Tensor();
+  x1_set_coeffs(*this, x1f, &cp5_x1_coeffs);
 }
 
 //! Route A: run the per-face kernel with `src` as the coefficient table.
@@ -39,24 +31,10 @@ void Center5InterpImpl::forward_nu(torch::Tensor const& w, int dim,
                                    torch::Tensor const& out,
                                    torch::Tensor const& src,
                                    torch::Tensor& cache) {
-  // see Weno5InterpImpl::forward_nu: a size test cannot tell x2 from x1 on a
-  // block with nc2 == nc1, so the dimension itself is checked
-  TORCH_CHECK(dim == out.dim() - 1,
-              "[cp5] route A covers the x1 dimension only, so a module "
-              "holding per-face x1 coefficients must be given the last "
-              "dimension of a (nvar, nc3, nc2, nc1) state; got dim ", dim,
-              " of a ", out.dim(), "-dimensional output (note Sec. 4.7)");
-
-  TORCH_CHECK(out.size(dim) == src.size(0),
-              "[cp5] per-face x1 coefficients are installed but dimension ",
-              dim, " has ", out.size(dim), " outputs while the table has ",
-              src.size(0),
-              " rows; route A covers the x1 dimension only, so `recon23` must "
-              "not be given a face vector (note Sec. 4.7)");
-
-  auto const& c = x1_coeffs_for(src, cache, w);
-  auto iter = x1_nu_iterator(w, dim, out, c);
-  at::native::call_poly5_nu(out.device().type(), iter, c, dim);
+  x1_forward_nu(w, dim, out, src, cache, "cp5",
+                [&](at::TensorIterator& iter, torch::Tensor const& c) {
+                  at::native::call_poly5_nu(out.device().type(), iter, c, dim);
+                });
 }
 
 void Center5InterpImpl::left(torch::Tensor w, int dim,

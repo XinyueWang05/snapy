@@ -131,6 +131,30 @@ void x1_install_tables(torch::nn::Module& m, torch::Tensor& cm_x1,
                        torch::Tensor& cp_x1, torch::Tensor const& cm_rows,
                        torch::Tensor const& cp_rows);
 
+//! The body of `set_x1_coeffs`, for either 5-point interpolator.
+/*!
+ * weno5 and cp5 differ only in which builder turns the faces into rows
+ * (snapy#280 review item 4).
+ *
+ * \param[in,out] self   the interpolator; its `cm` fixes the dtype/device
+ * \param[in]     x1f    the block's face vector
+ * \param[in]     build  `weno5_x1_coeffs` or `cp5_x1_coeffs`
+ */
+template <typename Self, typename Builder>
+void x1_set_coeffs(Self& self, torch::Tensor const& x1f, Builder build) {
+  auto rows = build(x1f);
+
+  // follow whatever dtype and device the module was moved to, as cm/cp do
+  auto opts = self.cm.options();
+  x1_install_tables(self, self.cm_x1, self.cp_x1,
+                    rows.first.to(opts).contiguous(),
+                    rows.second.to(opts).contiguous());
+
+  // the dtype/device casts belong to the old table
+  self.cm_x1_cast = torch::Tensor();
+  self.cp_x1_cast = torch::Tensor();
+}
+
 //! The coefficient table in the state's dtype and device, cached.
 /*!
  * Buffers follow `module.to(...)`, so the fast path is a plain reference.  A
@@ -187,5 +211,43 @@ at::TensorIterator x1_nu_iterator(torch::Tensor const& w, int dim,
 void x1_coeffs_check_rows(at::TensorIterator const& iter,
                           torch::Tensor const& c, int dim, int ncoeff,
                           char const* what);
+
+//! The body of `forward_nu`: route A's two refusals, then the kernel.
+/*!
+ * \param[in]     w      the state
+ * \param[in]     dim    must be the x1 dimension, i.e. the last one
+ * \param[in]     out    the face output
+ * \param[in]     src    `cm_x1` or `cp_x1`
+ * \param[in,out] cache  the matching dtype/device cast
+ * \param[in]     what   "weno5" or "cp5", for the messages
+ * \param[in]     call   runs the backend kernel on the built iterator
+ */
+template <typename Call>
+void x1_forward_nu(torch::Tensor const& w, int dim, torch::Tensor const& out,
+                   torch::Tensor const& src, torch::Tensor& cache,
+                   char const* what, Call call) {
+  // x1 is the LAST dimension of (nvar, nc3, nc2, nc1) everywhere in snap, so
+  // this is the whole of "dim is x1".  The row-count test below cannot stand
+  // in for it: on a block with nc2 == nc1 the x2 output has exactly as many
+  // elements as the table has rows, and the x1 coefficients would then be
+  // applied along x2 with no complaint (note Sec. 4.7).
+  TORCH_CHECK(dim == out.dim() - 1, "[", what,
+              "] route A covers the x1 dimension only, so a module holding "
+              "per-face x1 coefficients must be given the last dimension of "
+              "a (nvar, nc3, nc2, nc1) state; got dim ", dim, " of a ",
+              out.dim(), "-dimensional output (note Sec. 4.7)");
+
+  TORCH_CHECK(out.size(dim) == src.size(0), "[", what,
+              "] per-face x1 coefficients are installed but dimension ", dim,
+              " has ", out.size(dim), " outputs while the table has ",
+              src.size(0),
+              " rows; route A covers the x1 dimension only, so `recon23` must "
+              "not be given a face vector (note Sec. 4.7)");
+
+  auto const& c = x1_coeffs_for(src, cache, w);
+  auto iter = x1_nu_iterator(w, dim, out, c);
+  call(iter, c);
+}
+
 
 }  // namespace snap

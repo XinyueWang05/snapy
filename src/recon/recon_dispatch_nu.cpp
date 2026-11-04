@@ -32,23 +32,26 @@ void check_chunk(char const* base, int64_t nrow, int64_t rowbytes,
               "] coefficient row pointer is outside the table");
 }
 
-}  // namespace
-
-//! CPU WENO5 with per-face coefficients.
+//! The CPU half of route A, for a row of any width.
 /*!
  * Three operands: the output, the state, and the zero-stride row view built by
  * `x1_nu_iterator`.  `data[2] + i * strides[2]` is the base of THIS output
- * element's own 48-wide row, with no reliance on `i` being the face index.
+ * element's own row, with no reliance on `i` being the face index.
+ *
+ * WENO5 and cp5 differ only in the row width and in which host kernel walks
+ * the row; `op` carries the second so that the iterator configuration, the
+ * refusals and the chunk check exist once (snapy#280 review item 4).
  */
-void call_weno5_nu_cpu(at::TensorIterator& iter, torch::Tensor coeff, int dim,
-                       bool scale) {
-  x1_coeffs_check_rows(iter, coeff, dim, kWeno5NuCoeff, "weno5_nu");
-  TORCH_CHECK(iter.ninputs() == 2,
-              "[weno5_nu] the CPU iterator needs the coefficient row view; "
+template <int NCoeff, typename Op>
+void call_nu_cpu(at::TensorIterator& iter, torch::Tensor const& coeff, int dim,
+                 char const* what, Op op) {
+  x1_coeffs_check_rows(iter, coeff, dim, NCoeff, what);
+  TORCH_CHECK(iter.ninputs() == 2, "[", what,
+              "] the CPU iterator needs the coefficient row view; "
               "build it with snap::x1_nu_iterator");
   int grain_size = iter.numel() / at::get_num_threads();
 
-  AT_DISPATCH_FLOATING_TYPES(iter.dtype(), "call_weno5_nu_cpu", [&] {
+  AT_DISPATCH_FLOATING_TYPES(iter.dtype(), "call_nu_cpu", [&] {
     int stride1 = at::native::ensure_nonempty_stride(iter.input(), dim);
     int stride2 = at::native::ensure_nonempty_stride(iter.input(), 0);
 
@@ -57,56 +60,43 @@ void call_weno5_nu_cpu(at::TensorIterator& iter, torch::Tensor coeff, int dim,
 
     auto const* base = reinterpret_cast<char const*>(coeff.data_ptr<scalar_t>());
     int64_t nrow = coeff.size(0);
-    int64_t rowbytes = kWeno5NuCoeff * static_cast<int64_t>(sizeof(scalar_t));
+    int64_t rowbytes = NCoeff * static_cast<int64_t>(sizeof(scalar_t));
 
     iter.for_each(
         [&](char** data, const int64_t* strides, int64_t n) {
           if (n <= 0) return;
-          check_chunk(base, nrow, rowbytes, data, strides, n, "weno5_nu");
+          check_chunk(base, nrow, rowbytes, data, strides, n, what);
           for (int i = 0; i < n; i++) {
             auto out = reinterpret_cast<scalar_t*>(data[0] + i * strides[0]);
             auto w = reinterpret_cast<scalar_t*>(data[1] + i * strides[1]);
             auto c = reinterpret_cast<scalar_t const*>(data[2] + i * strides[2]);
-            interp_weno5_nu_impl(out, w, c, stride1, stride2, stride_out, nvar,
-                                 scale);
+            op(out, w, c, stride1, stride2, stride_out, nvar);
           }
         },
         grain_size);
   });
 }
 
-//! CPU cp5 with per-face coefficients.  Same three-operand iterator.
+}  // namespace
+
+void call_weno5_nu_cpu(at::TensorIterator& iter, torch::Tensor coeff, int dim,
+                       bool scale) {
+  call_nu_cpu<kWeno5NuCoeff>(
+      iter, coeff, dim, "weno5_nu",
+      [scale](auto* out, auto const* w, auto const* c, int stride1,
+              int stride2, int stride_out, int nvar) {
+        interp_weno5_nu_impl(out, w, c, stride1, stride2, stride_out, nvar,
+                             scale);
+      });
+}
+
 void call_poly5_nu_cpu(at::TensorIterator& iter, torch::Tensor coeff, int dim) {
-  x1_coeffs_check_rows(iter, coeff, dim, kPoly5NuCoeff, "poly5_nu");
-  TORCH_CHECK(iter.ninputs() == 2,
-              "[poly5_nu] the CPU iterator needs the coefficient row view; "
-              "build it with snap::x1_nu_iterator");
-  int grain_size = iter.numel() / at::get_num_threads();
-
-  AT_DISPATCH_FLOATING_TYPES(iter.dtype(), "call_poly5_nu_cpu", [&] {
-    int stride1 = at::native::ensure_nonempty_stride(iter.input(), dim);
-    int stride2 = at::native::ensure_nonempty_stride(iter.input(), 0);
-
-    int stride_out = at::native::ensure_nonempty_stride(iter.output(), 0);
-    int nvar = at::native::ensure_nonempty_size(iter.output(), 0);
-
-    auto const* base = reinterpret_cast<char const*>(coeff.data_ptr<scalar_t>());
-    int64_t nrow = coeff.size(0);
-    int64_t rowbytes = kPoly5NuCoeff * static_cast<int64_t>(sizeof(scalar_t));
-
-    iter.for_each(
-        [&](char** data, const int64_t* strides, int64_t n) {
-          if (n <= 0) return;
-          check_chunk(base, nrow, rowbytes, data, strides, n, "poly5_nu");
-          for (int i = 0; i < n; i++) {
-            auto out = reinterpret_cast<scalar_t*>(data[0] + i * strides[0]);
-            auto w = reinterpret_cast<scalar_t*>(data[1] + i * strides[1]);
-            auto c = reinterpret_cast<scalar_t const*>(data[2] + i * strides[2]);
-            interp_poly5_nu_impl(out, w, c, stride1, stride2, stride_out, nvar);
-          }
-        },
-        grain_size);
-  });
+  call_nu_cpu<kPoly5NuCoeff>(
+      iter, coeff, dim, "poly5_nu",
+      [](auto* out, auto const* w, auto const* c, int stride1, int stride2,
+         int stride_out, int nvar) {
+        interp_poly5_nu_impl(out, w, c, stride1, stride2, stride_out, nvar);
+      });
 }
 
 // MPS is out of scope for stage 1 (note Sec. 8.3).  The shipped MPS path is a

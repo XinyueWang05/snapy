@@ -22,19 +22,8 @@
 
 namespace snap {
 
-//! const-correct twin of `_vvdot` (interp_impl.h:13).
-/*!
- * The coefficient row is read-only here: it points into the module's
- * registered buffer, which `left()`/`right()` must not modify.
- */
-template <int N, typename T>
-inline T _vvdot_c(T const* v1, T const* v2) {
-  T out = 0.;
-  for (int i = 0; i < N; ++i) {
-    out += v1[i] * v2[i];
-  }
-  return out;
-}
+// `_vvdot_c` lives in x1_coeffs_device.h, which both this header and the
+// device one include, so there is one definition of it.
 
 //! WENO5 with a per-face 48-wide coefficient row.
 /*!
