@@ -129,11 +129,10 @@ class Reconstruct:
             x1f: strictly increasing face vector, nc1 + 1 entries; face k is
                 the lower face of cell k.
 
-        Once installed, the x1 sweep of this module RUNS these rows: left()
-        and right() take the per-face kernels, and x2/x3 are refused outright
-        (route A covers x1 only).  The rows are then readable as the buffers
-        "interp1.cm_x1", "interp1.cp_x1", "interp2.cm_x1" and "interp2.cp_x1";
-        a module with no face vector registers none of them.
+        The x1 sweep then RUNS these rows (readable as the buffers
+        "interp1.cm_x1", "interp1.cp_x1", "interp2.cm_x1", "interp2.cp_x1",
+        which exist only after this call), x2/x3 are refused, and so is a
+        module whose type is not weno5 or cp5 (note Sec. 4.7, bc29594f).
         """
         ...
 

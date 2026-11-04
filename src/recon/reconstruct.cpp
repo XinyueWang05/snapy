@@ -78,11 +78,8 @@ void ReconstructImpl::reset() {
 
 //! Install route A per-face coefficients on both interpolators (snapy#280).
 /*!
- * `x1f` is this block's own slice of the global face vector, handed over by
- * HydroImpl's setup when the deck's grid key was accepted.  The block's own
- * faces reach far enough for the WENO5/cp5 stencils (they close on global
- * faces -3..gnx+3, against the max(nghost, 3) + 1 that `global_x1f` carries
- * per end); the derivation is in the #280 design note, frozen at bc29594f.
+ * This block's own `x1f` reaches far enough for the WENO5/cp5 stencils (they
+ * close on global faces -3..gnx+3); derivation in the note, frozen bc29594f.
  */
 void ReconstructImpl::set_x1_faces(torch::Tensor const& x1f) {
   pinterp1->set_x1_coeffs(x1f);

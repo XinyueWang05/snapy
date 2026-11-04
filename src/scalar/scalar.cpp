@@ -38,16 +38,13 @@ void ScalarImpl::reset() {
   // One module served DIM1, DIM2 and DIM3 here, so a stretched deck left the
   // tracers reconstructing x1 on uniform coefficients while the hydro
   // variables used the coordinate's own rows.  Installing the rows on
-  // `precon` is not an option: weno5.cpp:75,98 take the route-A path for any
-  // dimension once a table is there, so x2/x3 would be reconstructed with x1
-  // coefficients.  Same shape as the hydro wiring (hydro.cpp, the guarded
-  // block after `recon1` is created): same options, and `precon` is never
-  // given faces.
+  // `precon` is not an option: weno5.cpp's left()/right() take the route-A
+  // path for any dimension once a table is there, so x2/x3 would be
+  // reconstructed with x1 coefficients.  Same shape as the hydro wiring
+  // (hydro.cpp, the guarded block after `recon1` is created).
   //
-  // A UNIFORM DECK REGISTERS NOTHING.  There the second module would be a
-  // copy of the first with identical arithmetic, so `precon1` is simply the
-  // same object; the tree, and with it `named_modules()` and every state dict
-  // built from it, is the one this module had before #280 (review item 2).
+  // A uniform deck registers nothing: `precon1` IS `precon`, so the tree is
+  // the pre-#280 one (review item 2).
   if (pcoord && pcoord->options->stretched_x1()) {
     precon1 = ReconstructImpl::create(options->recon(), this, "recon1");
     precon1->set_x1_faces(pcoord->x1f);
