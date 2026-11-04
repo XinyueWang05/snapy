@@ -39,6 +39,19 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
                        torch::Tensor const &dref, int iu, double grav,
                        int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
                        torch::Tensor const &rows) {
+  // the host path's own check (hydro_dispatch.cpp), plus the two things a
+  // kernel launch cannot survive: `rows.data_ptr` below is handed straight to
+  // the device, so a host or non-contiguous table would be read as garbage
+  TORCH_CHECK(x1_grid != kX1RefStretched || rows.defined(),
+              "hydro_ref_x1: a stretched x1 needs its six-face rows");
+  TORCH_CHECK(!rows.defined() || (rows.device() == w.device() &&
+                                  rows.scalar_type() == w.scalar_type() &&
+                                  rows.is_contiguous()),
+              "hydro_ref_x1: the stretched rows must be contiguous and on the "
+              "state's own device and dtype; got ", rows.device(), "/",
+              rows.scalar_type(), " against ", w.device(), "/",
+              w.scalar_type());
+
   at::cuda::CUDAGuard device_guard(w.device());
   int ncolumns = w.size(1) * w.size(2);
   int nc1 = w.size(3);
