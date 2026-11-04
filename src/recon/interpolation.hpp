@@ -63,11 +63,23 @@ class InterpImpl {
    *                 tables belongs to output element m, i.e. to the 5-cell
    *                 window x1f[m .. m+5]; see src/recon/x1_coeffs.hpp.
    *
-   * The default is a no-op, so every interpolator that route A does not cover
-   * (dc, plm, ppm, cp3, weno3 -- note Sec. 4.7) keeps today's behaviour and a
-   * caller does not have to know which one it holds.
+   * REVIEW F3.  Route A covers weno5 and cp5, and the default used to be a
+   * silent no-op: a deck that declared a stretched x1 and reconstructed it
+   * with dc, plm, ppm, cp3 or weno3 ran uniform-grid arithmetic on a
+   * non-uniform grid and said nothing.  It is refused instead, here, where
+   * the rows are installed -- that is once per block at configure time, so no
+   * inner loop pays for it (design note bc29594f, Sec. 4.7).
    */
-  virtual void set_x1_coeffs(torch::Tensor const& /*x1f*/) {}
+  virtual void set_x1_coeffs(torch::Tensor const& /*x1f*/) {
+    TORCH_CHECK(false, "[", options->type(),
+                "] has no stretched-x1 reconstruction: route A builds "
+                "per-face coefficients for weno5 and cp5 only, and running ",
+                options->type(),
+                " here would silently apply uniform-grid arithmetic to a "
+                "non-uniform x1.  A deck that declares a stretched x1 "
+                "(cells/x1rat or geometry/x1f) must reconstruct x1 with "
+                "weno5 or cp5 (note Sec. 4.7)");
+  }
 
   //! True once per-face coefficients are installed.
   virtual bool has_x1_coeffs() const { return false; }

@@ -375,14 +375,16 @@ TEST(X1Coeffs, reconstruct_seam_and_buffer_names) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. A type route A does not cover ignores the call (note Sec. 4.7).
+// 9. A type route A does not cover REFUSES the call (review F3, note
+//    Sec. 4.7); tests/test_x1_stretched_refusal.cpp is the full case.
 // ---------------------------------------------------------------------------
-TEST(X1Coeffs, uncovered_types_ignore_faces) {
+TEST(X1Coeffs, uncovered_types_refuse_faces) {
   for (char const* type : {"dc", "plm", "ppm", "cp3", "weno3"}) {
     auto opts = ReconstructOptionsImpl::create();
     opts->interp()->type(type);
     Reconstruct recon(opts);
-    recon->set_x1_faces(faces_geometric(21, 1.03));
+    EXPECT_THROW(recon->set_x1_faces(faces_geometric(21, 1.03)), c10::Error)
+        << type;
     EXPECT_FALSE(recon->pinterp1->has_x1_coeffs()) << type;
   }
 }
