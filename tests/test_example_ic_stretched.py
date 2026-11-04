@@ -55,6 +55,13 @@ def column(exe, workdir, q):
     name = "u" if q is None else f"q{q}"
     d = os.path.join(workdir, name)
     os.makedirs(d)
+    # kintera resolves its resources against the running process's cwd, and the
+    # example below runs in `d`. The build leaves nasa9.dat in this script's own
+    # working directory instead (tests/CMakeLists.txt:508-511), so link it in.
+    for res in ("nasa9.dat",):
+        src = os.path.join(os.getcwd(), res)
+        if os.path.exists(src):
+            os.symlink(src, os.path.join(d, res))
     rat = "" if q is None else f", x1rat: {q!r}"
     with open(os.path.join(d, "col.yaml"), "w") as f:
         f.write(DECK.format(n=N, rat=rat, g=G, ps=PS, ts=TS))
