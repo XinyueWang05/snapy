@@ -90,6 +90,34 @@ std::pair<torch::Tensor, torch::Tensor> weno5_x1_coeffs(
  */
 std::pair<torch::Tensor, torch::Tensor> cp5_x1_coeffs(torch::Tensor const& x1f);
 
+//! Put the route A tables back in the state a fresh `reset()` leaves them in.
+/*!
+ * A uniform deck must not carry them at all: `named_buffers(recurse=true)` is
+ * copied wholesale into the user-forcing input dictionary
+ * (`src/mesh/meshblock.cpp`, `stage_forcing_variables`), so an unused buffer
+ * is an extra key in everyone's forcing.  They are therefore registered in
+ * `set_x1_coeffs`, not here, and a module with no face vector holds two plain
+ * empty tensors -- defined, so `numel()` and `has_x1_coeffs()` still work.
+ *
+ * THE ONE REASON THIS IS NOT JUST "DO NOTHING".  `Cloneable::clone()` copy
+ * constructs, clears the buffer map, calls `reset()`, and then CHECKS that the
+ * copy has as many buffers as the original (cloneable.h).  So when the tensors
+ * arriving here are a clone's, i.e. non-empty, the names have to be registered
+ * again; the copy loop that follows fills them.
+ *
+ * \param[in]     m       the module whose buffers these are
+ * \param[in,out] cm_x1   the module's two tables
+ * \param[in,out] cp_x1
+ * \param[in]     ncoeff  row width, kWeno5NuCoeff or kPoly5NuCoeff
+ */
+void x1_reset_tables(torch::nn::Module& m, torch::Tensor& cm_x1,
+                     torch::Tensor& cp_x1, int ncoeff);
+
+//! Install one pair of tables, registering the buffers on first use.
+void x1_install_tables(torch::nn::Module& m, torch::Tensor& cm_x1,
+                       torch::Tensor& cp_x1, torch::Tensor const& cm_rows,
+                       torch::Tensor const& cp_rows);
+
 //! The coefficient table in the state's dtype and device, cached.
 /*!
  * Buffers follow `module.to(...)`, so the fast path is a plain reference.  A

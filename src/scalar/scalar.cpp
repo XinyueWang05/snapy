@@ -41,12 +41,18 @@ void ScalarImpl::reset() {
   // `precon` is not an option: weno5.cpp:75,98 take the route-A path for any
   // dimension once a table is there, so x2/x3 would be reconstructed with x1
   // coefficients.  Same shape as the hydro wiring (hydro.cpp, the guarded
-  // block after `recon1` is created): same options, a uniform grid installs
-  // nothing and keeps the shipped arithmetic, and `precon` is never given
-  // faces.
-  precon1 = ReconstructImpl::create(options->recon(), this, "recon1");
+  // block after `recon1` is created): same options, and `precon` is never
+  // given faces.
+  //
+  // A UNIFORM DECK REGISTERS NOTHING.  There the second module would be a
+  // copy of the first with identical arithmetic, so `precon1` is simply the
+  // same object; the tree, and with it `named_modules()` and every state dict
+  // built from it, is the one this module had before #280 (review item 2).
   if (pcoord && pcoord->options->stretched_x1()) {
+    precon1 = ReconstructImpl::create(options->recon(), this, "recon1");
     precon1->set_x1_faces(pcoord->x1f);
+  } else {
+    precon1 = precon;
   }
   priemann = RiemannSolverImpl::create(options->riemann(), this);
 
