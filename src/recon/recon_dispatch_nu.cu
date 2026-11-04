@@ -15,17 +15,11 @@
 namespace snap {
 namespace {
 
-//! Launch geometry of the tiled path.
-/*!
- * A line-for-line copy of `stencil_kernel_tiled` (recon_dispatch.cu:46-93).
- * That one is a function template in a .cu translation unit with internal
- * linkage to this build, so it cannot be called from here; duplicating the
- * launcher is what keeps recon_dispatch.cu byte identical, which is the
- * structural half of the G3 argument.
- *
- * `grid.x == 1` is the invariant the face index depends on: one block owns one
- * whole line, so `start + threadIdx.x` is the global output index along x1.
- */
+//! Launch geometry of the tiled path: a line-for-line copy of
+//! `stencil_kernel_tiled` (recon_dispatch.cu:46-93), which has internal
+//! linkage, so duplicating it is what keeps recon_dispatch.cu byte identical.
+//! `grid.x == 1` is the invariant the face index depends on (layout note
+//! Sec. 8.1).
 template <typename scalar_t, int Arity, typename func_t>
 void stencil_kernel_tiled_nu(at::TensorIterator& iter, int dim, int block_x,
                              size_t shared_bytes, const func_t& f) {
@@ -76,12 +70,9 @@ void stencil_kernel_tiled_nu(at::TensorIterator& iter, int dim, int block_x,
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-//! Tile width for the per-face path.
-/*!
- * `recon_tile_width` (recon_dispatch.cu:18-41) minus the coefficient term:
- * route A reads the rows from global memory, so the shared budget only has to
- * hold the input window (note Sec. 4.3).
- */
+//! Tile width for the per-face path: `recon_tile_width`
+//! (recon_dispatch.cu:18-41) minus the coefficient term, because route A
+//! reads the rows from global memory (note Sec. 4.3).
 int recon_tile_width_nu(int64_t nline, int nvar, int stencil,
                         size_t scalar_size, size_t* shared_bytes) {
   if (nline <= 1024) {

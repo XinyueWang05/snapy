@@ -10,16 +10,8 @@
 namespace snap {
 namespace {
 
-//! Shu (1998) eq. 2.20 primitive-function weights at the target point 0.
-/*!
- * For the `n` cells bounded by the `n+1` nodes z[0..n],
- *   w_k = (z_{k+1} - z_k) * sum_{j>k} L_j'(0),
- * with L_j the Lagrange basis on those nodes.  sum_k w_k == 1 identically.
- *
- * \param[in]  z  n+1 nodes, in the normalised coordinate of the caller
- * \param[in]  n  number of cells, 3 (one WENO5 candidate) or 5 (cp5)
- * \param[out] w  n weights
- */
+//! Shu (1998) eq. 2.20 primitive-function weights at the target point 0, for
+//! the `n` cells bounded by the `n+1` nodes z[0..n] (note Sec. 4.2).
 void primitive_row(double const* z, int n, double* w) {
   double lp[6];
   for (int j = 0; j <= n; ++j) {
@@ -43,13 +35,9 @@ void primitive_row(double const* z, int n, double* w) {
   }
 }
 
-//! Rows 1 and 2 of V^{-1} for the quadratic q = a0 + a1 z + a2 z^2 whose cell
-//! averages over the three cells bounded by z[0..3] are the given ones.
-/*!
- * V[k] = {1, (p+q)/2, (p^2+pq+q^2)/3} for the cell [p, q] = [z[k], z[k+1]].
- * \param[out] r1  a1 = r1 . ubar
- * \param[out] r2  a2 = r2 . ubar
- */
+//! Rows 1 and 2 of V^{-1} for the quadratic q = a0 + a1 z + a2 z^2 averaging
+//! to ubar over the three cells bounded by z[0..3]: a1 = r1 . ubar,
+//! a2 = r2 . ubar (note Sec. 4.2).
 void quad_inv_rows(double const* z, double* r1, double* r2) {
   double V[3][3];
   for (int k = 0; k < 3; ++k) {
@@ -59,8 +47,7 @@ void quad_inv_rows(double const* z, double* r1, double* r2) {
     V[k][2] = (p * p + p * q + q * q) / 3.;
   }
 
-  // cofactor inverse; the matrix is 3x3 and well conditioned in the
-  // normalised coordinate (|z| <= 5 for every admissible window)
+  // cofactor inverse; well conditioned in the normalised coordinate
   double cof[3][3];
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
@@ -79,24 +66,18 @@ void quad_inv_rows(double const* z, double* r1, double* r2) {
   }
 }
 
-//! One 48-wide WENO5 row in the "p-type" orientation.
-/*!
- * `y` are the six faces y0 < ... < y5 of the 5-cell window.  The target face
- * is y3, the UPPER face of the central cell I2 = [y2, y3].  Everything is
- * evaluated in zeta = (x - y3)/h2, in which the target sits at zeta = 0 and
- * the central cell has unit width, so the rows are scale free.
- */
+//! One 48-wide WENO5 row in the "p-type" orientation: `y` the six faces of the
+//! window, target the upper face y3, evaluated in the scale-free coordinate
+//! zeta = (x - y3)/h2 (note Sec. 4.2, layout note Sec. 2).
 void ptype_row(double const* y, double* row) {
   double h2 = y[3] - y[2];
   double z[6];
   for (int k = 0; k < 6; ++k) z[k] = (y[k] - y[3]) / h2;
 
-  // stencil r uses the three window cells starting at k0[r]; the order is the
-  // one the shipped rows use, largest linear weight first
+  // stencil r uses the three window cells starting at k0[r], shipped order
   const int k0[3] = {2, 1, 0};
-  // sign of the second smoothness row per stencil.  beta is invariant under
-  // it; this is the sign convention of the shipped literals, so that a uniform
-  // window reproduces src/recon/weno5.cpp:11-23 entry for entry.
+  // beta is invariant under this sign; it is the shipped convention, so a
+  // uniform window reproduces src/recon/weno5.cpp:11-23 entry for entry
   const double bsign[3] = {1., 1., -1.};
 
   for (int i = 0; i < 45; ++i) row[i] = 0.;
@@ -118,21 +99,16 @@ void ptype_row(double const* y, double* row) {
     }
   }
 
-  // closed-form optimal weights (note Sec. 4.2); every factor is a positive
-  // length, so d_r > 0 on any admissible grid
+  // closed-form optimal weights, d_r > 0 on any admissible grid (note Sec. 4.2)
   double a = -z[0], b = -z[1], c = z[4], e = z[5];
   row[45] = a * b / ((a + e) * (b + e));
   row[46] = a * e * (a + b + c + e) / ((a + e) * (b + e) * (a + c));
   row[47] = c * e / ((a + c) * (a + e));
 }
 
-//! The two WENO5 rows of one window: cm targets y2, cp targets y3.
-/*!
- * cm is the mirror of the p-type build: reflecting the window maps the target
- * y2 onto the p-type target, and flipping the cell order of each 5-entry row
- * brings it back.  Built this way the two sides are each other's mirror by
- * construction, which is the uniform-grid identity cp = cm.flip.
- */
+//! The two WENO5 rows of one window: cm targets y2, cp targets y3.  cm is the
+//! mirror of the p-type build, so the uniform-grid identity cp = cm.flip holds
+//! by construction (note Sec. 4.2, layout note Sec. 1).
 void window_weno5(double const* y, double* cm, double* cp) {
   ptype_row(y, cp);
 
@@ -149,15 +125,10 @@ void window_weno5(double const* y, double* cm, double* cp) {
   cm[47] = tmp[47];
 }
 
-//! Combine one WENO5 row's candidates with its linear weights.
-/*!
- * Note Sec. 4.2: "cp5 (`pinterp2`) gets the 5-entry row sum d_r p_r per face
- * and side."  That identity is also what makes WENO5 fifth order, so the cp5
- * row is BUILT this way rather than from an independent 6-node primitive
- * function: the two agree to round-off (checked in tests/test_x1_coeffs.cpp)
- * and this form loses fewer digits on a sharp width jump, where the 6-node
- * form cancels harder.
- */
+//! Combine one WENO5 row's candidates with its linear weights: the cp5 row is
+//! built as sum_r d_r p_r rather than from an independent 6-node primitive
+//! function (note Sec. 4.2, layout note Sec. 3; the two agree to round-off,
+//! checked in tests/test_x1_coeffs.cpp).
 void combine_optimal(double const* row48, double* out5) {
   for (int n = 0; n < 5; ++n) {
     out5[n] = row48[45] * row48[n] + row48[46] * row48[5 + n] +
@@ -245,8 +216,7 @@ void x1_install_tables(torch::nn::Module& m, torch::Tensor& cm_x1,
                        torch::Tensor& cp_x1, torch::Tensor const& cm_rows,
                        torch::Tensor const& cp_rows) {
   if (m.named_buffers(/*recurse=*/false).contains("cm_x1")) {
-    // keep the registered tensors' identity, as the old code did: anything
-    // that already holds a reference to them follows the new rows
+    // keep the registered tensors' identity, as the old code did
     cm_x1.set_data(cm_rows);
     cp_x1.set_data(cp_rows);
   } else {
@@ -304,8 +274,8 @@ at::TensorIterator x1_nu_iterator(torch::Tensor const& w, int dim,
       .add_output(out)
       .add_input(w);
 
-  // CPU only: see the comment on this function in x1_coeffs.hpp.  The view has
-  // to be a named lvalue; `add_input(TensorBase&&)` is deleted.
+  // CPU only (x1_coeffs.hpp); named lvalue because `add_input(TensorBase&&)`
+  // is deleted.
   torch::Tensor rows;
   if (!w.device().is_cuda()) {
     rows = x1_coeffs_row_view(c, out, dim);
