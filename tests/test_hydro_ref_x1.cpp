@@ -1,5 +1,7 @@
 // C/C++
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -268,6 +270,179 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu) {
       expect_close({actual.psf_lo.cpu(), actual.psf_hi.cpu(), actual.pref.cpu(),
                     actual.dsf.cpu(), actual.dref.cpu()},
                    expected, 2.e-12, 2.e-12);
+    }
+  }
+}
+
+//! Distance in representable steps between two tensors of the same float type,
+//! with NaN handled by POSITION rather than by value.
+/*!
+ * `torch::equal` and `torch::allclose` both report disagreement for a NaN that
+ * sits in the same place on both sides, which is agreement for our purpose, and
+ * `allclose`'s relative tolerance is meaningless at float32 next to a float64
+ * threshold. The verdict here is therefore the ULP distance over the non-NaN
+ * elements plus an exact match of the NaN positions.
+ */
+struct UlpDiff {
+  int64_t max_ulp = 0;
+  double max_rel = 0.0;
+  int64_t nan_mismatch = 0;
+  int worst_index = -1;  //!< position along x1 of the worst ULP
+};
+
+template <typename T, typename I>
+void ulp_scan(T const* a, T const* b, int64_t n, int nc1, UlpDiff* d) {
+  auto mono = [](I v) -> int64_t {
+    I const sign_bit = I(1) << (8 * sizeof(I) - 1);
+    return (v & sign_bit) ? -int64_t(v & ~sign_bit) : int64_t(v);
+  };
+  for (int64_t k = 0; k < n; ++k) {
+    bool na = std::isnan(a[k]), nb = std::isnan(b[k]);
+    if (na || nb) {
+      d->nan_mismatch += (na != nb);  // same place on both sides: agreement
+      continue;
+    }
+    I ia, ib;
+    std::memcpy(&ia, a + k, sizeof(I));
+    std::memcpy(&ib, b + k, sizeof(I));
+    int64_t u = mono(ia) - mono(ib);
+    if (u < 0) u = -u;
+    if (u > d->max_ulp) {
+      d->max_ulp = u;
+      d->worst_index = int(k % nc1);
+    }
+    double den = std::fabs(double(a[k]));
+    double rel = den > 0.0 ? std::fabs(double(a[k]) - double(b[k])) / den : 0.0;
+    if (rel > d->max_rel) d->max_rel = rel;
+  }
+}
+
+UlpDiff ulp_diff(torch::Tensor const& cpu, torch::Tensor const& gpu, int nc1) {
+  auto a = cpu.cpu().contiguous();
+  auto b = gpu.cpu().contiguous();
+  EXPECT_EQ(a.sizes(), b.sizes());
+  EXPECT_EQ(a.scalar_type(), b.scalar_type());
+  UlpDiff d;
+  if (a.scalar_type() == torch::kFloat64) {
+    ulp_scan<double, uint64_t>(a.data_ptr<double>(), b.data_ptr<double>(),
+                               a.numel(), nc1, &d);
+  } else {
+    ulp_scan<float, uint32_t>(a.data_ptr<float>(), b.data_ptr<float>(),
+                              a.numel(), nc1, &d);
+  }
+  return d;
+}
+
+//! A genuinely stretched x1: geometric widths with a FIXED total stretch of 5x,
+//! so the grid is equally non-uniform at every nc1 (a fixed per-cell ratio
+//! would overflow at nc1 in the thousands) and the column keeps height 1.
+torch::Tensor stretched_dx1f(int nc1, torch::ScalarType dtype) {
+  auto f64 = torch::TensorOptions().dtype(torch::kFloat64);
+  auto d = torch::pow(std::pow(5.0, 1.0 / double(nc1)), torch::arange(nc1, f64));
+  return (d / d.sum()).to(dtype).contiguous();
+}
+
+//! CUDA must reproduce the CPU on the keyed-stretched x1 reference, for lines
+//! both inside and well past a CUDA thread block.
+/*!
+ * `cuda_matches_cpu` (above) passes an UNDEFINED `rows`, so the #280 device
+ * pointer is null on both sides there and the `kX1RefStretched` branch of
+ * `hydro_ref_x1_cell_impl` (src/hydro/hydro_ref_x1_impl.h:206-221) never
+ * executes on device. This test hands it DEFINED rows and so is the only
+ * registered coverage of that branch on a GPU.
+ *
+ * nc1 crosses 1024 on purpose. The reference kernel launches a fixed
+ * 256-thread block and walks x1 with a stride loop
+ * (src/hydro/hydro_dispatch.cu:27,45), so a line longer than one block is
+ * meant to be ordinary; 1024/1025/2048 is where that would break if the
+ * launcher ever tied blockDim.x to nc1, as `stencil_kernel`
+ * (src/utils/loops.cuh:96) does for the reconstruction path.
+ *
+ * TOLERANCE. 32 ULP, against a measured CPU-vs-CUDA spread of at most 6 ULP
+ * over 641,280 elements of this kernel across nc1 = 64..4096 at both float
+ * types (max relative 6.9e-16 at float64, 4.0e-07 at float32), most of which
+ * is nvcc's default FMA contraction: rebuilding the CUDA objects -fmad=false
+ * takes float64 down to 2 ULP. 32 leaves roughly a five-fold margin over that
+ * noise while staying ~5e-15 relative at float64 and ~4e-06 at float32. A real
+ * divergence on this path is not a near-miss: a wrong six-face row, a dropped
+ * cell, a stale or out-of-range `rows` read, or a lost bracket guard moves the
+ * cell pressure by a fraction of its own magnitude, i.e. by 1e11 ULP or more,
+ * so no plausible fault lands between 6 and 32.
+ */
+TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
+  if (!snapy_cuda_test_enabled()) {
+    GTEST_SKIP() << "CUDA is not available";
+  }
+
+  constexpr int64_t kMaxUlp = 32;
+  constexpr int nc3 = 2, nc2 = 3;
+
+  for (auto dtype : {torch::kFloat64, torch::kFloat32}) {
+    // one line inside a block, the two either side of the 1024 boundary, and
+    // one line eight blocks long
+    for (int nc1 : {24, 1024, 1025, 2048}) {
+      auto f64 = torch::TensorOptions().dtype(torch::kFloat64);
+      auto options = torch::TensorOptions().dtype(dtype).device(torch::kCPU);
+      auto w = torch::zeros({snap::IPR + 1, nc3, nc2, nc1}, options);
+      auto z = (torch::arange(nc1, f64) / double(nc1 - 1)).view({1, 1, nc1});
+      auto column = torch::arange(nc3 * nc2, f64).view({nc3, nc2, 1});
+      w[snap::IDN].copy_((1.0 + 0.5 * (1.0 - z) + 0.002 * column).to(dtype));
+      w[snap::IPR].copy_((100.0 * torch::exp(-2.0 * z) + 0.03 * column).to(dtype));
+      w = w.contiguous();
+
+      auto dx1f = stretched_dx1f(nc1, dtype);
+      int iu = nc1 - 4;  // il = 3: three ghost cells each side
+      auto rows = snap::hydro_ref_x1_stretched_rows(dx1f, iu, /*phys_in=*/true,
+                                                    /*phys_out=*/true,
+                                                    /*wall_clamp=*/true)
+                      .to(w.options())
+                      .contiguous();
+
+      // the branch must actually be live: rows defined, and at least one cell
+      // carrying a real six-face row rather than the two-face fallback
+      ASSERT_TRUE(rows.defined());
+      ASSERT_EQ(rows.size(0), nc1);
+      ASSERT_GT((rows.select(1, 0) >= 0).sum().item<int64_t>(), 0)
+          << "no cell takes the six-face stretched row at nc1 = " << nc1;
+
+      auto expected = allocate_output(w);
+      at::native::call_hydro_ref_x1(
+          torch::kCPU, w, dx1f, torch::Tensor(), expected.psf_lo,
+          expected.psf_hi, expected.pref, expected.dsf, expected.dref, iu, 1.0,
+          snap::kX1RefStretched, true, true, true, rows);
+
+      auto wg = w.to(torch::kCUDA).contiguous();
+      auto actual = allocate_output(wg);
+      at::native::call_hydro_ref_x1(
+          torch::kCUDA, wg, dx1f.to(torch::kCUDA), torch::Tensor(),
+          actual.psf_lo, actual.psf_hi, actual.pref, actual.dsf, actual.dref,
+          iu, 1.0, snap::kX1RefStretched, true, true, true,
+          rows.to(torch::kCUDA));
+      torch::cuda::synchronize();
+
+      // the stretched rows must be doing work: without the six-face average
+      // pref would be exactly the two-face mean everywhere
+      auto mean2 = 0.5 * (expected.psf_lo + expected.psf_hi);
+      EXPECT_GT((expected.pref != mean2).sum().item<int64_t>(), 0)
+          << "the stretched branch collapsed to the two-face mean at nc1 = "
+          << nc1;
+
+      std::vector<std::pair<char const*, std::pair<torch::Tensor, torch::Tensor>>>
+          pairs = {{"psf_lo", {expected.psf_lo, actual.psf_lo}},
+                   {"psf_hi", {expected.psf_hi, actual.psf_hi}},
+                   {"pref", {expected.pref, actual.pref}},
+                   {"dsf", {expected.dsf, actual.dsf}},
+                   {"dref", {expected.dref, actual.dref}}};
+      for (auto const& p : pairs) {
+        auto d = ulp_diff(p.second.first, p.second.second, nc1);
+        EXPECT_EQ(d.nan_mismatch, 0)
+            << p.first << " NaN positions differ, nc1 = " << nc1;
+        EXPECT_LE(d.max_ulp, kMaxUlp)
+            << p.first << " nc1 = " << nc1 << " dtype "
+            << (dtype == torch::kFloat64 ? "f64" : "f32") << ": " << d.max_ulp
+            << " ULP (max rel " << d.max_rel << ") at x1 index "
+            << d.worst_index;
+      }
     }
   }
 }
