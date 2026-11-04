@@ -42,6 +42,14 @@ void Center5InterpImpl::forward_nu(torch::Tensor const& w, int dim,
                                    torch::Tensor const& out,
                                    torch::Tensor const& src,
                                    torch::Tensor& cache) {
+  // see Weno5InterpImpl::forward_nu: a size test cannot tell x2 from x1 on a
+  // block with nc2 == nc1, so the dimension itself is checked
+  TORCH_CHECK(dim == out.dim() - 1,
+              "[cp5] route A covers the x1 dimension only, so a module "
+              "holding per-face x1 coefficients must be given the last "
+              "dimension of a (nvar, nc3, nc2, nc1) state; got dim ", dim,
+              " of a ", out.dim(), "-dimensional output (note Sec. 4.7)");
+
   TORCH_CHECK(out.size(dim) == src.size(0),
               "[cp5] per-face x1 coefficients are installed but dimension ",
               dim, " has ", out.size(dim), " outputs while the table has ",
