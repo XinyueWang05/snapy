@@ -157,9 +157,11 @@ TEST(StretchedX1Ref, refuses_curvature_correction_cp5) {
           "cp5");
 }
 
-TEST(StretchedX1Ref, refuses_curvature_correction_cp3) {
-  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-          "supported on a stretched x1",
+// Since review F3 a stretched cp3 deck never reaches the curvature card: cp3
+// has no per-face rows, so route A refuses it when the block is built.  The
+// deck is refused exactly as before, one check earlier.
+TEST(StretchedX1Ref, refuses_a_stretched_cp3_deck_outright) {
+  refuses("[cp3] has no stretched-x1 reconstruction",
           ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
           "cp3");
 }
