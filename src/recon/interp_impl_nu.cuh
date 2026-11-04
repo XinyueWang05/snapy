@@ -28,14 +28,9 @@
 
 namespace snap {
 
-template <int N, typename T>
-inline __device__ T _vvdot_cg(T const *v1, T const *v2) {
-  T out = 0.;
-  for (int i = 0; i < N; ++i) {
-    out += v1[i] * v2[i];
-  }
-  return out;
-}
+// `_vvdot_c` comes from x1_coeffs_device.h (included above), where
+// DISPATCH_MACRO makes it __host__ __device__ in this translation unit; the
+// host header uses the same definition.
 
 //! WENO5 on one shared-memory line with this face's own row from global memory.
 template <typename T>
@@ -65,16 +60,16 @@ __device__ T interp_shared_weno5_nu_impl(T const *line, T const *row, int v,
     phi[k] = src[k] / vscale;
   }
 
-  T p0 = _vvdot_cg<5>(phi, c1);
-  T p1 = _vvdot_cg<5>(phi, c2);
-  T p2 = _vvdot_cg<5>(phi, c3);
+  T p0 = _vvdot_c<5>(phi, c1);
+  T p1 = _vvdot_c<5>(phi, c2);
+  T p2 = _vvdot_c<5>(phi, c3);
 
   T beta0 =
-      13. / 12. * SQR(_vvdot_cg<5>(phi, c4)) + .25 * SQR(_vvdot_cg<5>(phi, c5));
+      13. / 12. * SQR(_vvdot_c<5>(phi, c4)) + .25 * SQR(_vvdot_c<5>(phi, c5));
   T beta1 =
-      13. / 12. * SQR(_vvdot_cg<5>(phi, c6)) + .25 * SQR(_vvdot_cg<5>(phi, c7));
+      13. / 12. * SQR(_vvdot_c<5>(phi, c6)) + .25 * SQR(_vvdot_c<5>(phi, c7));
   T beta2 =
-      13. / 12. * SQR(_vvdot_cg<5>(phi, c8)) + .25 * SQR(_vvdot_cg<5>(phi, c9));
+      13. / 12. * SQR(_vvdot_c<5>(phi, c8)) + .25 * SQR(_vvdot_c<5>(phi, c9));
 
   T alpha0 = d[0] / SQR(beta0 + 1e-6);
   T alpha1 = d[1] / SQR(beta1 + 1e-6);
