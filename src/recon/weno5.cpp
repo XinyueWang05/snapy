@@ -24,14 +24,13 @@ void Weno5InterpImpl::reset() {
 
   cp = register_buffer("cp", cm.flip({1}));
 
-  // Route A tables (snapy#280 stage 1).  Registered empty here so that the
-  // buffer count is stable for torch::nn::Cloneable::clone() and a harness can
-  // find the names before they are filled.  Stage A only builds and exposes
-  // them; left()/right() below are the shipped uniform path, untouched.
-  cm_x1 = register_buffer("cm_x1",
-                          torch::zeros({0, kWeno5NuCoeff}, torch::kFloat64));
-  cp_x1 = register_buffer("cp_x1",
-                          torch::zeros({0, kWeno5NuCoeff}, torch::kFloat64));
+  // Route A tables (snapy#280 stage 1): REGISTERED ONLY ONCE A FACE VECTOR
+  // HAS BEEN INSTALLED, in set_x1_coeffs below.  A uniform deck therefore
+  // keeps exactly the buffer list it had before #280, which matters because
+  // meshblock.cpp copies every named buffer into the user-forcing input
+  // dictionary.  They stay defined-but-empty so that `has_x1_coeffs()` and
+  // the harnesses that read them need no null test.
+  x1_reset_tables(*this, cm_x1, cp_x1, kWeno5NuCoeff);
 }
 
 void Weno5InterpImpl::set_x1_coeffs(torch::Tensor const& x1f) {
@@ -39,8 +38,8 @@ void Weno5InterpImpl::set_x1_coeffs(torch::Tensor const& x1f) {
 
   // follow whatever dtype and device the module was moved to, as cm/cp do
   auto opts = cm.options();
-  cm_x1.set_data(rows.first.to(opts).contiguous());
-  cp_x1.set_data(rows.second.to(opts).contiguous());
+  x1_install_tables(*this, cm_x1, cp_x1, rows.first.to(opts).contiguous(),
+                    rows.second.to(opts).contiguous());
 
   // the dtype/device casts belong to the old table
   cm_x1_cast = torch::Tensor();
