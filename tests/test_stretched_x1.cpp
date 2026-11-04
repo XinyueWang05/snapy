@@ -13,6 +13,7 @@
 
 // snap
 #include <snap/coord/coordinate.hpp>
+#include <snap/layout/layout.hpp>
 
 using namespace snap;
 
@@ -239,5 +240,30 @@ TEST(StretchedX1, global_faces_do_not_depend_on_nghost) {
     EXPECT_TRUE(torch::equal(
         un->x1f, torch::linspace(-ng * dx, 16. + ng * dx, 8 + 2 * ng + 1,
                                  torch::kFloat64)));
+  }
+}
+
+// Mesh calls repartition() on its own (mesh.cpp), past the deck-level check in
+// from_yaml. A stretched x1 whose cell count does not split evenly into the x1
+// blocks must throw there, not drop the top cells from the last block.
+TEST(StretchedX1, repartition_refuses_an_uneven_x1_split) {
+  auto split = [](CoordinateOptions const& op, int nb1, int rank) {
+    auto layout = LayoutOptionsImpl::create();
+    layout->type("cubed").pz(nb1).rank(rank);
+    op->clone()->repartition(layout);
+  };
+  auto op = load(card("{nx1: 10, nghost: 3, x1rat: 0.95}"));
+  ASSERT_TRUE(op->stretched_x1());
+  for (int r = 0; r < 2; ++r) EXPECT_NO_THROW(split(op, 2, r));
+  for (int r = 0; r < 3; ++r) {
+    try {
+      split(op, 3, r);
+      ADD_FAILURE() << "nx1 = 10 split into nb1 = 3 x1 blocks did not throw"
+                    << " (rank " << r << ")";
+    } catch (c10::Error const& e) {
+      std::string msg = e.what();
+      EXPECT_NE(msg.find("global_nx1 = 10"), std::string::npos) << msg;
+      EXPECT_NE(msg.find("nb1 = 3"), std::string::npos) << msg;
+    }
   }
 }

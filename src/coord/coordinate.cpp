@@ -346,6 +346,10 @@ void CoordinateOptionsImpl::repartition(LayoutOptions const& layout) {
   int nb3 = layout->py();
 
   if (stretched_x1()) {  // equal cell counts, bounds read off the faces
+    TORCH_CHECK(nb1 > 0 && global_nx1() % nb1 == 0,
+                "[CoordinateOptions] a stretched x1 splits into equal cell "
+                "counts per x1 block: global_nx1 = ",
+                global_nx1(), " is not divisible by nb1 = ", nb1);
     int n = global_nx1() / nb1;
     x1min(x1f_interior()[lx1 * n]);
     x1max(x1f_interior()[(lx1 + 1) * n]);
