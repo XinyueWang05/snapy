@@ -763,3 +763,12 @@ endif()
 # run_hydro's initial column on a stretched x1 against the analytic adiabat (#280)
 snapy_add_python_test(test_example_ic_stretched TIMEOUT 120 LABELS "python;examples"
   ARGS --exe ${CMAKE_BINARY_DIR}/bin/run_hydro.${buildl})
+# The arm needs the run_hydro example binary.  `if(TARGET run_hydro.${buildl})`
+# cannot be used here: this directory is added before examples/ (top level
+# CMakeLists.txt adds tests at 155 and examples at 160), so the target does not
+# exist yet.  `BUILD_EXAMPLES` does not track it either -- its guard around
+# add_subdirectory(examples) is commented out, so examples build whatever the
+# option says.  The binary is therefore checked where it is actually known, at
+# run time, with the skip convention the rest of this file uses.
+set_tests_properties(test_example_ic_stretched_python PROPERTIES
+                     SKIP_RETURN_CODE 125)
