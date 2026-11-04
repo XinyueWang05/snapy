@@ -24,12 +24,8 @@ void Weno5InterpImpl::reset() {
 
   cp = register_buffer("cp", cm.flip({1}));
 
-  // Route A tables (snapy#280 stage 1): REGISTERED ONLY ONCE A FACE VECTOR
-  // HAS BEEN INSTALLED, in set_x1_coeffs below.  A uniform deck therefore
-  // keeps exactly the buffer list it had before #280, which matters because
-  // meshblock.cpp copies every named buffer into the user-forcing input
-  // dictionary.  They stay defined-but-empty so that `has_x1_coeffs()` and
-  // the harnesses that read them need no null test.
+  // Route A tables: registered only once a face vector arrives, so a uniform
+  // deck's buffer list is the pre-#280 one (x1_coeffs.hpp, review item 2).
   x1_reset_tables(*this, cm_x1, cp_x1, kWeno5NuCoeff);
 }
 

@@ -47,11 +47,10 @@ void bind_recon(py::module &m) {
            R"(Install route A per-face x1 coefficients from a face vector.
 
 The face vector has nc1 + 1 entries and must be strictly increasing; face k
-is the lower face of cell k.  Once installed, the x1 sweep of this module runs
-the per-face kernels on these rows, and x2/x3 are refused: route A covers the
-x1 dimension only.  The rows are then readable as the buffers "interp1.cm_x1",
-"interp1.cp_x1", "interp2.cm_x1" and "interp2.cp_x1"; a module that was never
-given a face vector registers none of them.)");
+is the lower face of cell k.  The x1 sweep then RUNS these rows (readable as
+the buffers "interp1.cm_x1", "interp1.cp_x1", "interp2.cm_x1", "interp2.cp_x1",
+which exist only after this call), x2/x3 are refused, and so is a module whose
+type is not weno5 or cp5 (note Sec. 4.7, design note bc29594f).)");
 
   // Free builders: route A coefficients from any face vector, with no mesh
   // and no block (snapy#280 Sec. 4.2).  See src/recon/x1_coeffs.hpp for the

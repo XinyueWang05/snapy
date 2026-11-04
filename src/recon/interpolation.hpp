@@ -63,12 +63,10 @@ class InterpImpl {
    *                 tables belongs to output element m, i.e. to the 5-cell
    *                 window x1f[m .. m+5]; see src/recon/x1_coeffs.hpp.
    *
-   * REVIEW F3.  Route A covers weno5 and cp5, and the default used to be a
-   * silent no-op: a deck that declared a stretched x1 and reconstructed it
-   * with dc, plm, ppm, cp3 or weno3 ran uniform-grid arithmetic on a
-   * non-uniform grid and said nothing.  It is refused instead, here, where
-   * the rows are installed -- that is once per block at configure time, so no
-   * inner loop pays for it (design note bc29594f, Sec. 4.7).
+   * REVIEW F3: route A covers weno5 and cp5, so every other type refuses a
+   * face vector here rather than running uniform arithmetic on a stretched
+   * grid in silence -- once per block, at configure time (note Sec. 4.7,
+   * frozen at bc29594f).
    */
   virtual void set_x1_coeffs(torch::Tensor const& /*x1f*/) {
     TORCH_CHECK(false, "[", options->type(),

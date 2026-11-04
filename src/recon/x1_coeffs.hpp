@@ -59,25 +59,12 @@
 //! linear weights are face dependent too, so route A carries them in the same
 //! row: 45 + 3 = 48, exactly as the design note Sec. 4.2 "Storage" says.
 //!
-//! WHAT c4..c9 ACTUALLY HOLD (x1_coeffs.cpp, `ptype_row`).  Everything is in
-//! the window's normalised coordinate zeta = (x - y3)/h2, in which the target
-//! cell I_i is [-1, 0] and has unit width.  Writing candidate r as the
-//! quadratic p_r = a0 + a1 zeta + a2 zeta^2,
-//!
-//!   c4, c6, c8  ->  2 a2            = p_r''      (constant)
-//!   c5, c7, c9  ->  +-(2 a2 - 2 a1) = -+2 p_r'(-1/2), at I_i's centre
-//!
-//! i.e. plain derivative combinations, scaled by 2; the sign of the second
-//! row is `bsign` (x1_coeffs.cpp), the convention of the shipped literals,
-//! and beta is invariant under it.  They are NOT divided by anything: the
-//! kernel's own 13/12 and 1/4 multipliers then give
-//!   beta_r = 13/12 (2 a2)^2 + 1/4 (2 a2 - 2 a1)^2 = 13/3 a2^2 + (a1 - a2)^2,
-//! which IS the Jiang & Shu indicator
-//!   beta_r = sum_{m=1,2} h_i^{2m-1} int_{I_i} (p_r^{(m)})^2 dx
-//! evaluated at h_i = 1, exactly (checked to round-off over random windows).
-//! Because zeta makes h_i = 1 on every grid, beta is dimensionless there and
-//! the shipped absolute eps = 1e-6 keeps its uniform-grid meaning
-//! (note Sec. 4.2).
+//! WHAT c4..c9 HOLD (`ptype_row`, x1_coeffs.cpp): for candidate
+//! p_r = a0 + a1 zeta + a2 zeta^2 in the window coordinate zeta = (x - y3)/h2,
+//! c4/c6/c8 are 2 a2 and c5/c7/c9 are +-(2 a2 - 2 a1) -- undivided, NOT scaled
+//! by sqrt(13/12) or sqrt(1/4); the kernel's own 13/12 and 1/4 then give Jiang
+//! & Shu's beta at h_i = 1, which is why the shipped absolute eps = 1e-6 keeps
+//! its uniform-grid meaning (note Sec. 4.2, design note bc29594f).
 
 namespace snap {
 
@@ -105,18 +92,12 @@ std::pair<torch::Tensor, torch::Tensor> cp5_x1_coeffs(torch::Tensor const& x1f);
 
 //! Put the route A tables back in the state a fresh `reset()` leaves them in.
 /*!
- * A uniform deck must not carry them at all: `named_buffers(recurse=true)` is
- * copied wholesale into the user-forcing input dictionary
- * (`src/mesh/meshblock.cpp`, `stage_forcing_variables`), so an unused buffer
- * is an extra key in everyone's forcing.  They are therefore registered in
- * `set_x1_coeffs`, not here, and a module with no face vector holds two plain
- * empty tensors -- defined, so `numel()` and `has_x1_coeffs()` still work.
- *
- * THE ONE REASON THIS IS NOT JUST "DO NOTHING".  `Cloneable::clone()` copy
- * constructs, clears the buffer map, calls `reset()`, and then CHECKS that the
- * copy has as many buffers as the original (cloneable.h).  So when the tensors
- * arriving here are a clone's, i.e. non-empty, the names have to be registered
- * again; the copy loop that follows fills them.
+ * Registered in `set_x1_coeffs`, not here, so a uniform deck carries neither
+ * (meshblock.cpp copies every named buffer into the forcing input dict); they
+ * stay defined-but-empty, so `has_x1_coeffs()` needs no null test.  NOT a
+ * no-op, because `Cloneable::clone()` calls `reset()` and then checks the
+ * copy has as many buffers as the original: a clone's non-empty tables have
+ * to be re-registered here (torch cloneable.h; review item 2).
  *
  * \param[in]     m       the module whose buffers these are
  * \param[in,out] cm_x1   the module's two tables
