@@ -206,6 +206,16 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
   auto rf = rs.clone();
   rf.narrow(-1, 1, nc1 - 1)
       .copy_(0.5 * (rs.narrow(-1, 0, nc1 - 1) + rs.narrow(-1, 1, nc1 - 1)));
+  // #280, a keyed stretched x1: distance-weighted face ratio, as in
+  // hydro_ref_x1_impl.h. Not reachable: this MPS path refuses a stretched x1
+  // at its top (the TORCH_CHECK at hydro_dispatch.cpp:51-53).
+  if (x1_grid == kX1RefStretched) {
+    auto hd = dx1f.narrow(-1, 0, nc1 - 1);
+    auto hu = dx1f.narrow(-1, 1, nc1 - 1);
+    rf.narrow(-1, 1, nc1 - 1)
+        .copy_((hu * rs.narrow(-1, 0, nc1 - 1) + hd * rs.narrow(-1, 1, nc1 - 1)) /
+               (hd + hu));
+  }
   dref.copy_(pref * rs);
   dsf.copy_(psf_lo * rf);
 }

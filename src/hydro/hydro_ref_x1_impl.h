@@ -237,6 +237,14 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
                                                    jlo, jhi, ext_lo, ext_hi) +
                            rs)
                : rs;
+  // #280, a keyed stretched x1: the face between cells i-1 and i (the lower
+  // face of cell i) takes the distance-weighted value of the two smoothed
+  // ratios, the cell below weighted by the width of the cell above
+  if (x1_grid == kX1RefStretched && i > 0) {
+    T rs_dn = hydro_ref_x1_rop_smooth(w, ncells, flat, nc1, i - 1, jlo, jhi,
+                                      ext_lo, ext_hi);
+    rf = (dx1f[i] * rs_dn + dx1f[i - 1] * rs) / (dx1f[i - 1] + dx1f[i]);
+  }
   dref[flat + i] = cell_pref * rs;
   dsf[flat + i] = lo * rf;
 }
