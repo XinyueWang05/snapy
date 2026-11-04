@@ -400,7 +400,7 @@ TEST(X1Coeffs, ghost_faces_needed_by_the_stencils) {
     for (int nx1 : {16, 64}) {
       const int nc1 = nx1 + 2 * nghost;
 
-      // reconstruct.cpp:86-88 with stencils() == 5
+      // reconstruct.cpp:96-98 with stencils() == 5
       const int rec_ng = 5 / 2 + 1;  // == 3, independent of the deck's nghost
       const int il = rec_ng;
       const int iu = nc1 - rec_ng;
@@ -601,7 +601,7 @@ TEST(X1Coeffs, a_shifted_row_to_face_mapping_is_detected) {
       << "the uniform rows happen to be right on this grid; pick a sharper q";
 
   // (a) THE SIDES SWAPPED.  cp_x1 row m targets face m+3 out of the same five
-  //     cells as cm_x1 row m, which targets face m+2 (x1_coeffs.hpp:28-29).
+  //     cells as cm_x1 row m, which targets face m+2 (x1_coeffs.hpp:22-23).
   //     Feeding left() the cp table must therefore move every output to the
   //     NEXT face exactly -- the one error a uniform grid cannot show, since
   //     there cp is cm.flip and both sides give the same number.
@@ -766,7 +766,7 @@ TEST(X1Coeffs, reconstruct_forward_face_index_on_a_stretched_grid) {
 
   auto wlr = recon->forward(u, 3, /*floor=*/false);
 
-  // reconstruct.cpp:120-132: il = 3, iu = nc1 - 3, and output element m lands
+  // reconstruct.cpp:96-98: il = 3, iu = nc1 - 3, and output element m lands
   // at IRT index m+2 and ILT index m+3
   // reconstruct.cpp:60-64 then overwrites the dummy regions 0..il-1 and
   // iu+1.. with copies of the edge value, so only il..iu carry a stencil

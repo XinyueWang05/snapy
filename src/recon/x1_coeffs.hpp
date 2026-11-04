@@ -76,7 +76,7 @@ torch::Tensor x1_coeffs_row_view(torch::Tensor const& c,
                                  torch::Tensor const& out, int dim);
 
 //! The `TensorIterator` of one route A `left()`/`right()` call: the shipped
-//! `Weno5InterpImpl::left` configuration (src/recon/weno5.cpp:51-57) plus, ON
+//! `Weno5InterpImpl::left` configuration (src/recon/weno5.cpp:66-72) plus, ON
 //! THE CPU ONLY, the zero-stride row view above as a third operand, because
 //! the CPU loop counter is not the face index while CUDA's `threadIdx.x` is
 //! (snapy#280 review item (b); layout note Sec. 8.1-8.2).
