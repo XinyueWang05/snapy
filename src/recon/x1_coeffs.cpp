@@ -137,40 +137,31 @@ torch::Tensor check_faces(torch::Tensor const& x1f) {
   return f;
 }
 
+template <int NCoeff, void (*Window)(double const*, double*, double*)>
+std::pair<torch::Tensor, torch::Tensor> build_x1_coeffs(
+    torch::Tensor const& x1f) {
+  auto f = check_faces(x1f);
+  int64_t nout = f.numel() - 5;
+  auto cm = torch::empty({nout, NCoeff}, torch::kFloat64);
+  auto cp = torch::empty({nout, NCoeff}, torch::kFloat64);
+  auto const* y = f.data_ptr<double>();
+  auto* pm = cm.data_ptr<double>();
+  auto* pp = cp.data_ptr<double>();
+  for (int64_t m = 0; m < nout; ++m)
+    Window(y + m, pm + m * NCoeff, pp + m * NCoeff);
+  return {cm, cp};
+}
+
 }  // namespace
 
 std::pair<torch::Tensor, torch::Tensor> weno5_x1_coeffs(
     torch::Tensor const& x1f) {
-  auto f = check_faces(x1f);
-  int64_t nout = f.numel() - 5;
-
-  auto cm = torch::empty({nout, kWeno5NuCoeff}, torch::kFloat64);
-  auto cp = torch::empty({nout, kWeno5NuCoeff}, torch::kFloat64);
-
-  auto const* y = f.data_ptr<double>();
-  auto* pm = cm.data_ptr<double>();
-  auto* pp = cp.data_ptr<double>();
-  for (int64_t m = 0; m < nout; ++m) {
-    window_weno5(y + m, pm + m * kWeno5NuCoeff, pp + m * kWeno5NuCoeff);
-  }
-  return {cm, cp};
+  return build_x1_coeffs<kWeno5NuCoeff, window_weno5>(x1f);
 }
 
 std::pair<torch::Tensor, torch::Tensor> cp5_x1_coeffs(
     torch::Tensor const& x1f) {
-  auto f = check_faces(x1f);
-  int64_t nout = f.numel() - 5;
-
-  auto cm = torch::empty({nout, kPoly5NuCoeff}, torch::kFloat64);
-  auto cp = torch::empty({nout, kPoly5NuCoeff}, torch::kFloat64);
-
-  auto const* y = f.data_ptr<double>();
-  auto* pm = cm.data_ptr<double>();
-  auto* pp = cp.data_ptr<double>();
-  for (int64_t m = 0; m < nout; ++m) {
-    window_cp5(y + m, pm + m * kPoly5NuCoeff, pp + m * kPoly5NuCoeff);
-  }
-  return {cm, cp};
+  return build_x1_coeffs<kPoly5NuCoeff, window_cp5>(x1f);
 }
 
 void x1_reset_tables(torch::nn::Module& m, torch::Tensor& cm_x1,

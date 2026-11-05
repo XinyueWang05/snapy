@@ -41,18 +41,7 @@ void Center5InterpImpl::left(torch::Tensor w, int dim,
     return;
   }
 
-  std::vector<int64_t> squash_dim = {0};
-  if (w.device().is_cuda()) {
-    squash_dim.push_back(dim);
-  }
-
-  auto iter = at::TensorIteratorConfig()
-                  .resize_outputs(false)
-                  .check_all_same_dtype(true)
-                  .declare_static_shape(out.sizes(), squash_dim)
-                  .add_output(out)
-                  .add_input(w)
-                  .build();
+  auto iter = x1_uniform_iterator(w, dim, out);
 
   at::native::call_poly5(out.device().type(), iter, cm, dim);
 }
@@ -64,18 +53,7 @@ void Center5InterpImpl::right(torch::Tensor w, int dim,
     return;
   }
 
-  std::vector<int64_t> squash_dim = {0};
-  if (w.device().is_cuda()) {
-    squash_dim.push_back(dim);
-  }
-
-  auto iter = at::TensorIteratorConfig()
-                  .resize_outputs(false)
-                  .check_all_same_dtype(true)
-                  .declare_static_shape(out.sizes(), squash_dim)
-                  .add_output(out)
-                  .add_input(w)
-                  .build();
+  auto iter = x1_uniform_iterator(w, dim, out);
 
   at::native::call_poly5(out.device().type(), iter, cp, dim);
 }

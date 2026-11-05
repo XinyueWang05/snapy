@@ -40,6 +40,19 @@ torch::Tensor const& x1_coeffs_for(torch::Tensor const& src,
                                    torch::Tensor& cache,
                                    torch::Tensor const& w);
 
+inline at::TensorIterator x1_uniform_iterator(torch::Tensor const& w, int dim,
+                                              torch::Tensor const& out) {
+  std::vector<int64_t> squash_dim = {0};
+  if (w.device().is_cuda()) squash_dim.push_back(dim);
+  return at::TensorIteratorConfig()
+      .resize_outputs(false)
+      .check_all_same_dtype(true)
+      .declare_static_shape(out.sizes(), squash_dim)
+      .add_output(out)
+      .add_input(w)
+      .build();
+}
+
 torch::Tensor x1_coeffs_row_view(torch::Tensor const& c,
                                  torch::Tensor const& out, int dim);
 
