@@ -34,6 +34,15 @@ setup_test(test_scalar_x1_wiring)
 setup_test(test_stretched_x1_ref)
 setup_test(test_stretched_diffusion)
 setup_test(test_stretched_x1_option_f)
+setup_test(test_x1_mass_covariance)
+# #280 item (5): the switch is read once per process
+add_test(NAME test_x1_mass_covariance_switch.${buildl}
+         COMMAND test_x1_mass_covariance.${buildl}
+                 --gtest_filter=X1MassCovariance.stretched_deck_runs_with_the_switch)
+set_tests_properties(
+  test_x1_mass_covariance_switch.${buildl}
+  PROPERTIES ENVIRONMENT "SNAP_X1_MASS_COVARIANCE=1"
+             PASS_REGULAR_EXPRESSION "\\[  PASSED  \\] 1 test\\.")
 # #280: the REF4 switch (or SNAP_X1_CENTROID_EXACT, which implies it) runs on
 # a stretched x1; the switch is read once per process
 foreach(_arm "wb_ref4;SNAP_WB_REF4=1" "x1_centroid;SNAP_X1_CENTROID_EXACT=1")
