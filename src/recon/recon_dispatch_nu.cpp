@@ -1,3 +1,5 @@
+#include "recon_dispatch_nu.hpp"
+
 #include <ATen/Dispatch.h>
 #include <ATen/TensorIterator.h>
 #include <ATen/native/ReduceOpsUtils.h>
@@ -5,7 +7,6 @@
 #include <torch/torch.h>
 
 #include "interp_impl_nu.h"
-#include "recon_dispatch_nu.hpp"
 #include "x1_coeffs.hpp"
 
 namespace snap {

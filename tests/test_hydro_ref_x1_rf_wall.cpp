@@ -1,14 +1,10 @@
-#include <cmath>
-#include <vector>
-
 #include <gtest/gtest.h>
-
+#include <snap/snap.h>
 #include <torch/torch.h>
 
-#include <snap/snap.h>
-
+#include <cmath>
 #include <snap/hydro/hydro_dispatch.hpp>
-
+#include <vector>
 
 namespace {
 

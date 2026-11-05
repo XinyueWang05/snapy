@@ -3,13 +3,11 @@
 #include "interp_impl.h"
 #include "x1_coeffs.hpp"
 
-
 #define INP(j, i) (inp[(j) * stride2 + (i) * stride1])
 #define OUT(j) (out[(j) * stride_out])
 #define SQR(x) ((x) * (x))
 
 namespace snap {
-
 
 template <typename T>
 void interp_weno5_nu_impl(T* out, T const* inp, T const* coeff, int stride1,

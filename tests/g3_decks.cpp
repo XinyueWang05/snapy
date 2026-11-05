@@ -1,17 +1,15 @@
 
+#include <snap/snap.h>
+#include <torch/torch.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <snap/mesh/mesh.hpp>
 #include <string>
 #include <vector>
-
-#include <torch/torch.h>
-
-#include <snap/snap.h>
-
-#include <snap/mesh/mesh.hpp>
 
 using namespace snap;
 

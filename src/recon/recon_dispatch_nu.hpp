@@ -3,7 +3,6 @@
 #include <ATen/TensorIterator.h>
 #include <ATen/native/DispatchStub.h>
 
-
 namespace at::native {
 
 using recon_poly_nu_fn = void (*)(at::TensorIterator &iter, at::Tensor payload,
