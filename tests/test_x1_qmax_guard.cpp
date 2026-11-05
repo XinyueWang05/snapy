@@ -1,44 +1,15 @@
-// external
 #include <gtest/gtest.h>
-
-// C/C++
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <string>
 #include <vector>
-
-// POSIX
 #include <unistd.h>
-
-// snap
 #include <snap/coord/coordinate.hpp>
-
 using namespace snap;
 
-// #280 stage 1: the adjacent-cell width-ratio bound on a stretched x1.
-//
-// Stage 1's contract covers grids whose neighbouring cells differ slowly. A
-// deck may still hand `geometry/x1f` an abrupt width jump, and route A's
-// per-face rows would then be built on a window the contract never measured.
-// The coordinate refuses such a deck, so the refusal is visible at parse time
-// rather than as an unexplained loss of order.
-//
-// THE BOUND IS MEASURED, NOT CHOSEN BY EYE. Over every grid the stage-1 gates
-// construct -- Jiheng's n = 5 contract list (sha256 70e36e85...), the G6
-// refinement ladders (i) N = 30, 59, 118 and (ii) N = 24, 48, 95, grid (g) at
-// ratio 1.058 and at the labelled G4 stress ratio 1.2, and every `cells/x1rat`
-// deck in the registered ctests -- the largest adjacent width ratio
-// max(dx[i+1]/dx[i], dx[i]/dx[i+1]) is 1.2000030, on the 1/1.2 deck at
-// nx1 = 128. The largest contract-proper grid, with the 1.2 stress family set
-// aside, is the G6 (ii) N = 24 rung at 1.0725654. Over the G2(c) junction
-// stress family -- a uniform column whose width jumps by a factor s at
-// mid-column -- the smallest is 2, the s = 2 member. kX1MaxWidthRatio = 1.5
-// sits strictly between them: 1.25x above the largest contract grid, and the
-// smallest junction grid is 1.3333x above it.
 
 namespace {
-
 std::string card(std::string const& cells, std::string const& extra = "",
                  std::string const& bounds = "{}") {
   return "geometry:\n"
@@ -49,7 +20,6 @@ std::string card(std::string const& cells, std::string const& extra = "",
          "  cells: " +
          cells + "\n" + extra;
 }
-
 std::string face_list(std::vector<double> const& f) {
   std::string s = "  x1f: [";
   char buf[32];
@@ -59,7 +29,6 @@ std::string face_list(std::vector<double> const& f) {
   }
   return s + "]\n";
 }
-
 CoordinateOptions load(std::string const& config) {
   char fname[] = "/tmp/test-x1-qmax-XXXXXX";
   int fd = mkstemp(fname);
@@ -76,23 +45,17 @@ CoordinateOptions load(std::string const& config) {
   std::remove(fname);
   return op;
 }
-
-//! widths w as a face list starting at 0
 std::vector<double> faces_of(std::vector<double> const& w) {
   std::vector<double> f{0.};
   for (double h : w) f.push_back(f.back() + h);
   return f;
 }
-
-//! a column of n cells whose width jumps by a factor s at mid-column
 std::vector<double> junction(int n, double s) {
   std::vector<double> w;
   for (int i = 0; i < n / 2; ++i) w.push_back(1.);
   for (int i = 0; i < n / 2; ++i) w.push_back(s);
   return faces_of(w);
 }
-
-//! the largest adjacent width ratio of a built coordinate, ghosts included
 double worst_ratio(Cartesian const& coord) {
   auto d = coord->dx1f;
   double worst = 1.;
@@ -102,13 +65,8 @@ double worst_ratio(Cartesian const& coord) {
   }
   return worst;
 }
-
 }  // namespace
 
-// ---------------------------------------------------------------------------
-// 1. THE REFUSAL. Every member of the G2(c) junction family is refused, and
-//    the message names the face index, the measured ratio and the bound.
-// ---------------------------------------------------------------------------
 TEST(X1QmaxGuard, a_junction_deck_is_refused_naming_index_ratio_and_bound) {
   for (double s : {2., 4., 16.}) {
     const int n = 16;
@@ -119,14 +77,10 @@ TEST(X1QmaxGuard, a_junction_deck_is_refused_naming_index_ratio_and_bound) {
       ADD_FAILURE() << "an s = " << s << " junction deck was accepted";
     } catch (c10::Error const& e) {
       std::string msg = e.what();
-      // the jump is between interior cells n/2 - 1 and n/2, i.e. at the face
-      // whose index in the interior list is n/2
       EXPECT_NE(msg.find("face " + std::to_string(n / 2)), std::string::npos)
           << "s = " << s << ": " << msg;
-      // the bound
       EXPECT_NE(msg.find("1.5"), std::string::npos)
           << "s = " << s << ": " << msg;
-      // and the measured ratio itself
       char want[32];
       std::snprintf(want, sizeof(want), "%g", s);
       EXPECT_NE(msg.find(want), std::string::npos)
@@ -135,7 +89,6 @@ TEST(X1QmaxGuard, a_junction_deck_is_refused_naming_index_ratio_and_bound) {
   }
 }
 
-// the bound is two-sided: a jump DOWN by the same factor is refused too
 TEST(X1QmaxGuard, a_downward_junction_is_refused_as_well) {
   std::vector<double> w;
   for (int i = 0; i < 8; ++i) w.push_back(2.);
@@ -144,10 +97,6 @@ TEST(X1QmaxGuard, a_downward_junction_is_refused_as_well) {
                c10::Error);
 }
 
-// ---------------------------------------------------------------------------
-// 2. EVERY CONTRACT DECK STILL CONSTRUCTS. These are the grids the stage-1
-//    gates run; the bound must not touch one of them.
-// ---------------------------------------------------------------------------
 TEST(X1QmaxGuard, every_contract_x1rat_deck_still_constructs) {
   for (double q : {1.058, 1. / 1.058, 1.2, 1. / 1.2, 0.95, 1.05, 1.1, 1.01}) {
     for (int n : {16, 32, 64, 128}) {
@@ -164,8 +113,6 @@ TEST(X1QmaxGuard, every_contract_x1rat_deck_still_constructs) {
   }
 }
 
-// the largest adjacent ratio measured on any contract grid is 1.2000030, on
-// the 1/1.2 deck at nx1 = 128; it is inside the bound with room to spare
 TEST(X1QmaxGuard, the_largest_measured_contract_ratio_is_accepted) {
   auto op = load(card("{nx1: 128, nghost: 3, x1rat: 0.83333333333333337}", "",
                       "{x1min: 0., x1max: 1.}"));
@@ -175,8 +122,6 @@ TEST(X1QmaxGuard, the_largest_measured_contract_ratio_is_accepted) {
   EXPECT_LT(worst, 1.5) << "measured worst adjacent ratio " << worst;
 }
 
-// a non-self-similar list inside the bound is accepted: the guard rejects
-// abrupt jumps, not non-uniformity
 TEST(X1QmaxGuard, a_non_self_similar_list_inside_the_bound_is_accepted) {
   std::vector<double> w{1.6, 2.2, 1.6, 2.2, 1.7, 2.3, 1.8, 2.6};
   auto op = load(card("{nx1: 8, nghost: 3}", face_list(faces_of(w))));
@@ -185,10 +130,6 @@ TEST(X1QmaxGuard, a_non_self_similar_list_inside_the_bound_is_accepted) {
   EXPECT_LT(worst_ratio(coord), 1.5);
 }
 
-// ---------------------------------------------------------------------------
-// 3. THE UNIFORM PATH IS UNTOUCHED. A deck with no key, and one with
-//    x1rat: 1., never reach the check at all.
-// ---------------------------------------------------------------------------
 TEST(X1QmaxGuard, the_uniform_path_is_untouched) {
   for (char const* cells :
        {"{nx1: 16, nghost: 3}", "{nx1: 16, nghost: 3, x1rat: 1.}"}) {

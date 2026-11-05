@@ -17,8 +17,6 @@ void Center5InterpImpl::reset() {
                                            torch::kFloat64));
   cp = register_buffer("cp", cm.flip({0}));
 
-  // Route A tables (snapy#280 stage 1); see Weno5InterpImpl::reset for why
-  // they are registered in set_x1_coeffs rather than here.
   x1_reset_tables(*this, cm_x1, cp_x1, kPoly5NuCoeff);
 }
 
@@ -26,7 +24,6 @@ void Center5InterpImpl::set_x1_coeffs(torch::Tensor const& x1f) {
   x1_set_coeffs(*this, x1f, &cp5_x1_coeffs);
 }
 
-//! Route A: run the per-face kernel with `src` as the coefficient table.
 void Center5InterpImpl::forward_nu(torch::Tensor const& w, int dim,
                                    torch::Tensor const& out,
                                    torch::Tensor const& src,
@@ -39,8 +36,6 @@ void Center5InterpImpl::forward_nu(torch::Tensor const& w, int dim,
 
 void Center5InterpImpl::left(torch::Tensor w, int dim,
                              torch::Tensor const& out) {
-  // route A (snapy#280): only when a face vector has been installed.  With no
-  // table the function below is byte for byte the shipped one.
   if (has_x1_coeffs()) {
     forward_nu(w, dim, out, cm_x1, cm_x1_cast);
     return;

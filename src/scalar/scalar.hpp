@@ -102,11 +102,7 @@ class ScalarImpl : public torch::nn::Cloneable<ScalarImpl> {
 
   //! submodules
   Coordinate pcoord = nullptr;
-  //! reconstruction for x2/x3, and for x1 on a uniform grid
   Reconstruct precon = nullptr;
-  //! #280: the x1 reconstruction, the only module route A may be given a face
-  //! vector (note Sec. 4.7).  On a uniform deck it IS `precon`: no second
-  //! module is registered, so the tree is the pre-#280 one (review item 2).
   Reconstruct precon1 = nullptr;
   RiemannSolver priemann = nullptr;
   torch::Tensor _flux1, _flux2, _flux3, _div;

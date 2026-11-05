@@ -269,16 +269,9 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! Register all forcing modules
   std::vector<std::string> _register_forcings_module();
 
-  //! x1 grid uniformity (-1 unknown, 0 non-uniform, 1 uniform), probed once
-  //! (a keyed stretched x1 is non-uniform without a probe); selects the
-  //! six-face vs log-mean cell-pressure reference
   mutable int x1_uniform_ = -1;
-  //! #280 (iv): the stretched-x1 six-face cell-pressure rows, built on first
-  //! use from this block's widths (float64, CPU)
   mutable torch::Tensor x1_rows_;
 
-  //! refuse what a stretched x1 does not support at run time (#280): MPS and
-  //! a non-reflecting x1 boundary
   void _check_stretched_x1(torch::Tensor const& u) const;
   //! SNAP_WB_REF4 stencils for this block's x1 grid, built on first use
   mutable std::shared_ptr<WbRef4Stencils> wb_ref4_;

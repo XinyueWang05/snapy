@@ -24,8 +24,6 @@ void Weno5InterpImpl::reset() {
 
   cp = register_buffer("cp", cm.flip({1}));
 
-  // Route A tables: registered only once a face vector arrives, so a uniform
-  // deck's buffer list is the pre-#280 one (x1_coeffs.hpp, review item 2).
   x1_reset_tables(*this, cm_x1, cp_x1, kWeno5NuCoeff);
 }
 
@@ -33,12 +31,6 @@ void Weno5InterpImpl::set_x1_coeffs(torch::Tensor const& x1f) {
   x1_set_coeffs(*this, x1f, &weno5_x1_coeffs);
 }
 
-//! Route A: run the per-face kernel with `src` as the coefficient table.
-/*!
- * Factored out so that `left()` and `right()` differ only in which table they
- * pass, exactly as they differ only in `cm` vs `cp` on the uniform path.  The
- * refusals and the iterator are shared with cp5 (x1_coeffs.hpp).
- */
 void Weno5InterpImpl::forward_nu(torch::Tensor const& w, int dim,
                                  torch::Tensor const& out,
                                  torch::Tensor const& src,
@@ -51,8 +43,6 @@ void Weno5InterpImpl::forward_nu(torch::Tensor const& w, int dim,
 }
 
 void Weno5InterpImpl::left(torch::Tensor w, int dim, torch::Tensor const& out) {
-  // route A (snapy#280): only when a face vector has been installed.  With no
-  // table the function below is byte for byte the shipped one.
   if (has_x1_coeffs()) {
     forward_nu(w, dim, out, cm_x1, cm_x1_cast);
     return;

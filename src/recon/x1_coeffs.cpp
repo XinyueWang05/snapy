@@ -1,17 +1,12 @@
-// C/C++
 #include <cmath>
 
-// torch
 #include <ATen/native/ReduceOpsUtils.h>
 
-// snap
 #include "x1_coeffs.hpp"
 
 namespace snap {
 namespace {
 
-//! Shu (1998) eq. 2.20 primitive-function weights at the target point 0, for
-//! the `n` cells bounded by the `n+1` nodes z[0..n] (note Sec. 4.2).
 void primitive_row(double const* z, int n, double* w) {
   double lp[6];
   for (int j = 0; j <= n; ++j) {
@@ -35,9 +30,6 @@ void primitive_row(double const* z, int n, double* w) {
   }
 }
 
-//! Rows 1 and 2 of V^{-1} for the quadratic q = a0 + a1 z + a2 z^2 averaging
-//! to ubar over the three cells bounded by z[0..3]: a1 = r1 . ubar,
-//! a2 = r2 . ubar (note Sec. 4.2).
 void quad_inv_rows(double const* z, double* r1, double* r2) {
   double V[3][3];
   for (int k = 0; k < 3; ++k) {
@@ -47,7 +39,6 @@ void quad_inv_rows(double const* z, double* r1, double* r2) {
     V[k][2] = (p * p + p * q + q * q) / 3.;
   }
 
-  // cofactor inverse; well conditioned in the normalised coordinate
   double cof[3][3];
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
@@ -59,25 +50,18 @@ void quad_inv_rows(double const* z, double* r1, double* r2) {
   double det = V[0][0] * cof[0][0] + V[0][1] * cof[0][1] + V[0][2] * cof[0][2];
   TORCH_CHECK(det != 0., "[x1_coeffs] degenerate WENO5 stencil");
 
-  // inv[i][j] = cof[j][i] / det
   for (int j = 0; j < 3; ++j) {
     r1[j] = cof[j][1] / det;
     r2[j] = cof[j][2] / det;
   }
 }
 
-//! One 48-wide WENO5 row in the "p-type" orientation: `y` the six faces of the
-//! window, target the upper face y3, evaluated in the scale-free coordinate
-//! zeta = (x - y3)/h2 (note Sec. 4.2, layout note Sec. 2).
 void ptype_row(double const* y, double* row) {
   double h2 = y[3] - y[2];
   double z[6];
   for (int k = 0; k < 6; ++k) z[k] = (y[k] - y[3]) / h2;
 
-  // stencil r uses the three window cells starting at k0[r], shipped order
   const int k0[3] = {2, 1, 0};
-  // beta is invariant under this sign; it is the shipped convention, so a
-  // uniform window reproduces src/recon/weno5.cpp:11-23 entry for entry
   const double bsign[3] = {1., 1., -1.};
 
   for (int i = 0; i < 45; ++i) row[i] = 0.;
@@ -99,16 +83,12 @@ void ptype_row(double const* y, double* row) {
     }
   }
 
-  // closed-form optimal weights, d_r > 0 on any admissible grid (note Sec. 4.2)
   double a = -z[0], b = -z[1], c = z[4], e = z[5];
   row[45] = a * b / ((a + e) * (b + e));
   row[46] = a * e * (a + b + c + e) / ((a + e) * (b + e) * (a + c));
   row[47] = c * e / ((a + c) * (a + e));
 }
 
-//! The two WENO5 rows of one window: cm targets y2, cp targets y3.  cm is the
-//! mirror of the p-type build, so the uniform-grid identity cp = cm.flip holds
-//! by construction (note Sec. 4.2, layout note Sec. 1).
 void window_weno5(double const* y, double* cm, double* cp) {
   ptype_row(y, cp);
 
@@ -125,10 +105,6 @@ void window_weno5(double const* y, double* cm, double* cp) {
   cm[47] = tmp[47];
 }
 
-//! Combine one WENO5 row's candidates with its linear weights: the cp5 row is
-//! built as sum_r d_r p_r rather than from an independent 6-node primitive
-//! function (note Sec. 4.2, layout note Sec. 3; the two agree to round-off,
-//! checked in tests/test_x1_coeffs.cpp).
 void combine_optimal(double const* row48, double* out5) {
   for (int n = 0; n < 5; ++n) {
     out5[n] = row48[45] * row48[n] + row48[46] * row48[5 + n] +
@@ -136,7 +112,6 @@ void combine_optimal(double const* row48, double* out5) {
   }
 }
 
-//! The two cp5 rows of one window: the degree-4 reconstruction at y2 and y3.
 void window_cp5(double const* y, double* cm, double* cp) {
   double rm[kWeno5NuCoeff], rp[kWeno5NuCoeff];
   window_weno5(y, rm, rp);
@@ -144,7 +119,6 @@ void window_cp5(double const* y, double* cm, double* cp) {
   combine_optimal(rp, cp);
 }
 
-//! Shared input validation; returns a contiguous CPU float64 copy of the faces.
 torch::Tensor check_faces(torch::Tensor const& x1f) {
   TORCH_CHECK(x1f.defined(), "[x1_coeffs] face tensor is undefined");
   TORCH_CHECK(x1f.dim() == 1, "[x1_coeffs] expected a 1-D face vector, got ",
@@ -216,7 +190,6 @@ void x1_install_tables(torch::nn::Module& m, torch::Tensor& cm_x1,
                        torch::Tensor& cp_x1, torch::Tensor const& cm_rows,
                        torch::Tensor const& cp_rows) {
   if (m.named_buffers(/*recurse=*/false).contains("cm_x1")) {
-    // keep the registered tensors' identity, as the old code did
     cm_x1.set_data(cm_rows);
     cp_x1.set_data(cp_rows);
   } else {
@@ -274,8 +247,6 @@ at::TensorIterator x1_nu_iterator(torch::Tensor const& w, int dim,
       .add_output(out)
       .add_input(w);
 
-  // CPU only (x1_coeffs.hpp); named lvalue because `add_input(TensorBase&&)`
-  // is deleted.
   torch::Tensor rows;
   if (!w.device().is_cuda()) {
     rows = x1_coeffs_row_view(c, out, dim);

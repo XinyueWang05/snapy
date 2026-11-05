@@ -2,17 +2,9 @@
 
 #include <cuda_runtime.h>
 
-// snap
 #include "interp_impl.cuh"
 #include "x1_coeffs_device.h"
 
-//! \file interp_impl_nu.cuh
-//! Route A device kernels (snapy#280 stage 1, note Sec. 4.3).  The per-face
-//! rows stay in GLOBAL memory: staging them as the shipped kernels do would
-//! need 384 KB against a 48 KB budget, and adjacent threads read adjacent
-//! rows, so the loads coalesce.  The row is `coeff + NCoeff * id` with no
-//! loop-counter assumption, because `grid.x == 1` makes `threadIdx.x` the
-//! true output index (layout note Sec. 8.1).
 
 #define INP(j, i) (inp[(j) * stride_in2 + (i) * stride_in1])
 #define OUT(j, i) (out[(j) * stride_out2 + (i) * stride_out1])
@@ -20,9 +12,7 @@
 
 namespace snap {
 
-// `_vvdot_c` comes from x1_coeffs_device.h, one definition for both backends.
 
-//! WENO5 on one shared-memory line with this face's own row from global memory.
 template <typename T>
 __device__ T interp_shared_weno5_nu_impl(T const *line, T const *row, int v,
                                          int start, int axis_size, bool scale) {
@@ -69,7 +59,6 @@ __device__ T interp_shared_weno5_nu_impl(T const *line, T const *row, int v,
          (alpha0 + alpha1 + alpha2);
 }
 
-//! cp5 on one shared-memory line with this face's own row from global memory.
 template <typename T>
 __device__ T interp_shared_poly5_nu_impl(T const *line, T const *row, int v,
                                          int start, int axis_size) {
@@ -81,7 +70,6 @@ __device__ T interp_shared_poly5_nu_impl(T const *line, T const *row, int v,
   return out;
 }
 
-//! One block per line; `threadIdx.x` is the output (face) index.
 template <typename T>
 __device__ void interp_weno5_nu_impl(T *out, T *inp, T const *coeff, int nvar,
                                      int stride_in1, int stride_in2,
@@ -148,8 +136,6 @@ struct Poly5NuOp {
   }
 };
 
-//! Tiled twin of `interp_line_tiled` (interp_impl.cuh:252-291); differs only
-//! in staging no coefficients and indexing the row by `start + id`.
 template <typename T, int Stencil, int NCoeff, typename Op>
 __device__ void interp_line_tiled_nu(T *out, T *inp, T const *coeff, int nvar,
                                      int stride_in1, int stride_in2,

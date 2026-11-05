@@ -1,11 +1,9 @@
-// torch
 #include <ATen/Dispatch.h>
 #include <ATen/TensorIterator.h>
 #include <ATen/native/ReduceOpsUtils.h>
 #include <ATen/native/cpu/Loops.h>
 #include <torch/torch.h>
 
-// snap
 #include "interp_impl_nu.h"
 #include "recon_dispatch_nu.hpp"
 #include "x1_coeffs.hpp"
@@ -13,9 +11,6 @@
 namespace snap {
 namespace {
 
-//! The row pointers a sub-range produced really are rows of this table: O(1)
-//! per `for_each` chunk, and the standing assertion of the review item (b)
-//! argument (layout note Sec. 8.2).
 void check_chunk(char const* base, int64_t nrow, int64_t rowbytes, char** data,
                  const int64_t* strides, int64_t n, char const* what) {
   char const* lo = data[2];
@@ -27,11 +22,6 @@ void check_chunk(char const* base, int64_t nrow, int64_t rowbytes, char** data,
               "] coefficient row pointer is outside the table");
 }
 
-//! The CPU half of route A for a row of any width: three operands, the third
-//! the zero-stride row view, so `data[2] + i * strides[2]` is this output
-//! element's own row without `i` being the face index (layout note Sec. 8.2).
-//! `op` carries the only other difference between weno5 and cp5, the host
-//! kernel that walks the row (snapy#280 review item 4).
 template <int NCoeff, typename Op>
 void call_nu_cpu(at::TensorIterator& iter, torch::Tensor const& coeff, int dim,
                  char const* what, Op op) {
@@ -91,10 +81,6 @@ void call_poly5_nu_cpu(at::TensorIterator& iter, torch::Tensor coeff, int dim) {
       });
 }
 
-// MPS is out of scope for stage 1 (note Sec. 8.3): a per-face rewrite of the
-// shared-row `wu.matmul(c)` path would be a different algorithm with no
-// hardware here to check it on, so route A refuses rather than running
-// uniform coefficients on a stretched grid.
 void call_weno5_nu_mps(at::TensorIterator&, torch::Tensor, int, bool) {
   TORCH_CHECK(false,
               "[weno5_nu] a stretched x1 grid is not supported on the MPS "

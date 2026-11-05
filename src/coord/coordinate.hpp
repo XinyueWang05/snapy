@@ -93,26 +93,12 @@ struct CoordinateOptionsImpl {
     return (global_x3max() - global_x3min()) / global_nx3();
   }
 
-  //! true when the deck set `cells/x1rat` or `geometry/x1f` (#280)
   bool stretched_x1() const { return !x1f_interior().empty(); }
 
-  //! Largest adjacent-cell width ratio a stretched x1 may have (#280 stage 1)
   static constexpr double kX1MaxWidthRatio = 1.5;
 
-  //! Faces per end that `global_x1f` carries beyond the interior: the
-  //! 3 a WENO5 stencil needs, or nghost if larger, plus one more for dx1v.
   int x1f_ghosts() const { return std::max(nghost(), 3) + 1; }
 
-  //! The global x1 face vector, ghosts included (#280).
-  /*!
-   * Faces g = -G .. gnx + G at index g + G, with G = x1f_ghosts(), whatever
-   * nghost is: gnx + 2 G + 1 values. Stretched: the interior faces of
-   * `x1f_interior` and ghosts that mirror the interior widths (ghost rule
-   * (c)): x_{-m} = 2 x_0 - x_m and x_{n+m} = 2 x_n - x_{n-m}. Uniform: today's
-   * `linspace` over -nghost .. gnx + nghost, continued by the cell width. A
-   * block's `x1f` is the slice from index ix1 - nghost + G; the x1 metrics
-   * derive from it, and nothing else rebuilds the x1 grid.
-   */
   torch::Tensor global_x1f() const;
 
   //! Index of this block's FIRST INTERIOR CELL in the global grid.
@@ -145,8 +131,6 @@ struct CoordinateOptionsImpl {
   ADD_ARG(int, nghost) = 1;
   ADD_ARG(int, interp_order) = 2;
 
-  //! global interior x1 faces, x1min .. x1max (nx1 + 1 values); empty means
-  //! uniform. Set from `geometry/x1f` or built from `cells/x1rat`.
   ADD_ARG(std::vector<double>, x1f_interior) = {};
 
  private:
@@ -160,10 +144,8 @@ struct CoordinateOptionsImpl {
     return dx == 0. ? 0 : static_cast<int>(std::lround(span / dx));
   }
 
-  //! index of the interior face nearest to x on a stretched x1 grid
   int _face_index(double x) const;
 
-  //! `_resolve_axis` for a stretched x1: block bounds must be faces
   void _resolve_x1_faces();
 };
 using CoordinateOptions = std::shared_ptr<CoordinateOptionsImpl>;
