@@ -140,6 +140,15 @@ This moves the discrete fixed point of a non-uniform column by $O(\Delta z^2)$. 
 iterates against the switched $p_{\rm ref}$ when the switch is set (the density reference does not enter
 there), so a balanced column is the fixed point the solver enforces.
 
+This is the **un-keyed** path. A keyed stretched x1 (`cells/x1rat` or `geometry/x1f`, #280) already has a
+sixth-order cell pressure: the cell average of the degree-5 interpolant through six faces, built from the
+widths (#280 (iv)). There the switch keeps it, so REF4 contributes only the density reference of section 3
+and the face density of section 4, and `balance_column` does not run REF4: the stretched rest state is the
+same with the switch on or off (`tests/test_wb_ref4_stretched.py`). $F$ stays in cell-index units; on a keyed
+stretched family the measured order of $N^2_{m eff}$ is 4.06/4.04 (1 e-fold) and 3.78/3.89 (3 e-folds) at
+$h_{\max}/h_{\min} = 4$. On a Cartesian x1 `SNAP_X1_CENTROID_EXACT` has no content of its own and runs as
+`SNAP_WB_REF4`.
+
 ## 6. Exact discrete balance is kept
 
 At rest $p' = $ const, so $p_L = p_R = p_{\rm sf} + c$, $\bar u = 0$ and the LMARS face pressure is
