@@ -10,12 +10,12 @@
 namespace snap {
 
 template <typename T>
-__global__ void
-hydro_ref_x1_cuda_kernel(T const *w, T const *dx1f, T const *anchor,
-                         T *psf_lo, T *psf_hi, T *pref, T *dsf, T *dref,
-                         int ncolumns, int nc1, int iu, T grav, int x1_grid,
-                         bool phys_in, bool phys_out, bool wall_clamp,
-                         T const *rows) {
+__global__ void hydro_ref_x1_cuda_kernel(T const *w, T const *dx1f,
+                                         T const *anchor, T *psf_lo, T *psf_hi,
+                                         T *pref, T *dsf, T *dref, int ncolumns,
+                                         int nc1, int iu, T grav, int x1_grid,
+                                         bool phys_in, bool phys_out,
+                                         bool wall_clamp, T const *rows) {
   int column = blockIdx.x;
 
   if (threadIdx.x == 0) {
@@ -32,12 +32,11 @@ hydro_ref_x1_cuda_kernel(T const *w, T const *dx1f, T const *anchor,
 }
 
 void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
-                       torch::Tensor const &anchor,
-                       torch::Tensor const &psf_lo,
-                       torch::Tensor const &psf_hi,
-                       torch::Tensor const &pref, torch::Tensor const &dsf,
-                       torch::Tensor const &dref, int iu, double grav,
-                       int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
+                       torch::Tensor const &anchor, torch::Tensor const &psf_lo,
+                       torch::Tensor const &psf_hi, torch::Tensor const &pref,
+                       torch::Tensor const &dsf, torch::Tensor const &dref,
+                       int iu, double grav, int x1_grid, bool phys_in,
+                       bool phys_out, bool wall_clamp,
                        torch::Tensor const &rows) {
   // the host path's own check (hydro_dispatch.cpp), plus the two things a
   // kernel launch cannot survive: `rows.data_ptr` below is handed straight to
@@ -48,9 +47,9 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
                                   rows.scalar_type() == w.scalar_type() &&
                                   rows.is_contiguous()),
               "hydro_ref_x1: the stretched rows must be contiguous and on the "
-              "state's own device and dtype; got ", rows.device(), "/",
-              rows.scalar_type(), " against ", w.device(), "/",
-              w.scalar_type());
+              "state's own device and dtype; got ",
+              rows.device(), "/", rows.scalar_type(), " against ", w.device(),
+              "/", w.scalar_type());
 
   at::cuda::CUDAGuard device_guard(w.device());
   int ncolumns = w.size(1) * w.size(2);

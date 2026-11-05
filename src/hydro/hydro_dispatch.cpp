@@ -28,13 +28,13 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
     auto rows_ptr = rows.defined() ? rows.data_ptr<scalar_t>() : nullptr;
     at::parallel_for(0, ncolumns, 0, [&](int64_t begin, int64_t end) {
       for (int64_t column = begin; column < end; ++column) {
-        hydro_ref_x1_impl(
-            w.data_ptr<scalar_t>(), dx1f.data_ptr<scalar_t>(), anchor_ptr,
-            psf_lo.data_ptr<scalar_t>(), psf_hi.data_ptr<scalar_t>(),
-            pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),
-            dref.data_ptr<scalar_t>(), static_cast<int>(column), ncolumns, nc1,
-            iu, scalar_t(grav), x1_grid, phys_in, phys_out, wall_clamp,
-            rows_ptr);
+        hydro_ref_x1_impl(w.data_ptr<scalar_t>(), dx1f.data_ptr<scalar_t>(),
+                          anchor_ptr, psf_lo.data_ptr<scalar_t>(),
+                          psf_hi.data_ptr<scalar_t>(),
+                          pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),
+                          dref.data_ptr<scalar_t>(), static_cast<int>(column),
+                          ncolumns, nc1, iu, scalar_t(grav), x1_grid, phys_in,
+                          phys_out, wall_clamp, rows_ptr);
       }
     });
   });
@@ -45,8 +45,8 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
                       torch::Tensor const& psf_lo, torch::Tensor const& psf_hi,
                       torch::Tensor const& pref, torch::Tensor const& dsf,
                       torch::Tensor const& dref, int iu, double grav,
-                      int x1_grid, bool phys_in, bool phys_out,
-                      bool wall_clamp, torch::Tensor const& /*rows*/) {
+                      int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
+                      torch::Tensor const& /*rows*/) {
   // #280: the stretched-x1 path (and route A) has no MPS form in stage 1
   TORCH_CHECK(x1_grid != kX1RefStretched,
               "a stretched x1 (geometry/x1f or cells/x1rat) is not supported "
@@ -213,8 +213,9 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
     auto hd = dx1f.narrow(-1, 0, nc1 - 1);
     auto hu = dx1f.narrow(-1, 1, nc1 - 1);
     rf.narrow(-1, 1, nc1 - 1)
-        .copy_((hu * rs.narrow(-1, 0, nc1 - 1) + hd * rs.narrow(-1, 1, nc1 - 1)) /
-               (hd + hu));
+        .copy_(
+            (hu * rs.narrow(-1, 0, nc1 - 1) + hd * rs.narrow(-1, 1, nc1 - 1)) /
+            (hd + hu));
   }
   dref.copy_(pref * rs);
   dsf.copy_(psf_lo * rf);

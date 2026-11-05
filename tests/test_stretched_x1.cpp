@@ -95,8 +95,8 @@ void expect_metrics(Cartesian const& coord, std::vector<double> const& g,
 // 1.4286, inside the stage-1 bound kX1MaxWidthRatio = 1.5 (#280). The list
 // this replaced jumped 1 -> 5 at the last face and is refused at parse time
 // now; that refusal is tested in test_x1_qmax_guard.cpp.
-const std::vector<double> kFaces = {0.,  1.25, 3.,   5.25, 7.,
-                                    9.5, 11.5, 14.,  16.};
+const std::vector<double> kFaces = {0.,  1.25, 3.,  5.25, 7.,
+                                    9.5, 11.5, 14., 16.};
 
 std::string face_list(std::vector<double> const& f) {
   std::string s = "  x1f: [";

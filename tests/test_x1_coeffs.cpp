@@ -86,7 +86,8 @@ torch::Tensor cell_avg_poly(torch::Tensor const& x1f,
     for (int i = 0; i < 3; ++i) {
       double x = .5 * (a + b) + .5 * (b - a) * g[i];
       double p = 0.;
-      for (int d = static_cast<int>(c.size()) - 1; d >= 0; --d) p = p * x + c[d];
+      for (int d = static_cast<int>(c.size()) - 1; d >= 0; --d)
+        p = p * x + c[d];
       acc += wg[i] * p;
     }
     u[k] = acc;
@@ -236,10 +237,10 @@ TEST(X1Coeffs, cp5_row_matches_an_independent_derivation) {
       for (int n = 0; n < 5; ++n) ref_m[n] = t[4 - n];
 
       for (int n = 0; n < 5; ++n) {
-        worst = std::max(worst,
-                         std::abs(p.first[m][n].item<double>() - ref_m[n]));
-        worst = std::max(worst,
-                         std::abs(p.second[m][n].item<double>() - ref_p[n]));
+        worst =
+            std::max(worst, std::abs(p.first[m][n].item<double>() - ref_m[n]));
+        worst =
+            std::max(worst, std::abs(p.second[m][n].item<double>() - ref_p[n]));
         EXPECT_NEAR(p.first[m][n].item<double>(), ref_m[n], 1.e-13)
             << "q = " << q << ", row " << m << ", cm col " << n;
         EXPECT_NEAR(p.second[m][n].item<double>(), ref_p[n], 1.e-13)
@@ -283,9 +284,11 @@ TEST(X1Coeffs, polynomial_exactness_and_face_index) {
 
         if (deg <= 2) {
           for (int r = 0; r < 3; ++r) {
-            double v = (t.slice(0, 5 * r, 5 * r + 5) * win).sum().item<double>();
-            double tol = 64. * kEps * umax *
-                         t.slice(0, 5 * r, 5 * r + 5).abs().sum().item<double>();
+            double v =
+                (t.slice(0, 5 * r, 5 * r + 5) * win).sum().item<double>();
+            double tol =
+                64. * kEps * umax *
+                t.slice(0, 5 * r, 5 * r + 5).abs().sum().item<double>();
             EXPECT_LE(std::abs(v - tgt[side]), std::max(tol, 1.e-13 * umax))
                 << "deg " << deg << " row " << m << " side " << side << " r "
                 << r;
@@ -320,8 +323,10 @@ TEST(X1Coeffs, beta_is_scale_free) {
     for (int side = 0; side < 2; ++side) {
       auto t = side == 0 ? w.first[m] : w.second[m];
       for (int r = 0; r < 3; ++r) {
-        double a = (t.slice(0, 15 + 10 * r, 20 + 10 * r) * win).sum().item<double>();
-        double b = (t.slice(0, 20 + 10 * r, 25 + 10 * r) * win).sum().item<double>();
+        double a =
+            (t.slice(0, 15 + 10 * r, 20 + 10 * r) * win).sum().item<double>();
+        double b =
+            (t.slice(0, 20 + 10 * r, 25 + 10 * r) * win).sum().item<double>();
         double beta = 13. / 12. * a * a + .25 * b * b;
         EXPECT_NEAR(beta, expect, 1.e-10 * expect)
             << "row " << m << " side " << side << " r " << r;
@@ -368,10 +373,10 @@ TEST(X1Coeffs, reconstruct_seam_and_buffer_names) {
   // the named buffer is the live tensor: a harness can overwrite rows in place
   auto live = named["interp1.cm_x1"];
   live[0][45] = 0.5;
-  EXPECT_EQ(
-      std::dynamic_pointer_cast<Weno5InterpImpl>(recon->pinterp1)->cm_x1[0][45]
-          .item<double>(),
-      0.5);
+  EXPECT_EQ(std::dynamic_pointer_cast<Weno5InterpImpl>(recon->pinterp1)
+                ->cm_x1[0][45]
+                .item<double>(),
+            0.5);
 }
 
 // ---------------------------------------------------------------------------
@@ -435,8 +440,8 @@ TEST(X1Coeffs, ghost_faces_needed_by_the_stencils) {
       std::cout << "  nghost = " << nghost << " nx1 = " << nx1
                 << ": stencils for the first and last interior face span "
                 << "global faces " << g_lo << " .. " << g_hi
-                << " (interior is 0 .. " << nx1 << "), so they need "
-                << -g_lo << " ghost faces below and " << g_hi - nx1
+                << " (interior is 0 .. " << nx1 << "), so they need " << -g_lo
+                << " ghost faces below and " << g_hi - nx1
                 << " above; extra = max(0, 3 - nghost) = "
                 << std::max(0, 3 - nghost) << std::endl;
 
@@ -727,8 +732,9 @@ TEST(X1Coeffs, cpu_face_index_under_threading_and_reordering) {
     cp5->right(perm, 3, pr);
     double worst_perm = worst_of(pl, pr);
 
-    std::cout << "  nthreads = " << nthreads << "  worst |cp5 - exact| = "
-              << worst << " (contiguous) / " << worst_perm << " (x1 strided)"
+    std::cout << "  nthreads = " << nthreads
+              << "  worst |cp5 - exact| = " << worst << " (contiguous) / "
+              << worst_perm << " (x1 strided)"
               << "  = " << worst / (kEps * umax) << " / "
               << worst_perm / (kEps * umax) << " eps*max|u|" << std::endl;
 
@@ -774,13 +780,14 @@ TEST(X1Coeffs, reconstruct_forward_face_index_on_a_stretched_grid) {
   double worst_rt = 0., worst_lt = 0.;
   for (int i = il; i <= iu; ++i) {
     double want = poly_at(c, f[i]);
-    worst_rt = std::max(
-        worst_rt, std::abs(wlr[IRT][0][0][0][i].item<double>() - want));
-    worst_lt = std::max(
-        worst_lt, std::abs(wlr[ILT][0][0][0][i].item<double>() - want));
+    worst_rt = std::max(worst_rt,
+                        std::abs(wlr[IRT][0][0][0][i].item<double>() - want));
+    worst_lt = std::max(worst_lt,
+                        std::abs(wlr[ILT][0][0][0][i].item<double>() - want));
   }
-  std::cout << "  Reconstruct::forward, irregular widths: worst |IRT - exact| = "
-            << worst_rt << ", worst |ILT - exact| = " << worst_lt << std::endl;
+  std::cout
+      << "  Reconstruct::forward, irregular widths: worst |IRT - exact| = "
+      << worst_rt << ", worst |ILT - exact| = " << worst_lt << std::endl;
 
   double umax = u.abs().max().item<double>();
   EXPECT_LT(worst_rt, 1.e-13 * umax);

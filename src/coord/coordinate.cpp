@@ -165,7 +165,8 @@ CoordinateOptions CoordinateOptionsImpl::from_yaml(
       TORCH_CHECK(faces[k] > faces[k - 1],
                   "stretched x1 faces must increase strictly; face ", k, " = ",
                   faces[k], " <= ", faces[k - 1]);
-    // #280 stage 1: an abrupt width jump is outside route A's contract (bound: CoordinateOptionsImpl::kX1MaxWidthRatio)
+    // #280 stage 1: an abrupt width jump is outside route A's contract (bound:
+    // CoordinateOptionsImpl::kX1MaxWidthRatio)
     for (size_t k = 1; k + 1 < faces.size(); ++k) {
       double below = faces[k] - faces[k - 1], above = faces[k + 1] - faces[k];
       double ratio = std::max(above / below, below / above);

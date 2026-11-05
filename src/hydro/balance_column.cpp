@@ -66,18 +66,18 @@ std::tuple<torch::Tensor, double, int> balance_column(
   // the same classification the solver applies to its own grid (hydro.cpp):
   // from the grid key on a stretched x1 (#280), else probed
   auto d = dxf.to(torch::kCPU).to(torch::kFloat64);
-  bool uniform =
-      !stretched &&
-      (d.max() - d.min()).item<double>() < 1.e-10 * d.mean().item<double>();
+  bool uniform = !stretched && (d.max() - d.min()).item<double>() <
+                                   1.e-10 * d.mean().item<double>();
   int x1_grid = stretched ? kX1RefStretched : int(uniform);
   // #280 (iv): the same rows a block builds from the same widths
   torch::Tensor rows;
   if (stretched)
     rows = hydro_ref_x1_stretched_rows(dxf, nc1 - 1, true, true, wall_clamp)
                .to(w.options());
-  TORCH_CHECK(!(stretched && wb_ref4_enabled()),
-              "balance_column: SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which "
-              "implies it) is not supported on a stretched x1 (#280); unset it");
+  TORCH_CHECK(
+      !(stretched && wb_ref4_enabled()),
+      "balance_column: SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which "
+      "implies it) is not supported on a stretched x1 (#280); unset it");
   auto wgt = grav * dxf;
   // #289 (SNAP_WB_REF4): on a non-uniform grid the switch changes the cell
   // reference pressure, so the fixed point is the switched reference's, and

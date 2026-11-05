@@ -146,16 +146,18 @@ TEST(StretchedX1Ref, uniform_and_stretched_reflecting_decks_run) {
 TEST(StretchedX1Ref, refuses_curvature_correction) {
   // gravity-work face-wallc leaves the radial-exact work off, so the dx^2/12
   // curvature correction of weno5 runs
-  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-          "supported on a stretched x1",
-          ", gravity-work: face-wallc}");
+  refuses(
+      "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
+      "supported on a stretched x1",
+      ", gravity-work: face-wallc}");
 }
 
 TEST(StretchedX1Ref, refuses_curvature_correction_cp5) {
-  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-          "supported on a stretched x1",
-          ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
-          "cp5");
+  refuses(
+      "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
+      "supported on a stretched x1",
+      ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
+      "cp5");
 }
 
 // Since review F3 a stretched cp3 deck never reaches the curvature card: cp3
@@ -163,8 +165,8 @@ TEST(StretchedX1Ref, refuses_curvature_correction_cp5) {
 // deck is refused exactly as before, one check earlier.
 TEST(StretchedX1Ref, refuses_a_stretched_cp3_deck_outright) {
   refuses("[cp3] has no stretched-x1 reconstruction",
-          ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
-          "cp3");
+          ", gravity-work: face-wallc}", "reflecting", "reflecting",
+          "cartesian", "cp3");
 }
 
 // ctest test_stretched_x1_ref_radial_exact_off runs this with
@@ -173,8 +175,9 @@ TEST(StretchedX1Ref, refuses_a_stretched_cp3_deck_outright) {
 TEST(StretchedX1Ref, refuses_curvature_with_radial_exact_off) {
   if (HydroImpl::gravity_work_radial_exact())
     GTEST_SKIP() << "SNAP_GRAVITY_WORK_RADIAL_EXACT is on";
-  refuses("the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-          "supported on a stretched x1");
+  refuses(
+      "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
+      "supported on a stretched x1");
 }
 
 TEST(StretchedX1Ref, refuses_diffusion_kappa_iso_only) {
@@ -290,8 +293,9 @@ TEST(StretchedX1Ref, refuses_gnomonic_equiangle) {
 // test_stretched_x1_ref_x1_centroid with SNAP_X1_CENTROID_EXACT=1
 TEST(StretchedX1Ref, refuses_wb_ref4_switch) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
-  refuses("SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies it) is not "
-          "supported on a stretched x1 (geometry/x1f or cells/x1rat, #280)");
+  refuses(
+      "SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies it) is not "
+      "supported on a stretched x1 (geometry/x1f or cells/x1rat, #280)");
 }
 
 // ctest test_stretched_x1_ref_x1_mass_covariance runs this with
@@ -311,8 +315,9 @@ TEST(StretchedX1Ref, refuses_x1_mass_covariance_switch) {
   // `refuses` asserts both halves: the stretched card throws with this
   // message, and the SAME card on a uniform grid -- the switch still on --
   // builds and steps.
-  refuses("SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
-          "(geometry/x1f or cells/x1rat, #280)");
+  refuses(
+      "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
+      "(geometry/x1f or cells/x1rat, #280)");
   // The uniform half again, on its own, so the guard cannot be satisfied by
   // refusing the switch everywhere: this is what must keep working.
   EXPECT_NO_THROW(build_and_step(card(false)))
@@ -323,11 +328,11 @@ namespace {
 
 //! an isothermal column of `n` cells over `height`, cells growing upward by
 //! `q`, cell-centred values; the grid is what balance_column is handed
-std::pair<torch::Tensor, torch::Tensor> column(int n, double q,
-                                               double height) {
+std::pair<torch::Tensor, torch::Tensor> column(int n, double q, double height) {
   auto opt = torch::TensorOptions().dtype(torch::kFloat64);
   auto k = torch::arange(n + 1, opt);
-  auto faces = height * torch::expm1(k * std::log(q)) / std::expm1(n * std::log(q));
+  auto faces =
+      height * torch::expm1(k * std::log(q)) / std::expm1(n * std::log(q));
   auto dx1f = faces.slice(0, 1) - faces.slice(0, 0, n);
   auto zc = 0.5 * (faces.slice(0, 1) + faces.slice(0, 0, n));
   auto w = torch::zeros({IPR + 1, 1, 1, n}, opt);
@@ -425,9 +430,9 @@ std::vector<double> pref_error(std::vector<double> const& f, bool stretched,
   auto lo = torch::empty({1, 1, n}, opt), hi = torch::empty_like(lo);
   auto pref = torch::empty_like(lo), dsf = torch::empty_like(lo),
        dref = torch::empty_like(lo);
-  auto rows = stretched ? hydro_ref_x1_stretched_rows(dx1f, n - 1, phys, phys,
-                                                      true)
-                        : torch::Tensor();
+  auto rows = stretched
+                  ? hydro_ref_x1_stretched_rows(dx1f, n - 1, phys, phys, true)
+                  : torch::Tensor();
   at::native::call_hydro_ref_x1(
       torch::kCPU, w, dx1f, anchor, lo, hi, pref, dsf, dref, n - 1, kG,
       stretched ? kX1RefStretched : kX1RefUniform, phys, phys, true, rows);
@@ -487,11 +492,10 @@ TEST(StretchedX1Ref, iv_rows_on_uniform_faces_are_the_uniform_weights) {
       torch::full({n}, 2.5e3, torch::kFloat64), n - 1, true, true, true);
   double const w6[6] = {11. / 1440., -31. / 480., 401. / 720.,
                         401. / 720., -31. / 480., 11. / 1440.};
-  double const w6e[2][6] = {
-      {95. / 288., 1427. / 1440., -133. / 240., 241. / 720., -173. / 1440.,
-       3. / 160.},
-      {-3. / 160., 637. / 1440., 511. / 720., -43. / 240., 77. / 1440.,
-       -11. / 1440.}};
+  double const w6e[2][6] = {{95. / 288., 1427. / 1440., -133. / 240.,
+                             241. / 720., -173. / 1440., 3. / 160.},
+                            {-3. / 160., 637. / 1440., 511. / 720., -43. / 240.,
+                             77. / 1440., -11. / 1440.}};
   double dw = 0.;
   for (int i = 0; i < n; ++i) {
     int start = i < 2 ? 0 : (i >= n - 2 ? n - 5 : i - 2);

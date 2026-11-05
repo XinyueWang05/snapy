@@ -338,7 +338,8 @@ UlpDiff ulp_diff(torch::Tensor const& cpu, torch::Tensor const& gpu, int nc1) {
 //! would overflow at nc1 in the thousands) and the column keeps height 1.
 torch::Tensor stretched_dx1f(int nc1, torch::ScalarType dtype) {
   auto f64 = torch::TensorOptions().dtype(torch::kFloat64);
-  auto d = torch::pow(std::pow(5.0, 1.0 / double(nc1)), torch::arange(nc1, f64));
+  auto d =
+      torch::pow(std::pow(5.0, 1.0 / double(nc1)), torch::arange(nc1, f64));
   return (d / d.sum()).to(dtype).contiguous();
 }
 
@@ -387,7 +388,8 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
       auto z = (torch::arange(nc1, f64) / double(nc1 - 1)).view({1, 1, nc1});
       auto column = torch::arange(nc3 * nc2, f64).view({nc3, nc2, 1});
       w[snap::IDN].copy_((1.0 + 0.5 * (1.0 - z) + 0.002 * column).to(dtype));
-      w[snap::IPR].copy_((100.0 * torch::exp(-2.0 * z) + 0.03 * column).to(dtype));
+      w[snap::IPR].copy_(
+          (100.0 * torch::exp(-2.0 * z) + 0.03 * column).to(dtype));
       w = w.contiguous();
 
       auto dx1f = stretched_dx1f(nc1, dtype);
@@ -413,11 +415,11 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
 
       auto wg = w.to(torch::kCUDA).contiguous();
       auto actual = allocate_output(wg);
-      at::native::call_hydro_ref_x1(
-          torch::kCUDA, wg, dx1f.to(torch::kCUDA), torch::Tensor(),
-          actual.psf_lo, actual.psf_hi, actual.pref, actual.dsf, actual.dref,
-          iu, 1.0, snap::kX1RefStretched, true, true, true,
-          rows.to(torch::kCUDA));
+      at::native::call_hydro_ref_x1(torch::kCUDA, wg, dx1f.to(torch::kCUDA),
+                                    torch::Tensor(), actual.psf_lo,
+                                    actual.psf_hi, actual.pref, actual.dsf,
+                                    actual.dref, iu, 1.0, snap::kX1RefStretched,
+                                    true, true, true, rows.to(torch::kCUDA));
       torch::cuda::synchronize();
 
       // the stretched rows must be doing work: without the six-face average
@@ -427,7 +429,8 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
           << "the stretched branch collapsed to the two-face mean at nc1 = "
           << nc1;
 
-      std::vector<std::pair<char const*, std::pair<torch::Tensor, torch::Tensor>>>
+      std::vector<
+          std::pair<char const*, std::pair<torch::Tensor, torch::Tensor>>>
           pairs = {{"psf_lo", {expected.psf_lo, actual.psf_lo}},
                    {"psf_hi", {expected.psf_hi, actual.psf_hi}},
                    {"pref", {expected.pref, actual.pref}},
@@ -521,10 +524,9 @@ TEST(HydroRefX1Dispatch,
   // one block owning twelve cells, wall below, seam above
   auto big = hydrostatic_slab(12, ng, 0, dz, H, p0, rt);
   auto a = allocate_output(big.w);
-  at::native::call_hydro_ref_x1(torch::kCPU, big.w, big.dx1f, torch::Tensor(),
-                                a.psf_lo, a.psf_hi, a.pref, a.dsf, a.dref,
-                                ng + 11, g, true, true, false, true,
-                                torch::Tensor());
+  at::native::call_hydro_ref_x1(
+      torch::kCPU, big.w, big.dx1f, torch::Tensor(), a.psf_lo, a.psf_hi, a.pref,
+      a.dsf, a.dref, ng + 11, g, true, true, false, true, torch::Tensor());
 
   // the bottom FOUR of those cells as their own block -- same wall, same
   // column, and the seam anchor the relay would have handed it (hydro.cpp's
@@ -532,10 +534,9 @@ TEST(HydroRefX1Dispatch,
   auto small = hydrostatic_slab(4, ng, 0, dz, H, p0, rt);
   auto anchor = a.psf_lo.narrow(-1, ng + 4, 1).clone();
   auto b = allocate_output(small.w);
-  at::native::call_hydro_ref_x1(torch::kCPU, small.w, small.dx1f, anchor,
-                                b.psf_lo, b.psf_hi, b.pref, b.dsf, b.dref,
-                                ng + 3, g, true, true, false, true,
-                                torch::Tensor());
+  at::native::call_hydro_ref_x1(
+      torch::kCPU, small.w, small.dx1f, anchor, b.psf_lo, b.psf_hi, b.pref,
+      b.dsf, b.dref, ng + 3, g, true, true, false, true, torch::Tensor());
 
   auto want = a.pref.narrow(-1, ng, 4);
   auto got = b.pref.narrow(-1, ng, 4);

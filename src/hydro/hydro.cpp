@@ -39,7 +39,8 @@ void HydroImpl::reset() {
               "not supported on a stretched x1 (geometry/x1f or cells/x1rat, "
               "#280); unset it");
 
-  // #280 stage 1: the covariance wall rho_1 uses equally-spaced weights (hydro_forward.cpp, `one_sided`), first order on a stretched x1
+  // #280 stage 1: the covariance wall rho_1 uses equally-spaced weights
+  // (hydro_forward.cpp, `one_sided`), first order on a stretched x1
   TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
                 x1_mass_covariance()),
               "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
@@ -256,11 +257,12 @@ void HydroImpl::_check_stretched_x1(torch::Tensor const& u) const {
   bool wrap = pmb->options->layout() && pmb->options->layout()->periodic_z();
   for (int f : {0, 1}) {
     bool phys = pmb->options->is_physical_boundary(0, 0, f == 0 ? -1 : 1);
-    TORCH_CHECK(!wrap && (!phys || is_reflecting(bf[f])),
-                "a stretched x1 (geometry/x1f or cells/x1rat) needs reflecting ",
-                "x1 boundaries (#280): its ghost faces mirror the interior ",
-                "widths; the x1-", f == 0 ? "inner" : "outer",
-                " boundary is not reflecting");
+    TORCH_CHECK(
+        !wrap && (!phys || is_reflecting(bf[f])),
+        "a stretched x1 (geometry/x1f or cells/x1rat) needs reflecting ",
+        "x1 boundaries (#280): its ghost faces mirror the interior ",
+        "widths; the x1-", f == 0 ? "inner" : "outer",
+        " boundary is not reflecting");
   }
 }
 
