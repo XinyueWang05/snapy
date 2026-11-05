@@ -100,8 +100,8 @@ namespace snap {
 //! `coord->options->stretched_x1()` of the grid the column comes from. A
 //! stretched x1 is non-uniform in every block whatever its widths, and its
 //! cell pressure is the six-face degree-5 Lagrange cell average with per-cell
-//! rows (hydro_ref_x1_stretched_rows), so the fixed point found here is the one
-//! the solver enforces only when this flag matches the solver's grid.
+//! rows (hydro_ref_x1_stretched_rows); a column of unequal widths takes them
+//! whatever the flag.
 //!
 //! Under SNAP_X1_CENTROID_EXACT a spherical-polar block's reference works on
 //! plain means converted from its r^2 means, which this column does not model:

@@ -344,8 +344,7 @@ std::pair<torch::Tensor, torch::Tensor> column(int n, double q, double height) {
 // 4.8e-3 to 6.0e-2 per cell) is balanced by the log-mean dp / ln(lo / hi)
 // only to its round-off floor eps (p / dp)^2, so at rtol 1e-13 the
 // projection throws (5.4e-12 measured); dp / log1p(dp / hi) floors at
-// eps p / dp and converges (4.3e-14). The unkeyed call is today's arithmetic,
-// which a keyed grid used before this change.
+// eps p / dp and converges (4.3e-14).
 TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
   auto [w, dx1f] = column(128, 1.02, 3.e5);
   auto [wb, err, sweeps] =
@@ -353,9 +352,6 @@ TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
                      /*max_iter=*/400, "cartesian", /*stretched=*/true);
   std::printf("keyed nx1 = 128: residual %.3e after %d sweeps\n", err, sweeps);
   EXPECT_LT(err, 1.e-13);
-  EXPECT_THROW(balance_column(w, dx1f, 22., true, 1.e-13, 400, "cartesian",
-                              /*stretched=*/false),
-               c10::Error);
 }
 
 // ctest test_stretched_x1_ref_wb_ref4 (and _x1_centroid) runs this with the

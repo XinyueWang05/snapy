@@ -8,7 +8,6 @@
 
 #include "balance_column.hpp"
 #include "hydro_dispatch.hpp"
-#include "wb_ref4.hpp"
 
 namespace snap {
 
@@ -63,28 +62,17 @@ std::tuple<torch::Tensor, double, int> balance_column(
   auto dref = torch::empty(sizes, w.options());
   torch::Tensor anchor;  // undefined: the kernel builds its own top anchor
 
-  // the same classification the solver applies to its own grid (hydro.cpp):
-  // from the grid key on a stretched x1 (#280), else probed
+  // unequal widths take the stretched rows (#280), whatever the key
   auto d = dxf.to(torch::kCPU).to(torch::kFloat64);
-  bool uniform = !stretched && (d.max() - d.min()).item<double>() <
-                                   1.e-10 * d.mean().item<double>();
-  int x1_grid = stretched ? kX1RefStretched : int(uniform);
+  stretched = stretched || (d.max() - d.min()).item<double>() >=
+                               1.e-10 * d.mean().item<double>();
+  int x1_grid = stretched ? kX1RefStretched : kX1RefUniform;
   // #280 (iv): the same rows a block builds from the same widths
   torch::Tensor rows;
   if (stretched)
     rows = hydro_ref_x1_stretched_rows(dxf, nc1 - 1, true, true, wall_clamp)
                .to(w.options());
   auto wgt = grav * dxf;
-  // #289 (SNAP_WB_REF4): on a non-uniform grid the switch changes the cell
-  // reference pressure, so the fixed point is the switched reference's, and
-  // this has to find that one (the density reference does not enter here)
-  bool ref4 = wb_ref4_enabled() && !uniform && !stretched;
-  WbRef4Stencils st;
-  if (ref4) {
-    auto x1f = torch::cat({torch::zeros({1}, dxf.options()), dxf.cumsum(0)});
-    st = wb_ref4_stencils(x1f, 0, nc1 - 1, uniform, wall_clamp, wall_clamp,
-                          w.options());
-  }
 
   // check, then update: the residual therefore describes the state returned,
   // and a column already at the fixed point comes back after zero updates
@@ -95,7 +83,6 @@ std::tuple<torch::Tensor, double, int> balance_column(
                                   psf_hi, pref, dsf, dref, nc1 - 1, grav,
                                   x1_grid, /*phys_in=*/true, /*phys_out=*/true,
                                   wall_clamp, rows);
-    if (ref4) wb_ref4_cells(st, wb, psf_lo, psf_hi, pref, dref);
     auto pp = prs - pref;
     auto c = pp.narrow(-1, nc1 - 1, 1);  // one gauge per column, at its top
     err = ((pp - c).abs() / (rho * wgt)).max().item<double>();

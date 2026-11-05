@@ -614,8 +614,8 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w) const {
       w.device().type(), w, dx1f, anchor, psf_lo, psf_hi, pref, dsf, dref, iu,
       g, x1_grid, phys_in, phys_out, options->wb_wall_clamp(), rows);
 
-  // #289 (SNAP_WB_REF4): the cell part of the fourth-order density reference
-  // (and on non-uniform x1 the cell pressure), before the seam exchange below
+  // #289 (SNAP_WB_REF4): the cell part of the fourth-order density reference,
+  // before the seam exchange below
   // so that the exchanged ghost rows carry it; the face part follows the
   // exchange. psf is never changed, so the rest balance is the kernel's.
   // SNAP_X1_CENTROID_EXACT implies the switch (wb_ref4_enabled()): on
@@ -625,10 +625,9 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w) const {
   if (wb_ref4()) {
     if (!wb_ref4_ || wb_ref4_->stale(w)) {
       bool clamp = options->wb_wall_clamp();
-      // a keyed stretched x1 keeps the kernel's six-face cell pressure (#280)
       wb_ref4_ = std::make_shared<WbRef4Stencils>(
-          wb_ref4_stencils(pcoord->x1f, is, iu, x1_uniform_ == 1 || stretched,
-                           clamp && phys_in, clamp && phys_out, w.options()));
+          wb_ref4_stencils(pcoord->x1f, is, iu, clamp && phys_in,
+                           clamp && phys_out, w.options()));
     }
     wb4_flag = wb_ref4_cells(*wb_ref4_, w, psf_lo, psf_hi, pref, dref);
   }
