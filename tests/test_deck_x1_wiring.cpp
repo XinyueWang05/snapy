@@ -1,12 +1,10 @@
+#include <gtest/gtest.h>
+#include <snap/snap.h>
+#include <torch/torch.h>
+#include <unistd.h>
+
 #include <cstdio>
 #include <fstream>
-#include <string>
-#include <utility>
-#include <vector>
-#include <unistd.h>
-#include <gtest/gtest.h>
-#include <torch/torch.h>
-#include <snap/snap.h>
 #include <snap/coord/coordinate.hpp>
 #include <snap/hydro/hydro.hpp>
 #include <snap/mesh/mesh.hpp>
@@ -15,6 +13,9 @@
 #include <snap/recon/reconstruct.hpp>
 #include <snap/recon/x1_coeffs.hpp>
 #include <snap/scalar/scalar.hpp>
+#include <string>
+#include <utility>
+#include <vector>
 using namespace snap;
 
 namespace {
@@ -135,8 +136,8 @@ void expect_forward_runs(MeshBlock pmb) {
                        coord->x1v.options());
   auto wlr = pmb->phydro->precon1->forward(w, DIM1);
   EXPECT_EQ(wlr.size(DIM1 + 1), nc1);
-  auto r = torch::ones({pmb->pscalar->nvar(), nc3, nc2, nc1},
-                       coord->x1v.options());
+  auto r =
+      torch::ones({pmb->pscalar->nvar(), nc3, nc2, nc1}, coord->x1v.options());
   EXPECT_EQ(scalar_x1(pmb->pscalar)->forward(r, DIM1).size(DIM1 + 1), nc1);
   EXPECT_EQ(pmb->pscalar->precon->forward(r, DIM2).size(DIM2 + 1), nc2);
 }

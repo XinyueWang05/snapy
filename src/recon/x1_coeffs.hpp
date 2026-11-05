@@ -1,15 +1,13 @@
 #pragma once
 
-#include <utility>
-
 #include <ATen/TensorIterator.h>
 #include <torch/torch.h>
 
+#include <utility>
+
 #include "x1_coeffs_device.h"
 
-
 namespace snap {
-
 
 std::pair<torch::Tensor, torch::Tensor> weno5_x1_coeffs(
     torch::Tensor const& x1f);

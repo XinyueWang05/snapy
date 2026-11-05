@@ -107,21 +107,19 @@ inline DISPATCH_MACRO T hydro_ref_x1_rop_smooth(
   for (int m = -2; m <= 2; ++m) {
     int j = i + m;
     if (j < jlo) {
-      v[m + 2] = ext_lo
-                     ? hydro_ref_x1_wall_rop(
-                           rop(jlo), rop(jlo + 1),
-                           stretched ? hydro_ref_x1_wall_steps(dx1f, jlo, -1,
-                                                                  jlo - j)
-                                     : T(jlo - j))
-                     : rop(jlo);
+      v[m + 2] =
+          ext_lo ? hydro_ref_x1_wall_rop(rop(jlo), rop(jlo + 1),
+                                         stretched ? hydro_ref_x1_wall_steps(
+                                                         dx1f, jlo, -1, jlo - j)
+                                                   : T(jlo - j))
+                 : rop(jlo);
     } else if (j > jhi) {
-      v[m + 2] = ext_hi
-                     ? hydro_ref_x1_wall_rop(
-                           rop(jhi), rop(jhi - 1),
-                           stretched ? hydro_ref_x1_wall_steps(dx1f, jhi, +1,
-                                                                  j - jhi)
-                                     : T(j - jhi))
-                     : rop(jhi);
+      v[m + 2] =
+          ext_hi ? hydro_ref_x1_wall_rop(rop(jhi), rop(jhi - 1),
+                                         stretched ? hydro_ref_x1_wall_steps(
+                                                         dx1f, jhi, +1, j - jhi)
+                                                   : T(j - jhi))
+                 : rop(jhi);
     } else {
       v[m + 2] = rop(j);
     }
@@ -250,9 +248,9 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
   if (i > 0) {
     T rs_dn = hydro_ref_x1_rop_smooth(w, ncells, flat, nc1, i - 1, jlo, jhi,
                                       ext_lo, ext_hi, dx1f, stretched);
-    rf = stretched ? (dx1f[i] * rs_dn + dx1f[i - 1] * rs) /
-                         (dx1f[i - 1] + dx1f[i])
-                   : T(0.5) * (rs_dn + rs);
+    rf = stretched
+             ? (dx1f[i] * rs_dn + dx1f[i - 1] * rs) / (dx1f[i - 1] + dx1f[i])
+             : T(0.5) * (rs_dn + rs);
   }
   dref[flat + i] = cell_pref * rs;
   dsf[flat + i] = lo * rf;

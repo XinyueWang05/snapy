@@ -1,8 +1,8 @@
-#include <cmath>
+#include "x1_coeffs.hpp"
 
 #include <ATen/native/ReduceOpsUtils.h>
 
-#include "x1_coeffs.hpp"
+#include <cmath>
 
 namespace snap {
 namespace {

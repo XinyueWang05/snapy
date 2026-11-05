@@ -1,11 +1,13 @@
-#include <algorithm>
-#include <cmath>
-#include <vector>
 #include <gtest/gtest.h>
 #include <torch/torch.h>
+
+#include <algorithm>
+#include <cmath>
 #include <snap/recon/interpolation.hpp>
 #include <snap/recon/reconstruct.hpp>
 #include <snap/recon/x1_coeffs.hpp>
+#include <vector>
+
 #include "device_testing.hpp"
 using namespace snap;
 
@@ -328,7 +330,6 @@ TEST(X1Coeffs, ghost_faces_needed_by_the_stencils) {
     }
   }
 }
-
 
 TEST_P(DeviceTest, module_nu_path) {
   const int nc1 = 24;

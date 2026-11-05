@@ -1,18 +1,15 @@
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <snap/coord/coordinate.hpp>
+#include <snap/layout/layout.hpp>
 #include <string>
 #include <vector>
 
-#include <unistd.h>
-
-#include <snap/coord/coordinate.hpp>
-#include <snap/layout/layout.hpp>
-
 using namespace snap;
-
 
 namespace {
 

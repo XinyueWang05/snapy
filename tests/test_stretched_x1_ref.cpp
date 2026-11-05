@@ -1,18 +1,19 @@
 #include <gtest/gtest.h>
+#include <snap/snap.h>
+#include <unistd.h>
+
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
-#include <string>
-#include <vector>
-#include <unistd.h>
-#include <snap/snap.h>
 #include <snap/hydro/balance_column.hpp>
 #include <snap/hydro/hydro.hpp>
 #include <snap/mesh/meshblock.hpp>
+#include <string>
+#include <vector>
+
 #include "../src/hydro/hydro_dispatch.hpp"
 using namespace snap;
-
 
 namespace {
 std::string card(bool stretched, std::string const& forcing = "}",

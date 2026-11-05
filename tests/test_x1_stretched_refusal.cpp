@@ -1,19 +1,13 @@
 
+#include <gtest/gtest.h>
+#include <snap/snap.h>
+#include <torch/torch.h>
+#include <unistd.h>
+
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <functional>
-#include <string>
-#include <vector>
-
-#include <unistd.h>
-
-#include <gtest/gtest.h>
-
-#include <torch/torch.h>
-
-#include <snap/snap.h>
-
 #include <snap/coord/coordinate.hpp>
 #include <snap/hydro/hydro.hpp>
 #include <snap/mesh/mesh.hpp>
@@ -21,6 +15,8 @@
 #include <snap/recon/interpolation.hpp>
 #include <snap/recon/reconstruct.hpp>
 #include <snap/recon/x1_coeffs.hpp>
+#include <string>
+#include <vector>
 
 using namespace snap;
 

@@ -2,7 +2,6 @@
 
 #include <configure.h>
 
-
 namespace snap {
 
 constexpr int kWeno5NuCoeff = 48;

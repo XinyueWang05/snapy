@@ -1,10 +1,11 @@
-#include <cmath>
-#include <vector>
 #include <gtest/gtest.h>
-#include <torch/torch.h>
 #include <snap/snap.h>
+#include <torch/torch.h>
+
+#include <cmath>
 #include <snap/recon/interpolation.hpp>
 #include <snap/recon/x1_coeffs.hpp>
+#include <vector>
 using namespace snap;
 
 namespace {

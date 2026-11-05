@@ -1,13 +1,13 @@
 #include <gtest/gtest.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <snap/coord/coordinate.hpp>
 #include <string>
 #include <vector>
-#include <unistd.h>
-#include <snap/coord/coordinate.hpp>
 using namespace snap;
-
 
 namespace {
 std::string card(std::string const& cells, std::string const& extra = "",
