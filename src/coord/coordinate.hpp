@@ -96,15 +96,7 @@ struct CoordinateOptionsImpl {
   //! true when the deck set `cells/x1rat` or `geometry/x1f` (#280)
   bool stretched_x1() const { return !x1f_interior().empty(); }
 
-  //! The largest adjacent-cell width ratio a stretched x1 may have (#280
-  //! stage 1).  Enforced on `geometry/x1f` and on the grid `cells/x1rat`
-  //! builds, in `CoordinateOptionsImpl::from_yaml`; the uniform path never
-  //! reaches it.  MEASURED, not chosen: over every grid the stage-1 gates
-  //! construct the largest ratio is 1.2000030 (the 1/1.2 G4 stress deck at
-  //! nx1 = 128; the largest contract-proper grid is the G6 (ii) N = 24 rung
-  //! at 1.0725654), and over the G2(c) junction family the smallest is 2.
-  //! 1.5 lies strictly between the two, 1.25x above the first and 1.3333x
-  //! below the second.
+  //! Largest adjacent-cell width ratio a stretched x1 may have (#280 stage 1)
   static constexpr double kX1MaxWidthRatio = 1.5;
 
   //! Faces per end that `global_x1f` carries beyond the interior: the

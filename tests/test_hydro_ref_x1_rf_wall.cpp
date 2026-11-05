@@ -48,7 +48,7 @@
 namespace {
 
 constexpr int kNc1 = 20;
-constexpr int kIu = 16;          // il = nc1 - 1 - iu = 3, owned cells [3, 16]
+constexpr int kIu = 16;  // il = nc1 - 1 - iu = 3, owned cells [3, 16]
 constexpr int kIl = kNc1 - 1 - kIu;
 
 // rho/p of cell j: exactly linear in the index, and falling, so the LOWER
@@ -60,7 +60,7 @@ constexpr double kA = 1.0, kB = -0.03;
 double rop_at(double j) { return kA + kB * j; }
 double rop_of(int j) { return rop_at(j); }
 
-constexpr double kP0 = 100.0;    // constant pressure; rho carries the profile
+constexpr double kP0 = 100.0;  // constant pressure; rho carries the profile
 constexpr double kGrav = 1.0;
 
 //! a stretched column: geometric widths at ratio q
@@ -100,8 +100,8 @@ Out run(std::vector<double> const& h) {
     w[snap::IPR][0][0][j] = kP0;
     w[snap::IDN][0][0][j] = kP0 * rop_of(j);
   }
-  auto dx1f = torch::from_blob(const_cast<double*>(h.data()), {kNc1}, opts)
-                  .clone();
+  auto dx1f =
+      torch::from_blob(const_cast<double*>(h.data()), {kNc1}, opts).clone();
 
   auto sizes = w.sizes().slice(1).vec();
   Out o{torch::empty(sizes, opts), torch::empty(sizes, opts),
@@ -118,16 +118,14 @@ Out run(std::vector<double> const& h) {
   return o;
 }
 
-double at1(torch::Tensor const& t, int i) {
-  return t[0][0][i].item<double>();
-}
+double at1(torch::Tensor const& t, int i) { return t[0][0][i].item<double>(); }
 
 //! ghost k past the wall cell jw, in units of the mean of the wall cell and
 //! its neighbour. dir = -1 below a lower wall, +1 above an upper wall. Built
 //! here from the mirrored widths directly: ghost m carries the width of the
 //! owned cell m-1 from the wall.
 double steps_to_ghost(std::vector<double> const& h, int jw, int dir, int k) {
-  double d = 0.5 * h[jw];            // wall cell centre to the wall itself
+  double d = 0.5 * h[jw];  // wall cell centre to the wall itself
   for (int m = 1; m <= k; ++m) {
     double hm = h[jw - dir * (m - 1)];  // the mirrored width of ghost m
     d += (m < k) ? hm : 0.5 * hm;       // whole cells, then half of ghost k
@@ -203,8 +201,8 @@ TEST(HydroRefX1RfWall, the_lower_wall_cell_is_continued_by_distance) {
 
   // the smoother over [il-2 .. il+2] with the two ghosts at fractional
   // indices il - kk2 and il - kk1
-  double want = (rop_at(kIl - kk2) + 4. * rop_at(kIl - kk1) +
-                 6. * rop_of(kIl) + 4. * rop_of(kIl + 1) + rop_of(kIl + 2)) /
+  double want = (rop_at(kIl - kk2) + 4. * rop_at(kIl - kk1) + 6. * rop_of(kIl) +
+                 4. * rop_of(kIl + 1) + rop_of(kIl + 2)) /
                 16.;
   double got = at1(o.dref, kIl) / at1(o.pref, kIl);
   EXPECT_NEAR(got, want, 1.e-12 * std::abs(want));

@@ -161,7 +161,8 @@ int main(int argc, char** argv) {
   man.close();
 
   std::cout << "G3 " << tag << " blocks=" << mesh->blocks.size()
-            << " tensors=" << ntensor << " bytes=" << total << " steps="
-            << nsteps << " device=" << dev << " fnv1a=" << all << std::endl;
+            << " tensors=" << ntensor << " bytes=" << total
+            << " steps=" << nsteps << " device=" << dev << " fnv1a=" << all
+            << std::endl;
   return 0;
 }

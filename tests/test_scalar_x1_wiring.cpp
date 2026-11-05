@@ -191,8 +191,8 @@ void expect_forward_runs(MeshBlock pmb) {
   auto coord = pmb->pcoord;
   int nc1 = coord->options->nc1(), nc2 = coord->options->nc2(),
       nc3 = coord->options->nc3();
-  auto r = torch::ones({pmb->pscalar->nvar(), nc3, nc2, nc1},
-                       coord->x1v.options());
+  auto r =
+      torch::ones({pmb->pscalar->nvar(), nc3, nc2, nc1}, coord->x1v.options());
 
   auto rlr1 = x1_module(pmb->pscalar)->forward(r, DIM1);
   EXPECT_EQ(rlr1.size(DIM1 + 1), nc1);

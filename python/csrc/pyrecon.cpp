@@ -42,8 +42,7 @@ void bind_recon(py::module &m) {
 
   ADD_SNAP_MODULE(Reconstruct, ReconstructOptions)
       .def(py::init<snap::ReconstructOptions>(), py::arg("options"))
-      .def("set_x1_faces", &snap::ReconstructImpl::set_x1_faces,
-           py::arg("x1f"),
+      .def("set_x1_faces", &snap::ReconstructImpl::set_x1_faces, py::arg("x1f"),
            R"(Install route A per-face x1 coefficients from a face vector.
 
 The face vector has nc1 + 1 entries and must be strictly increasing; face k

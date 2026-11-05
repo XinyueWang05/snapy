@@ -102,8 +102,8 @@ void x1_forward_nu(torch::Tensor const& w, int dim, torch::Tensor const& out,
   TORCH_CHECK(dim == out.dim() - 1, "[", what,
               "] route A covers the x1 dimension only, so a module holding "
               "per-face x1 coefficients must be given the last dimension of "
-              "a (nvar, nc3, nc2, nc1) state; got dim ", dim, " of a ",
-              out.dim(), "-dimensional output (note Sec. 4.7)");
+              "a (nvar, nc3, nc2, nc1) state; got dim ",
+              dim, " of a ", out.dim(), "-dimensional output (note Sec. 4.7)");
 
   TORCH_CHECK(out.size(dim) == src.size(0), "[", what,
               "] per-face x1 coefficients are installed but dimension ", dim,
@@ -116,6 +116,5 @@ void x1_forward_nu(torch::Tensor const& w, int dim, torch::Tensor const& out,
   auto iter = x1_nu_iterator(w, dim, out, c);
   call(iter, c);
 }
-
 
 }  // namespace snap

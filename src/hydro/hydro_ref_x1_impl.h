@@ -109,12 +109,9 @@ inline DISPATCH_MACRO T hydro_ref_x1_wall_steps(T const* dx1f, int jw, int dir,
 //! O(dz) error at the first faces (docs/derivations/wb-ref-wall.md). Only
 //! owned cells are read.
 template <typename T>
-inline DISPATCH_MACRO T hydro_ref_x1_rop_smooth(T const* w, int ncells,
-                                                int flat, int nc1, int i,
-                                                int jlo, int jhi, bool ext_lo,
-                                                bool ext_hi,
-                                                T const* dx1f = nullptr,
-                                                bool stretched = false) {
+inline DISPATCH_MACRO T hydro_ref_x1_rop_smooth(
+    T const* w, int ncells, int flat, int nc1, int i, int jlo, int jhi,
+    bool ext_lo, bool ext_hi, T const* dx1f = nullptr, bool stretched = false) {
   auto rop = [&](int j) {
     return w[IDN * ncells + flat + j] / w[IPR * ncells + flat + j];
   };
@@ -167,8 +164,7 @@ template <typename T>
 inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
     T const* w, T const* dx1f, T const* psf_lo, T const* psf_hi, T* pref,
     T* dsf, T* dref, int column, int i, int ncolumns, int nc1, int iu, T grav,
-    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
-    T const* rows) {
+    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp, T const* rows) {
   bool uniform = x1_grid == kX1RefUniform;
   int ncells = ncolumns * nc1;
   int flat = column * nc1;
@@ -288,8 +284,7 @@ template <typename T>
 inline DISPATCH_MACRO void hydro_ref_x1_impl(
     T const* w, T const* dx1f, T const* anchor, T* psf_lo, T* psf_hi, T* pref,
     T* dsf, T* dref, int column, int ncolumns, int nc1, int iu, T grav,
-    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
-    T const* rows) {
+    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp, T const* rows) {
   hydro_ref_x1_scan_impl(w, dx1f, anchor, psf_lo, psf_hi, column, ncolumns, nc1,
                          iu, grav);
   for (int i = 0; i < nc1; ++i) {

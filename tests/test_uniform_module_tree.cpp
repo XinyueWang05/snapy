@@ -229,11 +229,13 @@ void dump(std::string const& tag, char const* what,
 
 bool ends_with(std::string const& s, char const* tail) {
   std::string t(tail);
-  return s.size() >= t.size() && s.compare(s.size() - t.size(), t.size(), t) == 0;
+  return s.size() >= t.size() &&
+         s.compare(s.size() - t.size(), t.size(), t) == 0;
 }
 
 //! every route A buffer anywhere in the tree
-std::vector<std::string> route_a_buffers(std::vector<std::string> const& names) {
+std::vector<std::string> route_a_buffers(
+    std::vector<std::string> const& names) {
   std::vector<std::string> hits;
   for (auto const& n : names) {
     if (ends_with(n, "cm_x1") || ends_with(n, "cp_x1")) hits.push_back(n);
@@ -287,16 +289,17 @@ TEST(UniformModuleTree, a_uniform_deck_gains_no_route_a_buffer) {
     // the dictionary is the buffers plus the step's own variables, so it
     // cannot be smaller than the buffer list; this catches a parse that
     // silently read the wrong thing
-    EXPECT_TRUE(std::includes(keys.begin(), keys.end(), buffers.begin(),
-                              buffers.end()))
+    EXPECT_TRUE(
+        std::includes(keys.begin(), keys.end(), buffers.begin(), buffers.end()))
         << c.tag << ": the forcing dictionary does not contain every buffer";
 
     EXPECT_TRUE(route_a_buffers(buffers).empty())
         << c.tag << ": a uniform deck carries route A buffers: "
         << joined(route_a_buffers(buffers));
     EXPECT_TRUE(route_a_buffers(keys).empty())
-        << c.tag << ": a user forcing on a uniform deck is handed route A "
-                    "keys: "
+        << c.tag
+        << ": a user forcing on a uniform deck is handed route A "
+           "keys: "
         << joined(route_a_buffers(keys));
   }
 }
@@ -344,8 +347,8 @@ TEST(UniformModuleTree, clone_keeps_the_installed_tables) {
   auto after = route_a_buffers(buffer_names(*copy));
   EXPECT_EQ(before, after);
 
-  for (auto const& p : {copy->phydro->precon1->pinterp1,
-                        copy->phydro->precon1->pinterp2}) {
+  for (auto const& p :
+       {copy->phydro->precon1->pinterp1, copy->phydro->precon1->pinterp2}) {
     EXPECT_TRUE(p->has_x1_coeffs())
         << p->options->type() << " lost its table in the clone";
   }

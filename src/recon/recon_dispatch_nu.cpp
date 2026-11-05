@@ -16,14 +16,13 @@ namespace {
 //! The row pointers a sub-range produced really are rows of this table: O(1)
 //! per `for_each` chunk, and the standing assertion of the review item (b)
 //! argument (layout note Sec. 8.2).
-void check_chunk(char const* base, int64_t nrow, int64_t rowbytes,
-                 char** data, const int64_t* strides, int64_t n,
-                 char const* what) {
+void check_chunk(char const* base, int64_t nrow, int64_t rowbytes, char** data,
+                 const int64_t* strides, int64_t n, char const* what) {
   char const* lo = data[2];
   char const* hi = data[2] + (n - 1) * strides[2];
   if (hi < lo) std::swap(lo, hi);
-  TORCH_CHECK((lo - base) % rowbytes == 0 && (hi - base) % rowbytes == 0,
-              "[", what, "] coefficient row pointer is not row aligned");
+  TORCH_CHECK((lo - base) % rowbytes == 0 && (hi - base) % rowbytes == 0, "[",
+              what, "] coefficient row pointer is not row aligned");
   TORCH_CHECK(lo >= base && (hi - base) / rowbytes < nrow, "[", what,
               "] coefficient row pointer is outside the table");
 }
@@ -49,7 +48,8 @@ void call_nu_cpu(at::TensorIterator& iter, torch::Tensor const& coeff, int dim,
     int stride_out = at::native::ensure_nonempty_stride(iter.output(), 0);
     int nvar = at::native::ensure_nonempty_size(iter.output(), 0);
 
-    auto const* base = reinterpret_cast<char const*>(coeff.data_ptr<scalar_t>());
+    auto const* base =
+        reinterpret_cast<char const*>(coeff.data_ptr<scalar_t>());
     int64_t nrow = coeff.size(0);
     int64_t rowbytes = NCoeff * static_cast<int64_t>(sizeof(scalar_t));
 
@@ -60,7 +60,8 @@ void call_nu_cpu(at::TensorIterator& iter, torch::Tensor const& coeff, int dim,
           for (int i = 0; i < n; i++) {
             auto out = reinterpret_cast<scalar_t*>(data[0] + i * strides[0]);
             auto w = reinterpret_cast<scalar_t*>(data[1] + i * strides[1]);
-            auto c = reinterpret_cast<scalar_t const*>(data[2] + i * strides[2]);
+            auto c =
+                reinterpret_cast<scalar_t const*>(data[2] + i * strides[2]);
             op(out, w, c, stride1, stride2, stride_out, nvar);
           }
         },
@@ -74,8 +75,8 @@ void call_weno5_nu_cpu(at::TensorIterator& iter, torch::Tensor coeff, int dim,
                        bool scale) {
   call_nu_cpu<kWeno5NuCoeff>(
       iter, coeff, dim, "weno5_nu",
-      [scale](auto* out, auto const* w, auto const* c, int stride1,
-              int stride2, int stride_out, int nvar) {
+      [scale](auto* out, auto const* w, auto const* c, int stride1, int stride2,
+              int stride_out, int nvar) {
         interp_weno5_nu_impl(out, w, c, stride1, stride2, stride_out, nvar,
                              scale);
       });

@@ -112,9 +112,8 @@ double worst_ratio(Cartesian const& coord) {
 TEST(X1QmaxGuard, a_junction_deck_is_refused_naming_index_ratio_and_bound) {
   for (double s : {2., 4., 16.}) {
     const int n = 16;
-    auto text =
-        card("{nx1: " + std::to_string(n) + ", nghost: 3}",
-             face_list(junction(n, s)));
+    auto text = card("{nx1: " + std::to_string(n) + ", nghost: 3}",
+                     face_list(junction(n, s)));
     try {
       load(text);
       ADD_FAILURE() << "an s = " << s << " junction deck was accepted";
