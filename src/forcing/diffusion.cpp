@@ -153,10 +153,9 @@ torch::Tensor extrapolate_to_wall(torch::Tensor value, Coordinate const& coord,
 }
 
 //! Face-centred diffusion coefficient. Interior faces take the two-cell
-//! average (distance-weighted on a stretched x1); a physical wall face is
-//! extrapolated from active cells instead, because the ghost there is filled by
-//! a boundary condition to serve a different operator and is not the physical
-//! state at the wall.
+//! average; a physical wall face is extrapolated from active cells instead,
+//! because the ghost there is filled by a boundary condition to serve a
+//! different operator and is not the physical state at the wall.
 torch::Tensor face_coefficient(torch::Tensor value, Coordinate const& coord,
                                int idir, Region start, Region end,
                                bool wall_lower, bool wall_upper) {

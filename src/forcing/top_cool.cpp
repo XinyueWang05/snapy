@@ -1,4 +1,3 @@
-// C/C++
 #include <cmath>
 
 // yaml
@@ -59,8 +58,7 @@ void TopCoolImpl::reset() {
 torch::Tensor TopCoolImpl::forward(torch::Tensor du, torch::Tensor w,
                                    torch::Tensor temp, double dt) {
   auto pcoord = phydro->pmb->pcoord;
-  // a layer in x1 length (#280): every block, each cell its share of
-  // flux/thickness by the fraction of its width inside the layer
+  // a layer in x1 length (#280): each cell takes its overlap with it
   if (options->thickness() > 0.) {
     int il = pcoord->il(), iu = pcoord->iu();
     double hi = pcoord->options->global_x1max();

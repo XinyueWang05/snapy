@@ -7,15 +7,11 @@ namespace snap {
 
 //! #289 (SNAP_WB_REF4): fourth-order x1 reference DENSITY for the
 //! well-balanced reconstruction, consistent between cell and face, and on
-//! un-keyed non-uniform x1 grids a fourth-order cell reference pressure. The
-//! face pressures (the hydrostatic scan) are never changed. Applied after the
+//! non-uniform x1 grids a fourth-order cell reference pressure. The face
+//! pressures (the hydrostatic scan) are never changed. Applied after the
 //! kernel (hydro_ref_x1_impl.h); a guarded cell or face keeps the kernel's
 //! value. See docs/derivations/wb-ref4.md.
-//! The non-uniform pressure path (`uniform == false`) is the un-keyed path: a
-//! keyed stretched x1 (cells/x1rat or geometry/x1f, #280) keeps the kernel's
-//! six-face cell pressure, and its callers pass `uniform == true`. On a
-//! Cartesian x1 SNAP_X1_CENTROID_EXACT has no content of its own and runs as
-//! SNAP_WB_REF4.
+//! A keyed stretched x1 (#280) passes uniform: it keeps the six-face pressure.
 //! Read once per process from SNAP_WB_REF4; off unless it or
 //! SNAP_X1_CENTROID_EXACT (which implies it) is set.
 bool wb_ref4_enabled();

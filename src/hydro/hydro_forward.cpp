@@ -1006,8 +1006,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     auto type1 = precon1->pinterp1->options->type();
     if (!gw_cell && !radial_exact &&
         (type1 == "cp3" || type1 == "cp5" || type1 == "weno5")) {
-      // no two-point flux removes the m'' term on unequal cells without an
-      // m' term of the same order; option F does it without a flux (#280)
+      // no two-point H is exact on unequal cells; option F is (#280)
       TORCH_CHECK(!pmb->pcoord->options->stretched_x1(),
                   "the dx^2/12 x1 curvature flux H of cp3/cp5/weno5 is a "
                   "uniform-grid device: a stretched x1 uses option F, "

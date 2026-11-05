@@ -326,7 +326,6 @@ struct TopCoolOptionsImpl {
   }
 
   ADD_ARG(double, flux) = 0.0;
-  //! the layer in cells; refused on a stretched x1
   ADD_ARG(int, depth) = 1;
   //! the layer in x1 length units; used instead of depth when > 0 (#280)
   ADD_ARG(double, thickness) = 0.0;
@@ -373,7 +372,6 @@ struct BotHeatOptionsImpl {
   }
 
   ADD_ARG(double, flux) = 0.0;
-  //! the layer in cells; refused on a stretched x1
   ADD_ARG(int, depth) = 1;
   //! the layer in x1 length units; used instead of depth when > 0 (#280)
   ADD_ARG(double, thickness) = 0.0;

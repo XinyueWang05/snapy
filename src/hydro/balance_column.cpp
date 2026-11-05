@@ -77,8 +77,7 @@ std::tuple<torch::Tensor, double, int> balance_column(
   auto wgt = grav * dxf;
   // #289 (SNAP_WB_REF4): on a non-uniform grid the switch changes the cell
   // reference pressure, so the fixed point is the switched reference's, and
-  // this has to find that one (the density reference does not enter here).
-  // A keyed stretched x1 keeps the kernel's six-face pressure (#280)
+  // this has to find that one (the density reference does not enter here)
   bool ref4 = wb_ref4_enabled() && !uniform && !stretched;
   WbRef4Stencils st;
   if (ref4) {

@@ -5,23 +5,13 @@
 
 namespace snap {
 
-//! SNAP_X1_MASS_COVARIANCE (HydroImpl::x1_mass_covariance): the x1
-//! reconstruction treats the cell velocity m1/rho as the cell average of w; in
-//! a stratified column that adds dz^2/12 rho_z w_z to the face mass flux.
-//! hydro_forward.cpp subtracts it from the reconstructed velocity (the x1
-//! analogue of SNAP_FLUX_COVARIANCE), with the x1 derivatives below.
-//! `stretched` is the grid key (CoordinateOptions::stretched_x1, #280), not a
-//! probe of the widths, so every block of a keyed grid applies one operator.
-
-//! centred x1 derivative over x1v for every cell that has both neighbours; the
-//! first and last array cells copy their neighbour's value
+//! x1 slopes of SNAP_X1_MASS_COVARIANCE; `stretched` is the grid key (#280)
 inline torch::Tensor x1_cov_d1_centred(torch::Tensor const& a,
                                        torch::Tensor const& x1v,
                                        bool stretched) {
   int n1 = a.size(-1);
   auto d = torch::empty_like(a);
   if (stretched) {
-    // #280: the slope at x1v_i of the quadratic through cells i-1, i, i+1
     auto hm = x1v.narrow(0, 1, n1 - 2) - x1v.narrow(0, 0, n1 - 2);
     auto hp = x1v.narrow(0, 2, n1 - 2) - x1v.narrow(0, 1, n1 - 2);
     d.narrow(-1, 1, n1 - 2)
@@ -38,14 +28,11 @@ inline torch::Tensor x1_cov_d1_centred(torch::Tensor const& a,
   return d;
 }
 
-//! d a / d x1 at cell i from cells i, i + s, i + 2 s (s = +1 inward from the
-//! lower wall, -1 from the upper), second order; next to a reflecting wall the
-//! even ghost density is not the stratified column
+//! one-sided slope at wall cell i from cells i, i + s, i + 2 s
 inline torch::Tensor x1_cov_one_sided(torch::Tensor const& a,
                                       torch::Tensor const& x1v, int i, int s,
                                       bool stretched) {
   if (stretched) {
-    // #280: the slope at x1v_i of the quadratic through the three cells
     auto p = x1v[i + s] - x1v[i], q = x1v[i + 2 * s] - x1v[i];
     return -(p + q) / (p * q) * a.select(-1, i) +
            q / (p * (q - p)) * a.select(-1, i + s) -
