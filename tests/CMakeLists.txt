@@ -34,14 +34,14 @@ setup_test(test_scalar_x1_wiring)
 setup_test(test_stretched_x1_ref)
 setup_test(test_stretched_diffusion)
 setup_test(test_stretched_x1_option_f)
-# #280: the REF4 switch (or SNAP_X1_CENTROID_EXACT, which implies it) is
-# refused on a stretched x1; the switch is read once per process
+# #280: the REF4 switch (or SNAP_X1_CENTROID_EXACT, which implies it) runs on
+# a stretched x1; the switch is read once per process
 foreach(_arm "wb_ref4;SNAP_WB_REF4=1" "x1_centroid;SNAP_X1_CENTROID_EXACT=1")
   list(GET _arm 0 _name)
   list(GET _arm 1 _env)
   add_test(NAME test_stretched_x1_ref_${_name}.${buildl}
            COMMAND test_stretched_x1_ref.${buildl}
-                   --gtest_filter=StretchedX1Ref.refuses_wb_ref4_switch:StretchedX1Ref.balance_column_refuses_wb_ref4)
+                   --gtest_filter=StretchedX1Ref.wb_ref4_switch_runs:StretchedX1Ref.balance_column_wb_ref4_runs)
   set_tests_properties(test_stretched_x1_ref_${_name}.${buildl}
                        PROPERTIES ENVIRONMENT "${_env}")
 endforeach()

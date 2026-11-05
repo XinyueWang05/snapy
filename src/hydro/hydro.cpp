@@ -32,13 +32,6 @@ void HydroImpl::reset() {
     SINFO(Hydro) << "EOS type: " << peos->options->type() << "\n";
   }
 
-  // #280 stage 1 ships today's reference on a stretched x1, not REF4's
-  TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
-                wb_ref4_enabled()),
-              "SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies it) is "
-              "not supported on a stretched x1 (geometry/x1f or cells/x1rat, "
-              "#280); unset it");
-
   // #280 stage 1: the covariance wall rho_1 uses equally-spaced weights
   // (hydro_forward.cpp, `one_sided`), first order on a stretched x1
   TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
@@ -639,8 +632,9 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w) const {
   if (wb_ref4()) {
     if (!wb_ref4_ || wb_ref4_->stale(w)) {
       bool clamp = options->wb_wall_clamp();
+      // a keyed stretched x1 keeps the kernel's six-face cell pressure (#280)
       wb_ref4_ = std::make_shared<WbRef4Stencils>(
-          wb_ref4_stencils(pcoord->x1f, is, iu, x1_uniform_ == 1,
+          wb_ref4_stencils(pcoord->x1f, is, iu, x1_uniform_ == 1 || stretched,
                            clamp && phys_in, clamp && phys_out, w.options()));
     }
     wb4_flag = wb_ref4_cells(*wb_ref4_, w, psf_lo, psf_hi, pref, dref);

@@ -298,12 +298,13 @@ TEST(StretchedX1Ref, refuses_gnomonic_equiangle) {
 }
 
 // ctest test_stretched_x1_ref_wb_ref4 runs this with SNAP_WB_REF4=1, and
-// test_stretched_x1_ref_x1_centroid with SNAP_X1_CENTROID_EXACT=1
-TEST(StretchedX1Ref, refuses_wb_ref4_switch) {
+// test_stretched_x1_ref_x1_centroid with SNAP_X1_CENTROID_EXACT=1: a keyed
+// stretched x1 keeps the six-face cell pressure and takes REF4's density
+// reference (test_wb_ref4_stretched.py checks the rest state)
+TEST(StretchedX1Ref, wb_ref4_switch_runs) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
-  refuses(
-      "SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies it) is not "
-      "supported on a stretched x1 (geometry/x1f or cells/x1rat, #280)");
+  EXPECT_NO_THROW(build_and_step(card(true)));
+  EXPECT_NO_THROW(build_and_step(card(false)));
 }
 
 // ctest test_stretched_x1_ref_x1_mass_covariance runs this with
@@ -373,24 +374,14 @@ TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
 }
 
 // ctest test_stretched_x1_ref_wb_ref4 (and _x1_centroid) runs this with the
-// switch set: balance_column refuses it on a stretched column, and does not on
-// a uniform one
-TEST(StretchedX1Ref, balance_column_refuses_wb_ref4) {
+// switch set: balance_column balances a stretched column as with the switch
+// off (the bitwise check is test_wb_ref4_stretched.py), and a uniform one
+TEST(StretchedX1Ref, balance_column_wb_ref4_runs) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
-  std::string message =
-      "balance_column: SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies "
-      "it) is not supported on a stretched x1 (#280)";
   auto [w, dx1f] = column(32, 1.058, 3.e5);
-  bool threw = false;
-  try {
-    balance_column(w, dx1f, 22., true, 1.e-10, 120, "cartesian",
-                   /*stretched=*/true);
-  } catch (c10::Error const& e) {
-    threw = true;
-    EXPECT_NE(std::string(e.what()).find(message), std::string::npos)
-        << e.what();
-  }
-  EXPECT_TRUE(threw) << "balance_column did not refuse REF4 on a stretched x1";
+  auto [wb, err, sweeps] = balance_column(w, dx1f, 22., true, 1.e-13, 400,
+                                          "cartesian", /*stretched=*/true);
+  EXPECT_LT(err, 1.e-13);
   auto [wu, dxu] = column(32, 1.0 + 1.e-12, 3.e5);  // uniform to round-off
   dxu.fill_(3.e5 / 32.);
   EXPECT_NO_THROW(balance_column(wu, dxu, 22., true, 1.e-10, 120, "cartesian",

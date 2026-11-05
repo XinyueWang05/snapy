@@ -74,15 +74,12 @@ std::tuple<torch::Tensor, double, int> balance_column(
   if (stretched)
     rows = hydro_ref_x1_stretched_rows(dxf, nc1 - 1, true, true, wall_clamp)
                .to(w.options());
-  TORCH_CHECK(
-      !(stretched && wb_ref4_enabled()),
-      "balance_column: SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which "
-      "implies it) is not supported on a stretched x1 (#280); unset it");
   auto wgt = grav * dxf;
   // #289 (SNAP_WB_REF4): on a non-uniform grid the switch changes the cell
   // reference pressure, so the fixed point is the switched reference's, and
-  // this has to find that one (the density reference does not enter here)
-  bool ref4 = wb_ref4_enabled() && !uniform;
+  // this has to find that one (the density reference does not enter here).
+  // A keyed stretched x1 keeps the kernel's six-face pressure (#280)
+  bool ref4 = wb_ref4_enabled() && !uniform && !stretched;
   WbRef4Stencils st;
   if (ref4) {
     auto x1f = torch::cat({torch::zeros({1}, dxf.options()), dxf.cumsum(0)});
