@@ -64,7 +64,7 @@ void x1_set_coeffs(Self& self, torch::Tensor const& x1f, Builder build) {
 }
 
 //! The coefficient table in the state's dtype and device, cached; same cast
-//! pattern as `x1v`/`dx1f` at `src/hydro/hydro_forward.cpp:425-426`.
+//! pattern as `x1v`/`dx1f` at `src/hydro/hydro_forward.cpp:426-427`.
 torch::Tensor const& x1_coeffs_for(torch::Tensor const& src,
                                    torch::Tensor& cache,
                                    torch::Tensor const& w);

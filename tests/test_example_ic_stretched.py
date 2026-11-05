@@ -85,6 +85,10 @@ def main():
         print(f"{args.exe} was not built")
         sys.exit(125)
 
+    # which snapy this arm actually tests: the build tree, not the install (#280)
+    import snapy
+    print(f"snapy.__file__ = {snapy.__file__}", flush=True)
+
     import kintera
 
     # gas constant of the deck gas, as kintera weighs it
