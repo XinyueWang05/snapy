@@ -19,18 +19,20 @@ std::pair<torch::Tensor, torch::Tensor> cp5_x1_coeffs(torch::Tensor const& x1f);
 void x1_reset_tables(torch::nn::Module& m, torch::Tensor& cm_x1,
                      torch::Tensor& cp_x1, int ncoeff);
 
-void x1_install_tables(torch::nn::Module& m, torch::Tensor& cm_x1,
-                       torch::Tensor& cp_x1, torch::Tensor const& cm_rows,
-                       torch::Tensor const& cp_rows);
-
 template <typename Self, typename Builder>
 void x1_set_coeffs(Self& self, torch::Tensor const& x1f, Builder build) {
   auto rows = build(x1f);
 
   auto opts = self.cm.options();
-  x1_install_tables(self, self.cm_x1, self.cp_x1,
-                    rows.first.to(opts).contiguous(),
-                    rows.second.to(opts).contiguous());
+  auto cm_rows = rows.first.to(opts).contiguous();
+  auto cp_rows = rows.second.to(opts).contiguous();
+  if (self.named_buffers(/*recurse=*/false).contains("cm_x1")) {
+    self.cm_x1.set_data(cm_rows);
+    self.cp_x1.set_data(cp_rows);
+  } else {
+    self.cm_x1 = self.register_buffer("cm_x1", cm_rows);
+    self.cp_x1 = self.register_buffer("cp_x1", cp_rows);
+  }
 
   self.cm_x1_cast = torch::Tensor();
   self.cp_x1_cast = torch::Tensor();

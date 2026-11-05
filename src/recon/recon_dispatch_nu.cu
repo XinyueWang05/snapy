@@ -89,23 +89,22 @@ int recon_tile_width_nu(int64_t nline, int nvar, int stencil,
 
 }  // namespace
 
-void call_weno5_nu_cuda(at::TensorIterator& iter, at::Tensor coeff, int dim,
-                        bool scale) {
+template <int Stencil, int NCoeff, typename Op>
+void call_nu_cuda(at::TensorIterator& iter, at::Tensor coeff, int dim,
+                  bool scale, char const* what) {
   at::cuda::CUDAGuard device_guard(iter.device());
-  x1_coeffs_check_rows(iter, coeff, dim, kWeno5NuCoeff, "weno5_nu");
+  x1_coeffs_check_rows(iter, coeff, dim, NCoeff, what);
 
-  AT_DISPATCH_FLOATING_TYPES(iter.common_dtype(), "call_weno5_nu_cuda", [&]() {
+  AT_DISPATCH_FLOATING_TYPES(iter.common_dtype(), "call_nu_cuda", [&]() {
     int stride_in1 = at::native::ensure_nonempty_stride(iter.input(), dim);
     int stride_in2 = at::native::ensure_nonempty_stride(iter.input(), 0);
-
     int stride_out1 = at::native::ensure_nonempty_stride(iter.output(), dim);
     int stride_out2 = at::native::ensure_nonempty_stride(iter.output(), 0);
-
     int nvar = at::native::ensure_nonempty_size(iter.output(), 0);
     auto c = coeff.data_ptr<scalar_t>();
     int64_t nline64 = at::native::ensure_nonempty_size(iter.input(), dim);
     size_t shared = 0;
-    int tile = recon_tile_width_nu(nline64, nvar, kWeno5Stencil,
+    int tile = recon_tile_width_nu(nline64, nvar, Stencil,
                                    sizeof(scalar_t), &shared);
 
     if (tile == 0) {
@@ -115,8 +114,8 @@ void call_weno5_nu_cuda(at::TensorIterator& iter, at::Tensor coeff, int dim,
                          scalar_t* smem) {
             auto out = reinterpret_cast<scalar_t*>(data[0] + strides[0]);
             auto w = reinterpret_cast<scalar_t*>(data[1] + strides[1]);
-            interp_weno5_nu_impl(out, w, c, nvar, stride_in1, stride_in2,
-                                 stride_out1, stride_out2, scale, smem);
+            interp_nu_untiled<NCoeff>(out, w, c, nvar, stride_in1, stride_in2,
+                                      stride_out1, stride_out2, scale, smem);
           });
       return;
     }
@@ -128,58 +127,22 @@ void call_weno5_nu_cuda(at::TensorIterator& iter, at::Tensor coeff, int dim,
                        scalar_t* smem) {
           auto out = reinterpret_cast<scalar_t*>(data[0] + strides[0]);
           auto w = reinterpret_cast<scalar_t*>(data[1] + strides[1]);
-          interp_line_tiled_nu<scalar_t, kWeno5Stencil, kWeno5NuCoeff,
-                               Weno5NuOp>(out, w, c, nvar, stride_in1,
-                                          stride_in2, stride_out1, stride_out2,
-                                          scale, nline, smem);
+          interp_line_tiled_nu<scalar_t, Stencil, NCoeff, Op>(
+              out, w, c, nvar, stride_in1, stride_in2, stride_out1,
+              stride_out2, scale, nline, smem);
         });
   });
 }
 
+void call_weno5_nu_cuda(at::TensorIterator& iter, at::Tensor coeff, int dim,
+                        bool scale) {
+  call_nu_cuda<kWeno5Stencil, kWeno5NuCoeff, Weno5NuOp>(
+      iter, coeff, dim, scale, "weno5_nu");
+}
+
 void call_poly5_nu_cuda(at::TensorIterator& iter, at::Tensor coeff, int dim) {
-  at::cuda::CUDAGuard device_guard(iter.device());
-  x1_coeffs_check_rows(iter, coeff, dim, kPoly5NuCoeff, "poly5_nu");
-
-  AT_DISPATCH_FLOATING_TYPES(iter.common_dtype(), "call_poly5_nu_cuda", [&]() {
-    int stride_in1 = at::native::ensure_nonempty_stride(iter.input(), dim);
-    int stride_in2 = at::native::ensure_nonempty_stride(iter.input(), 0);
-
-    int stride_out1 = at::native::ensure_nonempty_stride(iter.output(), dim);
-    int stride_out2 = at::native::ensure_nonempty_stride(iter.output(), 0);
-
-    int nvar = at::native::ensure_nonempty_size(iter.output(), 0);
-    auto c = coeff.data_ptr<scalar_t>();
-    int64_t nline64 = at::native::ensure_nonempty_size(iter.input(), dim);
-    size_t shared = 0;
-    int tile = recon_tile_width_nu(nline64, nvar, kPoly5NuCoeff,
-                                   sizeof(scalar_t), &shared);
-
-    if (tile == 0) {
-      native::stencil_kernel<scalar_t, 2>(
-          iter, dim, /*buffers=*/0,
-          [=] __device__(char* const data[2], unsigned int strides[2],
-                         scalar_t* smem) {
-            auto out = reinterpret_cast<scalar_t*>(data[0] + strides[0]);
-            auto w = reinterpret_cast<scalar_t*>(data[1] + strides[1]);
-            interp_poly5_nu_impl(out, w, c, nvar, stride_in1, stride_in2,
-                                 stride_out1, stride_out2, smem);
-          });
-      return;
-    }
-
-    int nline = static_cast<int>(nline64);
-    stencil_kernel_tiled_nu<scalar_t, 2>(
-        iter, dim, tile, shared,
-        [=] __device__(char* const data[2], unsigned int strides[2],
-                       scalar_t* smem) {
-          auto out = reinterpret_cast<scalar_t*>(data[0] + strides[0]);
-          auto w = reinterpret_cast<scalar_t*>(data[1] + strides[1]);
-          interp_line_tiled_nu<scalar_t, kPoly5NuCoeff, kPoly5NuCoeff,
-                               Poly5NuOp>(out, w, c, nvar, stride_in1,
-                                          stride_in2, stride_out1, stride_out2,
-                                          /*scale=*/false, nline, smem);
-        });
-  });
+  call_nu_cuda<kPoly5NuCoeff, kPoly5NuCoeff, PolyOp<5>>(
+      iter, coeff, dim, false, "poly5_nu");
 }
 
 }  // namespace snap
