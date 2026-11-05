@@ -257,6 +257,17 @@ void MeshBlockImpl::reset() {
   //// -------- (7) set up scalar model ------- ////
   pscalar = ScalarImpl::create(options->scalar(), this);
 
+  // an s-point stencil reads s / 2 + 1 ghosts on each axis it runs on (S184)
+  auto co = options->coord();
+  for (auto [r, nc] : {std::pair{phydro->precon1, co->nc1()},
+                       {phydro->precon23, co->nc2() * co->nc3()},
+                       {pscalar->precon, co->nc1() * co->nc2() * co->nc3()}})
+    TORCH_CHECK(
+        !r || nc == 1 || r->pinterp1->stencils() / 2 + 1 <= co->nghost(),
+        "[MeshBlock] ", r->pinterp1->options->type(),
+        " reconstruction needs nghost >= ", r->pinterp1->stencils() / 2 + 1,
+        ", got ", co->nghost());
+
   //// ------ (8) set up internal boundary ---- ////
   pib = InternalBoundaryImpl::create(options->ib(), this);
   if (options->verbose()) {
