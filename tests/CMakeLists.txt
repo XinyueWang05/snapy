@@ -61,14 +61,12 @@ add_test(NAME test_stretched_x1_ref_radial_exact_off.${buildl}
                  --gtest_filter=StretchedX1Ref.refuses_curvature_with_radial_exact_off)
 set_tests_properties(test_stretched_x1_ref_radial_exact_off.${buildl}
                      PROPERTIES ENVIRONMENT "SNAP_GRAVITY_WORK_RADIAL_EXACT=0")
-# #280: the fourth switch refused on a stretched x1. Its one-sided wall rho_1
-# uses the equally-spaced (-3, 4, -1) / (2h) weights, so the stretched-grid
-# error plateaus at 2.9e-2 instead of falling. The PASS_REGULAR_EXPRESSION is
-# what makes the arm fail if the environment does not reach the test and it
-# skips.
+# #280: SNAP_X1_MASS_COVARIANCE on a stretched x1, its slopes with the
+# non-uniform three-point weights. The PASS_REGULAR_EXPRESSION is what makes
+# the arm fail if the environment does not reach the test and it skips.
 add_test(NAME test_stretched_x1_ref_x1_mass_covariance.${buildl}
          COMMAND test_stretched_x1_ref.${buildl}
-                 --gtest_filter=StretchedX1Ref.refuses_x1_mass_covariance_switch)
+                 --gtest_filter=StretchedX1Ref.x1_mass_covariance_switch_runs)
 set_tests_properties(
   test_stretched_x1_ref_x1_mass_covariance.${buildl}
   PROPERTIES ENVIRONMENT "SNAP_X1_MASS_COVARIANCE=1"

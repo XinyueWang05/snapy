@@ -32,13 +32,6 @@ void HydroImpl::reset() {
     SINFO(Hydro) << "EOS type: " << peos->options->type() << "\n";
   }
 
-  // #280 stage 1: the covariance wall rho_1 uses equally-spaced weights
-  // (x1_mass_covariance.hpp, `x1_cov_one_sided`), first order on a stretched x1
-  TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
-                x1_mass_covariance()),
-              "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
-              "(geometry/x1f or cells/x1rat, #280); unset it");
-
   //// ---- (3) set up reconstruction-x1 model ---- ////
   precon1 = ReconstructImpl::create(options->recon1(), this, "recon1");
   // #280: a deck that declared a stretched x1 (cells/x1rat or geometry/x1f)

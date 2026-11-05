@@ -19,10 +19,20 @@ inline torch::Tensor x1_cov_d1_centred(torch::Tensor const& a,
                                        torch::Tensor const& x1v,
                                        bool stretched) {
   int n1 = a.size(-1);
-  auto dx = x1v.narrow(0, 2, n1 - 2) - x1v.narrow(0, 0, n1 - 2);
   auto d = torch::empty_like(a);
-  d.narrow(-1, 1, n1 - 2)
-      .copy_((a.narrow(-1, 2, n1 - 2) - a.narrow(-1, 0, n1 - 2)) / dx);
+  if (stretched) {
+    // #280: the slope at x1v_i of the quadratic through cells i-1, i, i+1
+    auto hm = x1v.narrow(0, 1, n1 - 2) - x1v.narrow(0, 0, n1 - 2);
+    auto hp = x1v.narrow(0, 2, n1 - 2) - x1v.narrow(0, 1, n1 - 2);
+    d.narrow(-1, 1, n1 - 2)
+        .copy_(-hp / (hm * (hm + hp)) * a.narrow(-1, 0, n1 - 2) +
+               (hp - hm) / (hm * hp) * a.narrow(-1, 1, n1 - 2) +
+               hm / (hp * (hm + hp)) * a.narrow(-1, 2, n1 - 2));
+  } else {
+    auto dx = x1v.narrow(0, 2, n1 - 2) - x1v.narrow(0, 0, n1 - 2);
+    d.narrow(-1, 1, n1 - 2)
+        .copy_((a.narrow(-1, 2, n1 - 2) - a.narrow(-1, 0, n1 - 2)) / dx);
+  }
   d.select(-1, 0).copy_(d.select(-1, 1));
   d.select(-1, n1 - 1).copy_(d.select(-1, n1 - 2));
   return d;
@@ -34,6 +44,13 @@ inline torch::Tensor x1_cov_d1_centred(torch::Tensor const& a,
 inline torch::Tensor x1_cov_one_sided(torch::Tensor const& a,
                                       torch::Tensor const& x1v, int i, int s,
                                       bool stretched) {
+  if (stretched) {
+    // #280: the slope at x1v_i of the quadratic through the three cells
+    auto p = x1v[i + s] - x1v[i], q = x1v[i + 2 * s] - x1v[i];
+    return -(p + q) / (p * q) * a.select(-1, i) +
+           q / (p * (q - p)) * a.select(-1, i + s) -
+           p / (q * (q - p)) * a.select(-1, i + 2 * s);
+  }
   auto h = x1v[i + s] - x1v[i];
   return s *
          (-3. * a.select(-1, i) + 4. * a.select(-1, i + s) -

@@ -308,29 +308,14 @@ TEST(StretchedX1Ref, wb_ref4_switch_runs) {
 }
 
 // ctest test_stretched_x1_ref_x1_mass_covariance runs this with
-// SNAP_X1_MASS_COVARIANCE=1.  The fourth switch refused on a stretched x1,
-// for the same reason as the three above: its arithmetic assumes equal x1
-// spacings.  Next to a reflecting wall the covariance correction takes rho_1
-// one-sided over three cells with the equally-spaced (-3, 4, -1) / (2h)
-// weights (hydro_forward.cpp, the `one_sided` lambda), so on unequal
-// spacings it is first order, not second.  Measured at x1rat 1.058,
-// nx1 = 192: shipped / exact = 0.971001 against the predicted (3 - r) / 2 =
-// 0.971000, and the stretched-grid error PLATEAUS at 2.900e-2 from 24 to 384
-// cells while both forms are O(h^2) on the uniform control.  Refusing it is
-// one more line in the same check rather than a silent loss of order.
-TEST(StretchedX1Ref, refuses_x1_mass_covariance_switch) {
+// SNAP_X1_MASS_COVARIANCE=1: its x1 slopes take the non-uniform three-point
+// weights on a keyed stretched x1 (test_x1_mass_covariance.cpp), so the
+// stretched card builds and steps with the switch on, as its uniform twin does
+TEST(StretchedX1Ref, x1_mass_covariance_switch_runs) {
   if (!HydroImpl::x1_mass_covariance())
     GTEST_SKIP() << "SNAP_X1_MASS_COVARIANCE is not set";
-  // `refuses` asserts both halves: the stretched card throws with this
-  // message, and the SAME card on a uniform grid -- the switch still on --
-  // builds and steps.
-  refuses(
-      "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
-      "(geometry/x1f or cells/x1rat, #280)");
-  // The uniform half again, on its own, so the guard cannot be satisfied by
-  // refusing the switch everywhere: this is what must keep working.
-  EXPECT_NO_THROW(build_and_step(card(false)))
-      << "a uniform x1 with SNAP_X1_MASS_COVARIANCE set must still run";
+  EXPECT_NO_THROW(build_and_step(card(true)));
+  EXPECT_NO_THROW(build_and_step(card(false)));
 }
 
 namespace {
