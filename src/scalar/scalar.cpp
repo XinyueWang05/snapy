@@ -32,7 +32,12 @@ void ScalarImpl::reset() {
       "side alone leaves the other unbounded");
 
   pcoord = pmb->pcoord;
-  precon = ReconstructImpl::create(options->recon(), this);
+  // q and rho get the same scale-invariant weights: a uniform r stays uniform
+  TORCH_CHECK(options->recon(), "[Scalar] Reconstruct options are null");
+  auto recon = std::make_shared<ReconstructOptionsImpl>(*options->recon());
+  recon->interp() = std::make_shared<InterpOptionsImpl>(*recon->interp());
+  recon->interp()->scale() = true;
+  precon = ReconstructImpl::create(recon, this);
   priemann = RiemannSolverImpl::create(options->riemann(), this);
 
   if (options->thermo()) {
@@ -69,10 +74,13 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
               "[Scalar] hydro_u is required for passive scalar transport");
 
   auto rho = other.at("hydro_u")[IDN].unsqueeze(0);
-  auto r = u / rho;
+  // r = q_face / rho_face; q / rho of cell averages is second order (S177)
+  auto face_r = [&](int dim) {
+    return precon->forward(u, dim) / precon->forward(rho, dim);
+  };
 
   if (_flux1.defined()) {
-    auto rlr = precon->forward(r, DIM1);
+    auto rlr = face_r(DIM1);
     _flux1.set_(
         priemann->forward(rlr[ILT], rlr[IRT], DIM1, pmb->phydro->flux1()[IDN]));
   }
@@ -85,7 +93,7 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   std::vector<CommWorkPtr> works2, works3;
 
   if (_flux2.defined()) {
-    rtmp2 = precon->forward(r, DIM2);
+    rtmp2 = face_r(DIM2);
     if (playout->options->type() == "cubed-sphere") {
       // Ship the two reconstructed states under DIRECTION-SUFFIXED keys, as the
       // hydro does (hydro_forward.cpp). The ':' suffix selects the directional
@@ -100,7 +108,7 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   }
 
   if (_flux3.defined()) {
-    rtmp3 = precon->forward(r, DIM3);
+    rtmp3 = face_r(DIM3);
     if (playout->options->type() == "cubed-sphere") {
       // See the DIM2 comment above.
       send_vars3["scalar_wl:+"] = rtmp3[ILT];
