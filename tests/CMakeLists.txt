@@ -32,6 +32,7 @@ setup_test(test_stretched_x1)
 setup_test(test_deck_x1_wiring)
 setup_test(test_scalar_x1_wiring)
 setup_test(test_stretched_x1_ref)
+setup_test(test_stretched_diffusion)
 # #280: the REF4 switch (or SNAP_X1_CENTROID_EXACT, which implies it) is
 # refused on a stretched x1; the switch is read once per process
 foreach(_arm "wb_ref4;SNAP_WB_REF4=1" "x1_centroid;SNAP_X1_CENTROID_EXACT=1")
