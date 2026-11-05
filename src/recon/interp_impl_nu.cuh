@@ -60,17 +60,6 @@ __device__ T interp_shared_weno5_nu_impl(T const *line, T const *row, int v,
 }
 
 template <typename T>
-__device__ T interp_shared_poly5_nu_impl(T const *line, T const *row, int v,
-                                         int start, int axis_size) {
-  T out = 0.;
-  T const *src = line + v * axis_size + start;
-  for (int k = 0; k < kPoly5NuCoeff; ++k) {
-    out += row[k] * src[k];
-  }
-  return out;
-}
-
-template <typename T>
 __device__ void interp_weno5_nu_impl(T *out, T *inp, T const *coeff, int nvar,
                                      int stride_in1, int stride_in2,
                                      int stride_out1, int stride_out2,
@@ -116,23 +105,29 @@ __device__ void interp_poly5_nu_impl(T *out, T *inp, T const *coeff, int nvar,
 
   T const *row = coeff + static_cast<int64_t>(id) * kPoly5NuCoeff;
   for (int j = 0; j < nvar; ++j) {
-    OUT(j, id) = interp_shared_poly5_nu_impl(sinp, row, j, id, nt);
+    OUT(j, id) = interp_shared_poly_coeff_impl<T, 5>(sinp, row, j, id, nt);
   }
 };
+
+template <int NCoeff, typename T>
+__device__ void interp_nu_untiled(T *out, T *inp, T const *coeff, int nvar,
+                                  int stride_in1, int stride_in2,
+                                  int stride_out1, int stride_out2,
+                                  bool scale, T *smem) {
+  if constexpr (NCoeff == kWeno5NuCoeff) {
+    interp_weno5_nu_impl(out, inp, coeff, nvar, stride_in1, stride_in2,
+                         stride_out1, stride_out2, scale, smem);
+  } else {
+    interp_poly5_nu_impl(out, inp, coeff, nvar, stride_in1, stride_in2,
+                         stride_out1, stride_out2, smem);
+  }
+}
 
 struct Weno5NuOp {
   template <typename T>
   __device__ static T eval(T const *line, T const *row, int v, int start,
                            int axis, bool scale) {
     return interp_shared_weno5_nu_impl(line, row, v, start, axis, scale);
-  }
-};
-
-struct Poly5NuOp {
-  template <typename T>
-  __device__ static T eval(T const *line, T const *row, int v, int start,
-                           int axis, bool /*scale*/) {
-    return interp_shared_poly5_nu_impl(line, row, v, start, axis);
   }
 };
 

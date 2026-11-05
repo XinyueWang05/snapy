@@ -68,14 +68,8 @@ inline DISPATCH_MACRO void hydro_ref_x1_scan_impl(T const* w, T const* dx1f,
 //! [r0 (r0 / r1)^k, r0 (1 + k)] for r1 >= 0: positive, and bounded above when
 //! r1 is nearly empty. A non-positive value keeps the wall cell.
 template <typename T>
-inline DISPATCH_MACRO T hydro_ref_x1_wall_rop(T r0, T r1, int k) {
-  T e = r1 > r0 ? r0 * pow(r0 / r1, T(k)) : r0 + T(k) * (r0 - r1);
-  return e > T(0) ? e : r0;
-}
-
-template <typename T>
-inline DISPATCH_MACRO T hydro_ref_x1_wall_rop_d(T r0, T r1, T kk) {
-  T e = r1 > r0 ? r0 * pow(r0 / r1, kk) : r0 + kk * (r0 - r1);
+inline DISPATCH_MACRO T hydro_ref_x1_wall_rop(T r0, T r1, T k) {
+  T e = r1 > r0 ? r0 * pow(r0 / r1, k) : r0 + k * (r0 - r1);
   return e > T(0) ? e : r0;
 }
 
@@ -113,19 +107,21 @@ inline DISPATCH_MACRO T hydro_ref_x1_rop_smooth(
   for (int m = -2; m <= 2; ++m) {
     int j = i + m;
     if (j < jlo) {
-      v[m + 2] = ext_lo ? hydro_ref_x1_wall_rop(rop(jlo), rop(jlo + 1), jlo - j)
-                        : rop(jlo);
-      if (stretched && ext_lo)
-        v[m + 2] = hydro_ref_x1_wall_rop_d(
-            rop(jlo), rop(jlo + 1),
-            hydro_ref_x1_wall_steps(dx1f, jlo, -1, jlo - j));
+      v[m + 2] = ext_lo
+                     ? hydro_ref_x1_wall_rop(
+                           rop(jlo), rop(jlo + 1),
+                           stretched ? hydro_ref_x1_wall_steps(dx1f, jlo, -1,
+                                                                  jlo - j)
+                                     : T(jlo - j))
+                     : rop(jlo);
     } else if (j > jhi) {
-      v[m + 2] = ext_hi ? hydro_ref_x1_wall_rop(rop(jhi), rop(jhi - 1), j - jhi)
-                        : rop(jhi);
-      if (stretched && ext_hi)
-        v[m + 2] = hydro_ref_x1_wall_rop_d(
-            rop(jhi), rop(jhi - 1),
-            hydro_ref_x1_wall_steps(dx1f, jhi, +1, j - jhi));
+      v[m + 2] = ext_hi
+                     ? hydro_ref_x1_wall_rop(
+                           rop(jhi), rop(jhi - 1),
+                           stretched ? hydro_ref_x1_wall_steps(dx1f, jhi, +1,
+                                                                  j - jhi)
+                                     : T(j - jhi))
+                     : rop(jhi);
     } else {
       v[m + 2] = rop(j);
     }
@@ -250,15 +246,13 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
   bool stretched = x1_grid == kX1RefStretched;
   T rs = hydro_ref_x1_rop_smooth(w, ncells, flat, nc1, i, jlo, jhi, ext_lo,
                                  ext_hi, dx1f, stretched);
-  T rf = i > 0 ? T(0.5) * (hydro_ref_x1_rop_smooth(w, ncells, flat, nc1, i - 1,
-                                                   jlo, jhi, ext_lo, ext_hi,
-                                                   dx1f, stretched) +
-                           rs)
-               : rs;
-  if (x1_grid == kX1RefStretched && i > 0) {
+  T rf = rs;
+  if (i > 0) {
     T rs_dn = hydro_ref_x1_rop_smooth(w, ncells, flat, nc1, i - 1, jlo, jhi,
                                       ext_lo, ext_hi, dx1f, stretched);
-    rf = (dx1f[i] * rs_dn + dx1f[i - 1] * rs) / (dx1f[i - 1] + dx1f[i]);
+    rf = stretched ? (dx1f[i] * rs_dn + dx1f[i - 1] * rs) /
+                         (dx1f[i - 1] + dx1f[i])
+                   : T(0.5) * (rs_dn + rs);
   }
   dref[flat + i] = cell_pref * rs;
   dsf[flat + i] = lo * rf;

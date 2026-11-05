@@ -177,18 +177,6 @@ void x1_reset_tables(torch::nn::Module& m, torch::Tensor& cm_x1,
   }
 }
 
-void x1_install_tables(torch::nn::Module& m, torch::Tensor& cm_x1,
-                       torch::Tensor& cp_x1, torch::Tensor const& cm_rows,
-                       torch::Tensor const& cp_rows) {
-  if (m.named_buffers(/*recurse=*/false).contains("cm_x1")) {
-    cm_x1.set_data(cm_rows);
-    cp_x1.set_data(cp_rows);
-  } else {
-    cm_x1 = m.register_buffer("cm_x1", cm_rows);
-    cp_x1 = m.register_buffer("cp_x1", cp_rows);
-  }
-}
-
 torch::Tensor const& x1_coeffs_for(torch::Tensor const& src,
                                    torch::Tensor& cache,
                                    torch::Tensor const& w) {

@@ -25,6 +25,7 @@ HydroImpl::HydroImpl(const HydroOptions& options_, torch::nn::Module* p)
 
 void HydroImpl::reset() {
   TORCH_CHECK(pmb, "[Hydro] Parent MeshBlock is null");
+  bool stretched = pmb->pcoord && pmb->pcoord->options->stretched_x1();
 
   //// ---- (1) set up equation-of-state model ---- ////
   peos = EquationOfStateImpl::create(options->eos(), this);
@@ -32,20 +33,18 @@ void HydroImpl::reset() {
     SINFO(Hydro) << "EOS type: " << peos->options->type() << "\n";
   }
 
-  TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
-                wb_ref4_enabled()),
+  TORCH_CHECK(!(stretched && wb_ref4_enabled()),
               "SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies it) is "
               "not supported on a stretched x1 (geometry/x1f or cells/x1rat, "
               "#280); unset it");
 
-  TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
-                x1_mass_covariance()),
+  TORCH_CHECK(!(stretched && x1_mass_covariance()),
               "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
               "(geometry/x1f or cells/x1rat, #280); unset it");
 
   //// ---- (3) set up reconstruction-x1 model ---- ////
   precon1 = ReconstructImpl::create(options->recon1(), this, "recon1");
-  if (pmb->pcoord && pmb->pcoord->options->stretched_x1()) {
+  if (stretched) {
     precon1->set_x1_faces(pmb->pcoord->x1f);
   }
   if (options->verbose()) {
