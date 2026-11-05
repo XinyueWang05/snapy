@@ -16,6 +16,7 @@
 
 #include <snap/forcing/forcing.hpp>
 #include <snap/hydro/hydro.hpp>
+#include <snap/mesh/mesh.hpp>
 #include <snap/mesh/meshblock.hpp>
 
 #include "cuda_test_gate.hpp"
@@ -60,15 +61,20 @@ std::string card(bool stretched, int nx2) {
          "    x1-outer: reflecting\n";
 }
 
-std::shared_ptr<MeshBlockImpl> make_block(bool stretched, int nx2,
-                                          torch::Device device) {
+std::string write_temp(std::string const& text) {
   char fname[] = "/tmp/test-stretched-diffusion-XXXXXX";
   int fd = mkstemp(fname);
   EXPECT_NE(fd, -1);
   if (fd != -1) close(fd);
-  std::ofstream(fname) << card(stretched, nx2);
+  std::ofstream(fname) << text;
+  return fname;
+}
+
+std::shared_ptr<MeshBlockImpl> make_block(bool stretched, int nx2,
+                                          torch::Device device) {
+  auto fname = write_temp(card(stretched, nx2));
   auto options = MeshBlockOptionsImpl::from_yaml(fname);
-  std::remove(fname);
+  std::remove(fname.c_str());
   auto block = std::make_shared<MeshBlockImpl>(options);
   block->to(device, torch::kFloat64);
   return block;
@@ -302,6 +308,48 @@ TEST(StretchedHeatLayer, each_cell_takes_its_overlap) {
       EXPECT_EQ(max_abs(top_du), 0.);
     }
   }
+}
+
+// The layer is placed in the global x1: with x1 split into two blocks, each
+// block takes the overlap of its own cells, and the column gains flux * dt.
+TEST(StretchedHeatLayer, a_layer_spans_two_x1_blocks) {
+  double const dt = 0.25;
+  auto fname = write_temp(
+      "distribute: {layout: cubed, nb1: 2, blocks_per_process: 2, backend: "
+      "gloo}\n" +
+      card(true, 1));
+  auto mesh = Mesh(MeshOptionsImpl::from_yaml(fname));
+  std::remove(fname.c_str());
+  ASSERT_EQ(mesh->blocks.size(), 2);
+  double bot_total = 0., top_total = 0.;
+  for (auto block : mesh->blocks) {
+    auto c = block->pcoord;
+    int il = c->il(), iu = c->iu();
+    auto w = make_state(*block);
+    auto temp = block->phydro->peos->compute("W->T", {w});
+    auto width = c->dx1f.slice(0, il, iu + 1);
+    BotHeat bot(BotHeatOptionsImpl::from_yaml(
+                    YAML::Load("bot-heat: {flux: 100., thickness: 1600.}")),
+                block->phydro.get());
+    TopCool top(TopCoolOptionsImpl::from_yaml(
+                    YAML::Load("top-cool: {flux: -100., thickness: 1600.}")),
+                block->phydro.get());
+    auto du = bot->forward(torch::zeros_like(w), w, temp, dt);
+    double bot_e =
+        (du[IPR][0][0].slice(0, il, iu + 1) * width).sum().item<double>();
+    du = top->forward(torch::zeros_like(w), w, temp, dt);
+    double top_e =
+        (du[IPR][0][0].slice(0, il, iu + 1) * width).sum().item<double>();
+    // each block holds part of each layer
+    EXPECT_GT(bot_e, 0.);
+    EXPECT_LT(bot_e, 100. * dt);
+    EXPECT_LT(top_e, 0.);
+    EXPECT_GT(top_e, -100. * dt);
+    bot_total += bot_e;
+    top_total += top_e;
+  }
+  EXPECT_NEAR(bot_total, 100. * dt, 1.e-12 * 100. * dt);
+  EXPECT_NEAR(top_total, -100. * dt, 1.e-12 * 100. * dt);
 }
 
 // An integer depth counts cells, so on a stretched x1 it is no fixed layer:
