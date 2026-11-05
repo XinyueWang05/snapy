@@ -33,7 +33,7 @@ void HydroImpl::reset() {
   }
 
   // #280 stage 1: the covariance wall rho_1 uses equally-spaced weights
-  // (hydro_forward.cpp, `one_sided`), first order on a stretched x1
+  // (x1_mass_covariance.hpp, `x1_cov_one_sided`), first order on a stretched x1
   TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
                 x1_mass_covariance()),
               "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
