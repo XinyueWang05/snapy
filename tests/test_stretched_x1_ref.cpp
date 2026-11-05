@@ -147,15 +147,15 @@ TEST(StretchedX1Ref, refuses_curvature_correction) {
   // gravity-work face-wallc leaves the radial-exact work off, so the dx^2/12
   // curvature correction of weno5 runs
   refuses(
-      "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-      "supported on a stretched x1",
+      "the dx^2/12 x1 curvature flux H of cp3/cp5/weno5 is a uniform-grid "
+      "device: a stretched x1 uses option F",
       ", gravity-work: face-wallc}");
 }
 
 TEST(StretchedX1Ref, refuses_curvature_correction_cp5) {
   refuses(
-      "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-      "supported on a stretched x1",
+      "the dx^2/12 x1 curvature flux H of cp3/cp5/weno5 is a uniform-grid "
+      "device: a stretched x1 uses option F",
       ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
       "cp5");
 }
@@ -176,8 +176,8 @@ TEST(StretchedX1Ref, refuses_curvature_with_radial_exact_off) {
   if (HydroImpl::gravity_work_radial_exact())
     GTEST_SKIP() << "SNAP_GRAVITY_WORK_RADIAL_EXACT is on";
   refuses(
-      "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-      "supported on a stretched x1");
+      "the dx^2/12 x1 curvature flux H of cp3/cp5/weno5 is a uniform-grid "
+      "device: a stretched x1 uses option F");
 }
 
 // diffusion runs on a stretched x1 since its x1 differences use the centre
