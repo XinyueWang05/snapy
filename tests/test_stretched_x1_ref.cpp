@@ -191,14 +191,21 @@ TEST(StretchedX1Ref, stretched_diffusion_decks_run) {
   }
 }
 
-TEST(StretchedX1Ref, refuses_bot_heat) {
-  refuses("[BotHeat] not supported on a stretched x1",
+TEST(StretchedX1Ref, refuses_bot_heat_integer_depth) {
+  refuses("[BotHeat] an integer depth is not supported on a stretched x1",
           "}\n  bot-heat: {flux: 1., depth: 1}");
 }
 
-TEST(StretchedX1Ref, refuses_top_cool) {
-  refuses("[TopCool] not supported on a stretched x1",
+TEST(StretchedX1Ref, refuses_top_cool_integer_depth) {
+  refuses("[TopCool] an integer depth is not supported on a stretched x1",
           "}\n  top-cool: {flux: -1., depth: 1}");
+}
+
+TEST(StretchedX1Ref, stretched_heat_layer_decks_run) {
+  EXPECT_NO_THROW(build_and_step(
+      card(true,
+           "}\n  bot-heat: {flux: 1., thickness: 150.}\n  top-cool: "
+           "{flux: -1., thickness: 150.}")));
 }
 
 TEST(StretchedX1Ref, refuses_periodic_x1) {
