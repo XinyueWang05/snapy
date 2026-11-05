@@ -180,14 +180,15 @@ TEST(StretchedX1Ref, refuses_curvature_with_radial_exact_off) {
       "supported on a stretched x1");
 }
 
-TEST(StretchedX1Ref, refuses_diffusion_kappa_iso_only) {
-  refuses("[Diffusion] not supported on a stretched x1",
-          "}\n  diffusion: {kappa_iso: 1.e-3}");
-}
-
-TEST(StretchedX1Ref, refuses_diffusion) {
-  refuses("[Diffusion] not supported on a stretched x1",
-          "}\n  diffusion: {nu_iso: 1.e-3}");
+// diffusion runs on a stretched x1 since its x1 differences use the centre
+// distances (test_stretched_diffusion.cpp)
+TEST(StretchedX1Ref, stretched_diffusion_decks_run) {
+  for (auto forcing :
+       {"}\n  diffusion: {kappa_iso: 1.e-3}", "}\n  diffusion: {nu_iso: 1.e-3}",
+        "}\n  diffusion: {nu_iso: 1.e-3, kappa_iso: 1.e-3}"}) {
+    EXPECT_NO_THROW(build_and_step(card(true, forcing))) << forcing;
+    EXPECT_NO_THROW(build_and_step(card(false, forcing))) << forcing;
+  }
 }
 
 TEST(StretchedX1Ref, refuses_bot_heat) {
