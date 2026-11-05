@@ -39,15 +39,7 @@ void HydroImpl::reset() {
               "not supported on a stretched x1 (geometry/x1f or cells/x1rat, "
               "#280); unset it");
 
-  // #280 stage 1: the covariance correction assumes equal x1 spacings too.
-  // Next to a reflecting wall it takes rho_1 one-sided over three cells with
-  // the equally-spaced (-3, 4, -1) / (2h) weights (hydro_forward.cpp, the
-  // `one_sided` lambda), so on unequal spacings it is first order, not
-  // second: at x1rat 1.058, nx1 = 192, shipped / exact = 0.971001 against the
-  // predicted (3 - r) / 2 = 0.971000, and the error plateaus at 2.900e-2 from
-  // 24 cells to 384 while both forms are O(h^2) on the uniform control.
-  // Refused here, with its three siblings, rather than shipped as a silent
-  // loss of order.  The uniform path is untouched.
+  // #280 stage 1: the covariance wall rho_1 uses equally-spaced weights (hydro_forward.cpp, `one_sided`), first order on a stretched x1
   TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
                 x1_mass_covariance()),
               "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "

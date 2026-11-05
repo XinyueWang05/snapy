@@ -497,6 +497,18 @@ set_tests_properties(test_python_import_path_python PROPERTIES
   SKIP_RETURN_CODE 125
 )
 
+# run_hydro's initial column on a stretched x1 against the analytic adiabat (#280).
+# Registered HERE, above the SNAPY_TEST_PYTHONPATH block, because that block snapshots
+# SNAPY_PYTHON_TESTS once: an arm added after it silently imports whatever snapy is on
+# the interpreter's path, so its verdict would not constrain this branch (#280).
+snapy_add_python_test(test_example_ic_stretched TIMEOUT 120 LABELS "python;examples"
+  ARGS --exe ${CMAKE_BINARY_DIR}/bin/run_hydro.${buildl})
+# The arm needs the run_hydro example binary, checked at run time rather than at
+# configure time: tests/ is added before examples/ so the target does not exist yet,
+# and BUILD_EXAMPLES does not track it (its guard is commented out).
+set_tests_properties(test_example_ic_stretched_python PROPERTIES
+                     SKIP_RETURN_CODE 125)
+
 file(GLOB inputs *.yaml *.py)
 # create tests folder if does not exist
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
@@ -759,16 +771,3 @@ target_link_libraries(g3_decks.${buildl}
 if (UNIX AND NOT APPLE)
   target_link_options(g3_decks.${buildl} PRIVATE -Wl,--no-as-needed)
 endif()
-
-# run_hydro's initial column on a stretched x1 against the analytic adiabat (#280)
-snapy_add_python_test(test_example_ic_stretched TIMEOUT 120 LABELS "python;examples"
-  ARGS --exe ${CMAKE_BINARY_DIR}/bin/run_hydro.${buildl})
-# The arm needs the run_hydro example binary.  `if(TARGET run_hydro.${buildl})`
-# cannot be used here: this directory is added before examples/ (top level
-# CMakeLists.txt adds tests at 155 and examples at 160), so the target does not
-# exist yet.  `BUILD_EXAMPLES` does not track it either -- its guard around
-# add_subdirectory(examples) is commented out, so examples build whatever the
-# option says.  The binary is therefore checked where it is actually known, at
-# run time, with the skip convention the rest of this file uses.
-set_tests_properties(test_example_ic_stretched_python PROPERTIES
-                     SKIP_RETURN_CODE 125)

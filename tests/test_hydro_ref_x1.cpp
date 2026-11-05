@@ -347,13 +347,13 @@ torch::Tensor stretched_dx1f(int nc1, torch::ScalarType dtype) {
 /*!
  * `cuda_matches_cpu` (above) passes an UNDEFINED `rows`, so the #280 device
  * pointer is null on both sides there and the `kX1RefStretched` branch of
- * `hydro_ref_x1_cell_impl` (src/hydro/hydro_ref_x1_impl.h:206-221) never
+ * `hydro_ref_x1_cell_impl` (src/hydro/hydro_ref_x1_impl.h:239-254) never
  * executes on device. This test hands it DEFINED rows and so is the only
  * registered coverage of that branch on a GPU.
  *
  * nc1 crosses 1024 on purpose. The reference kernel launches a fixed
  * 256-thread block and walks x1 with a stride loop
- * (src/hydro/hydro_dispatch.cu:27,45), so a line longer than one block is
+ * (src/hydro/hydro_dispatch.cu:27,58), so a line longer than one block is
  * meant to be ordinary; 1024/1025/2048 is where that would break if the
  * launcher ever tied blockDim.x to nc1, as `stencil_kernel`
  * (src/utils/loops.cuh:96) does for the reconstruction path.
