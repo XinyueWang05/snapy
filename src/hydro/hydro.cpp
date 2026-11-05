@@ -32,15 +32,12 @@ void HydroImpl::reset() {
     SINFO(Hydro) << "EOS type: " << peos->options->type() << "\n";
   }
 
-  // #280 stage 1 ships today's reference on a stretched x1, not REF4's
   TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
                 wb_ref4_enabled()),
               "SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies it) is "
               "not supported on a stretched x1 (geometry/x1f or cells/x1rat, "
               "#280); unset it");
 
-  // #280 stage 1: the covariance wall rho_1 uses equally-spaced weights
-  // (hydro_forward.cpp, `one_sided`), first order on a stretched x1
   TORCH_CHECK(!(pmb && pmb->pcoord && pmb->pcoord->options->stretched_x1() &&
                 x1_mass_covariance()),
               "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
@@ -48,10 +45,6 @@ void HydroImpl::reset() {
 
   //// ---- (3) set up reconstruction-x1 model ---- ////
   precon1 = ReconstructImpl::create(options->recon1(), this, "recon1");
-  // #280: a deck that declared a stretched x1 (cells/x1rat or geometry/x1f)
-  // reconstructs on this block's own faces (reconstruct.cpp, above
-  // set_x1_faces). A uniform grid installs nothing, so it keeps the shipped
-  // arithmetic, and `recon23` is never given faces: route A is x1 only.
   if (pmb->pcoord && pmb->pcoord->options->stretched_x1()) {
     precon1->set_x1_faces(pmb->pcoord->x1f);
   }
@@ -250,9 +243,6 @@ void HydroImpl::_check_stretched_x1(torch::Tensor const& u) const {
   TORCH_CHECK(u.device().type() != torch::kMPS,
               "a stretched x1 (geometry/x1f or cells/x1rat) is not supported "
               "on MPS (#280); run it on CPU or CUDA");
-  // the ghost faces mirror the interior widths (ghost rule (c)), which is a
-  // geometric mirror only for a reflecting wall; read off the callbacks, which
-  // a Python bfuncs() call can replace after construction
   auto const& bf = pmb->options->bfuncs();
   bool wrap = pmb->options->layout() && pmb->options->layout()->periodic_z();
   for (int f : {0, 1}) {
@@ -590,9 +580,6 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w) const {
         above, torch::empty({w.size(1), w.size(2), 1}, w.options()), kWbRefTag);
   }
 
-  // a keyed stretched x1 (#280) is non-uniform in every block, whatever its
-  // own widths are: a block lying in a uniform stretch of the list must apply
-  // the same operator as its neighbours and as balance_column
   bool stretched = pcoord->options->stretched_x1();
   if (x1_uniform_ < 0 && stretched) {
     x1_uniform_ = 0;
@@ -616,8 +603,6 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w) const {
   bool phys_out = pmb->options->is_physical_boundary(0, 0, 1);
 
   auto dx1f = pcoord->dx1f.contiguous();
-  // #280 (iv): the stretched cell-pressure rows, built once from this block's
-  // widths
   if (stretched && !x1_rows_.defined()) {
     x1_rows_ = hydro_ref_x1_stretched_rows(pcoord->dx1f, iu, phys_in, phys_out,
                                            options->wb_wall_clamp());

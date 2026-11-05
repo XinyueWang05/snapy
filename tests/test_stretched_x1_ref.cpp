@@ -1,35 +1,20 @@
-// external
 #include <gtest/gtest.h>
-
-// C/C++
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <string>
 #include <vector>
-
-// POSIX
 #include <unistd.h>
-
-// snap
 #include <snap/snap.h>
-
 #include <snap/hydro/balance_column.hpp>
 #include <snap/hydro/hydro.hpp>
 #include <snap/mesh/meshblock.hpp>
-
 #include "../src/hydro/hydro_dispatch.hpp"
-
 using namespace snap;
 
-// #280 stage 1, the reference on a keyed stretched x1 and what it refuses.
-// Every refusal is shown twice: the stretched card throws with its message,
-// and the same card on a uniform grid does not.
 
 namespace {
-
-// a 24-cell column, 2 km tall, cells growing upward by 1.058 (or uniform)
 std::string card(bool stretched, std::string const& forcing = "}",
                  std::string const& inner = "reflecting",
                  std::string const& outer = "reflecting",
@@ -70,7 +55,6 @@ std::string card(bool stretched, std::string const& forcing = "}",
          "    x1-outer: " +
          outer + "\n";
 }
-
 std::string write_temp(std::string const& text) {
   char fname[] = "/tmp/test-stretched-x1-ref-XXXXXX";
   int fd = mkstemp(fname);
@@ -79,9 +63,6 @@ std::string write_temp(std::string const& text) {
   std::ofstream(fname) << text;
   return fname;
 }
-
-//! build the block from the card and take one forward step of a resting
-//! isothermal column
 void build_and_step(std::string const& text) {
   auto fname = write_temp(text);
   std::shared_ptr<MeshBlockImpl> block;
@@ -106,8 +87,6 @@ void build_and_step(std::string const& text) {
   vars["hydro_w"] = torch::empty_like(w);
   block->phydro->forward(1.e-3, u, vars);
 }
-
-//! the card throws with `message` when stretched and not when uniform
 void refuses(std::string const& message, std::string const& forcing = "}",
              std::string const& inner = "reflecting",
              std::string const& outer = "reflecting",
@@ -135,7 +114,6 @@ void refuses(std::string const& message, std::string const& forcing = "}",
     }
   }
 }
-
 }  // namespace
 
 TEST(StretchedX1Ref, uniform_and_stretched_reflecting_decks_run) {
@@ -144,8 +122,6 @@ TEST(StretchedX1Ref, uniform_and_stretched_reflecting_decks_run) {
 }
 
 TEST(StretchedX1Ref, refuses_curvature_correction) {
-  // gravity-work face-wallc leaves the radial-exact work off, so the dx^2/12
-  // curvature correction of weno5 runs
   refuses(
       "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
       "supported on a stretched x1",
@@ -160,18 +136,12 @@ TEST(StretchedX1Ref, refuses_curvature_correction_cp5) {
       "cp5");
 }
 
-// Since review F3 a stretched cp3 deck never reaches the curvature card: cp3
-// has no per-face rows, so route A refuses it when the block is built.  The
-// deck is refused exactly as before, one check earlier.
 TEST(StretchedX1Ref, refuses_a_stretched_cp3_deck_outright) {
   refuses("[cp3] has no stretched-x1 reconstruction",
           ", gravity-work: face-wallc}", "reflecting", "reflecting",
           "cartesian", "cp3");
 }
 
-// ctest test_stretched_x1_ref_radial_exact_off runs this with
-// SNAP_GRAVITY_WORK_RADIAL_EXACT=0: gravity-work face (the default) then keeps
-// the dx^2/12 curvature correction, which a stretched x1 refuses
 TEST(StretchedX1Ref, refuses_curvature_with_radial_exact_off) {
   if (HydroImpl::gravity_work_radial_exact())
     GTEST_SKIP() << "SNAP_GRAVITY_WORK_RADIAL_EXACT is on";
@@ -205,11 +175,6 @@ TEST(StretchedX1Ref, refuses_periodic_x1) {
 }
 
 namespace {
-
-// the card under a cubed layout, the one layout where x1-inner/x1-outer:
-// periodic set the layout's periodic_z(); x2/x3 periodic set periodic_x() and
-// periodic_y() under any layout. `axis` 2 or 3 widens that axis to 4 cells
-// and makes it periodic, x1 staying reflecting.
 std::string cubed_card(bool stretched, int axis) {
   auto text = "distribute: {layout: cubed}\n" +
               (axis == 1 ? card(stretched, "}", "periodic", "periodic")
@@ -222,8 +187,6 @@ std::string cubed_card(bool stretched, int axis) {
   }
   return text;
 }
-
-//! the layout flags the card's periodic faces set, read off the parsed options
 std::array<bool, 3> periodic_xyz(std::string const& text) {
   auto fname = write_temp(text);
   auto options = MeshBlockOptionsImpl::from_yaml(fname);
@@ -231,19 +194,13 @@ std::array<bool, 3> periodic_xyz(std::string const& text) {
   auto layout = options->layout();
   return {layout->periodic_x(), layout->periodic_y(), layout->periodic_z()};
 }
-
 }  // namespace
 
-// The layout's x1 wrap is periodic_z() (meshblock.cpp: lx1 is the layout's z
-// location, and periodic_z() nulls the x1 boundary functions). With them nulled
-// is_physical_boundary is false on both x1 faces, so the is_reflecting test in
-// _check_stretched_x1 passes and only its periodic_z() read can refuse.
 TEST(StretchedX1Ref, refuses_layout_periodic_x1) {
   auto flags = periodic_xyz(cubed_card(true, 1));
   EXPECT_FALSE(flags[0]);
   EXPECT_FALSE(flags[1]);
   EXPECT_TRUE(flags[2]);
-
   bool threw = false;
   try {
     build_and_step(cubed_card(true, 1));
@@ -257,8 +214,6 @@ TEST(StretchedX1Ref, refuses_layout_periodic_x1) {
   EXPECT_NO_THROW(build_and_step(cubed_card(false, 1)));
 }
 
-// periodic x2 or x3 sets periodic_x() or periodic_y(), never periodic_z(), and
-// the stretched card with reflecting x1 then runs
 TEST(StretchedX1Ref, layout_periodic_x2_x3_pass_the_x1_check) {
   for (int axis : {2, 3}) {
     auto flags = periodic_xyz(cubed_card(true, axis));
@@ -289,8 +244,6 @@ TEST(StretchedX1Ref, refuses_gnomonic_equiangle) {
           "reflecting", "gnomonic-equiangle");
 }
 
-// ctest test_stretched_x1_ref_wb_ref4 runs this with SNAP_WB_REF4=1, and
-// test_stretched_x1_ref_x1_centroid with SNAP_X1_CENTROID_EXACT=1
 TEST(StretchedX1Ref, refuses_wb_ref4_switch) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
   refuses(
@@ -298,36 +251,17 @@ TEST(StretchedX1Ref, refuses_wb_ref4_switch) {
       "supported on a stretched x1 (geometry/x1f or cells/x1rat, #280)");
 }
 
-// ctest test_stretched_x1_ref_x1_mass_covariance runs this with
-// SNAP_X1_MASS_COVARIANCE=1.  The fourth switch refused on a stretched x1,
-// for the same reason as the three above: its arithmetic assumes equal x1
-// spacings.  Next to a reflecting wall the covariance correction takes rho_1
-// one-sided over three cells with the equally-spaced (-3, 4, -1) / (2h)
-// weights (hydro_forward.cpp, the `one_sided` lambda), so on unequal
-// spacings it is first order, not second.  Measured at x1rat 1.058,
-// nx1 = 192: shipped / exact = 0.971001 against the predicted (3 - r) / 2 =
-// 0.971000, and the stretched-grid error PLATEAUS at 2.900e-2 from 24 to 384
-// cells while both forms are O(h^2) on the uniform control.  Refusing it is
-// one more line in the same check rather than a silent loss of order.
 TEST(StretchedX1Ref, refuses_x1_mass_covariance_switch) {
   if (!HydroImpl::x1_mass_covariance())
     GTEST_SKIP() << "SNAP_X1_MASS_COVARIANCE is not set";
-  // `refuses` asserts both halves: the stretched card throws with this
-  // message, and the SAME card on a uniform grid -- the switch still on --
-  // builds and steps.
   refuses(
       "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
       "(geometry/x1f or cells/x1rat, #280)");
-  // The uniform half again, on its own, so the guard cannot be satisfied by
-  // refusing the switch everywhere: this is what must keep working.
   EXPECT_NO_THROW(build_and_step(card(false)))
       << "a uniform x1 with SNAP_X1_MASS_COVARIANCE set must still run";
 }
 
 namespace {
-
-//! an isothermal column of `n` cells over `height`, cells growing upward by
-//! `q`, cell-centred values; the grid is what balance_column is handed
 std::pair<torch::Tensor, torch::Tensor> column(int n, double q, double height) {
   auto opt = torch::TensorOptions().dtype(torch::kFloat64);
   auto k = torch::arange(n + 1, opt);
@@ -341,17 +275,8 @@ std::pair<torch::Tensor, torch::Tensor> column(int n, double q, double height) {
   w[IPR][0][0].copy_(1.e7 * torch::exp(-zc / H));
   return {w, dx1f};
 }
-
 }  // namespace
 
-// RED/GREEN for the keyed cell pressure (#280; the log1p log-mean, now the
-// six-face average (iv)). A stretched isothermal column
-// (nx1 = 128, cells 1.02x apart over 300 km, 107 km scale height, so dp/p is
-// 4.8e-3 to 6.0e-2 per cell) is balanced by the log-mean dp / ln(lo / hi)
-// only to its round-off floor eps (p / dp)^2, so at rtol 1e-13 the
-// projection throws (5.4e-12 measured); dp / log1p(dp / hi) floors at
-// eps p / dp and converges (4.3e-14). The unkeyed call is today's arithmetic,
-// which a keyed grid used before this change.
 TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
   auto [w, dx1f] = column(128, 1.02, 3.e5);
   auto [wb, err, sweeps] =
@@ -364,9 +289,6 @@ TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
                c10::Error);
 }
 
-// ctest test_stretched_x1_ref_wb_ref4 (and _x1_centroid) runs this with the
-// switch set: balance_column refuses it on a stretched column, and does not on
-// a uniform one
 TEST(StretchedX1Ref, balance_column_refuses_wb_ref4) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
   std::string message =
@@ -390,9 +312,6 @@ TEST(StretchedX1Ref, balance_column_refuses_wb_ref4) {
 }
 
 namespace {
-
-// the dry adiabat of the jupiter_gcm deck: g = 22, R = 3936.0434, cp = 3.5 R,
-// 600 K and 1e7 Pa at z = 0
 constexpr double kG = 22., kR = 3936.0434, kTs = 600., kPs = 1.e7;
 double adiabat_p(double z) {
   return kPs * std::pow(1. - kG / (3.5 * kR) * z / kTs, 3.5);
@@ -400,8 +319,6 @@ double adiabat_p(double z) {
 double adiabat_rho(double z) {
   return adiabat_p(z) / (kR * (kTs - kG / (3.5 * kR) * z));
 }
-
-//! the cell average of f over [a, b], 8-point Gauss-Legendre
 template <typename F>
 double cell_average(F f, double a, double b) {
   static double const x[4] = {0.1834346424956498, 0.5255324099163290,
@@ -412,9 +329,6 @@ double cell_average(F f, double a, double b) {
   for (int k = 0; k < 4; ++k) sum += g[k] * (f(c - h * x[k]) + f(c + h * x[k]));
   return 0.5 * sum;
 }
-
-//! |pref - pbar| / pbar per cell of the adiabat on the faces `f`, the scan
-//! anchored at the exact top face pressure so only the cell formula is seen
 std::vector<double> pref_error(std::vector<double> const& f, bool stretched,
                                bool phys) {
   int n = static_cast<int>(f.size()) - 1;
@@ -443,20 +357,13 @@ std::vector<double> pref_error(std::vector<double> const& f, bool stretched,
   }
   return e;
 }
-
 std::vector<double> uniform_faces(double x0, double h, int n) {
   std::vector<double> f(n + 1);
   for (int k = 0; k <= n; ++k) f[k] = x0 + k * h;
   return f;
 }
-
 }  // namespace
 
-// #280 (iv): on a stretched adiabat (32 cells over 300 km, each 1/1.058 of
-// the one below) every cell's reference pressure is within 2x of what the
-// uniform branch makes of a cell of the same width in the same place: the
-// same wall row on a uniform column from the same wall, or an interior cell
-// on a uniform patch around it (floor 1e-14)
 TEST(StretchedX1Ref, iv_adiabat_cells_within_2x_uniform) {
   int n = 32;
   double q = 1. / 1.058, L = 3.e5;
@@ -484,8 +391,6 @@ TEST(StretchedX1Ref, iv_adiabat_cells_within_2x_uniform) {
   std::printf("worst ratio %.3f\n", worst);
 }
 
-// (iv) on a uniform face list is the uniform branch: its rows are w6 inside
-// and w6e at the walls (reversed at the top)
 TEST(StretchedX1Ref, iv_rows_on_uniform_faces_are_the_uniform_weights) {
   int n = 12;
   auto rows = hydro_ref_x1_stretched_rows(

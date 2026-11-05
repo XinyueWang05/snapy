@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """G3 control for snapy#280 stage 1: compare two g3_decks dumps bit for bit.
 
 Every tensor is loaded as float64 and compared with ``torch.equal``, which is

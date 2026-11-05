@@ -23,8 +23,6 @@ void CartesianImpl::reset() {
   // Global cell width, not this block's own; see dx1() in coordinate.hpp.
   auto dx = op->dx1();
   if (op->stretched_x1()) {
-    // #280: every x1 metric from the global face vector; the mirrored face
-    // below the block's first ghost defines dx1v[0] = x1v[0] - x1v[-1]
     int n = op->nc1();
     auto fe = op->global_x1f().narrow(
         0, op->ix1() - op->nghost() + op->x1f_ghosts() - 1, n + 3);

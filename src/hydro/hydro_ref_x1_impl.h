@@ -73,18 +73,12 @@ inline DISPATCH_MACRO T hydro_ref_x1_wall_rop(T r0, T r1, int k) {
   return e > T(0) ? e : r0;
 }
 
-//! #280, a keyed stretched x1: the same continuation with a real step count
-//! kk = d_k / ((dx0 + dx1) / 2), d_k the distance from the wall cell centre to
-//! ghost centre k over the mirrored widths (ghost m has the width of owned
-//! cell m-1 from the wall), dx0, dx1 the wall cell and its neighbour
 template <typename T>
 inline DISPATCH_MACRO T hydro_ref_x1_wall_rop_d(T r0, T r1, T kk) {
   T e = r1 > r0 ? r0 * pow(r0 / r1, kk) : r0 + kk * (r0 - r1);
   return e > T(0) ? e : r0;
 }
 
-//! kk of ghost k past the wall cell jw; dir = -1 below a lower wall, +1 above
-//! an upper wall; the mirrored widths are read from the owned cells
 template <typename T>
 inline DISPATCH_MACRO T hydro_ref_x1_wall_steps(T const* dx1f, int jw, int dir,
                                                 int k) {
@@ -139,9 +133,6 @@ inline DISPATCH_MACRO T hydro_ref_x1_rop_smooth(
   return (v[0] + T(4) * v[1] + T(6) * v[2] + T(4) * v[3] + v[4]) / T(16);
 }
 
-//! #280 (iv): the first of the six faces the uniform branch below averages for
-//! cell i (the same choice of interior row, one-sided wall rows and their
-//! conditions), or -1 where it keeps the two-face mean
 inline DISPATCH_MACRO int hydro_ref_x1_six_face_start(int i, int nc1, int iu,
                                                       bool phys_in,
                                                       bool phys_out,
@@ -233,10 +224,6 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
       use_six_faces(nc1 - 5, w6e[row], true);
     }
   } else if (x1_grid == kX1RefStretched) {
-    // #280 (iv), a keyed stretched x1: the cell average of the degree-5
-    // Lagrange interpolant through the same six faces, with per-cell weights
-    // built once from the widths (hydro_ref_x1_stretched_rows); row i is
-    // (start, w_0..w_5). Same bracket guard as the uniform branch
     T lower = lo < hi ? lo : hi;
     T upper = lo > hi ? lo : hi;
     int start = static_cast<int>(rows[7 * i]);
@@ -268,9 +255,6 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
                                                    dx1f, stretched) +
                            rs)
                : rs;
-  // #280, a keyed stretched x1: the face between cells i-1 and i (the lower
-  // face of cell i) takes the distance-weighted value of the two smoothed
-  // ratios, the cell below weighted by the width of the cell above
   if (x1_grid == kX1RefStretched && i > 0) {
     T rs_dn = hydro_ref_x1_rop_smooth(w, ncells, flat, nc1, i - 1, jlo, jhi,
                                       ext_lo, ext_hi, dx1f, stretched);

@@ -1028,7 +1028,6 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     auto type1 = precon1->pinterp1->options->type();
     if (!gw_cell && !radial_exact &&
         (type1 == "cp3" || type1 == "cp5" || type1 == "weno5")) {
-      // the dx^2/12 form assumes uniform x1 cells (#280, stage 1)
       TORCH_CHECK(!pmb->pcoord->options->stretched_x1(),
                   "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is "
                   "not supported on a stretched x1 (#280); use gravity-work: "

@@ -1,25 +1,18 @@
-// external
 #include <gtest/gtest.h>
 
-// C/C++
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <string>
 #include <vector>
 
-// POSIX
 #include <unistd.h>
 
-// snap
 #include <snap/coord/coordinate.hpp>
 #include <snap/layout/layout.hpp>
 
 using namespace snap;
 
-// #280: a stretched x1 from `cells/x1rat` or `geometry/x1f`. The faces,
-// ghosts included, come from one global face vector whose ghosts mirror the
-// interior widths (ghost rule (c)); dx1f, x1v and dx1v derive from it.
 
 namespace {
 
@@ -56,7 +49,6 @@ CoordinateOptions load(std::string const& config) {
   return op;
 }
 
-// the global faces with ng mirrored ghosts per end, as rule (c) defines them
 std::vector<double> mirrored(std::vector<double> const& f, int ng) {
   int n = static_cast<int>(f.size()) - 1;
   std::vector<double> g;
@@ -70,8 +62,6 @@ torch::Tensor as_tensor(std::vector<double> const& v) {
   return torch::tensor(v, torch::kFloat64);
 }
 
-// the x1 metrics a stretched Cartesian block must hold, from the global
-// faces `g` with nghost + 1 ghosts per end and the block's first face `i0`
 void expect_metrics(Cartesian const& coord, std::vector<double> const& g,
                     int i0) {
   int nc = coord->options->nc1();
@@ -87,14 +77,6 @@ void expect_metrics(Cartesian const& coord, std::vector<double> const& g,
       << coord->dx1v;
 }
 
-// A non-self-similar interior face list: the widths rise and fall, so no two
-// are in a fixed ratio and nothing here can pass by accident on a geometric
-// grid. Widths 1.25, 1.75, 2.25, 1.75, 2.5, 2, 2.5, 2 -- quarter integers, so
-// every width and every mirrored ghost width is exact in binary and the
-// equalities below are bit for bit. The largest adjacent ratio is 2.5/1.75 =
-// 1.4286, inside the stage-1 bound kX1MaxWidthRatio = 1.5 (#280). The list
-// this replaced jumped 1 -> 5 at the last face and is refused at parse time
-// now; that refusal is tested in test_x1_qmax_guard.cpp.
 const std::vector<double> kFaces = {0.,  1.25, 3.,  5.25, 7.,
                                     9.5, 11.5, 14., 16.};
 
@@ -114,8 +96,6 @@ TEST(StretchedX1, face_list_gives_mirrored_ghosts_and_metrics) {
   auto op = load(card("{nx1: 8, nghost: 3}", face_list(kFaces)));
   Cartesian coord(op);
   expect_metrics(coord, mirrored(kFaces, 4), 0);
-
-  // rule (c): every ghost width mirrors the interior width across the wall
   int ng = 3, n = 8;
   for (int m = 0; m < ng; ++m) {
     EXPECT_EQ(coord->dx1f[ng - 1 - m].item<double>(),
@@ -133,9 +113,7 @@ TEST(StretchedX1, face_list_may_omit_the_x1_bounds) {
   expect_metrics(coord, mirrored(kFaces, 4), 0);
 }
 
-// q = h_{k+1}/h_k along +x1; x1max is pinned exactly
 TEST(StretchedX1, x1rat_gives_a_geometric_grid) {
-  // both directions: D1 (the sign convention) is open, so test both
   for (std::string q : {"0.94517958412098302", "1.058"}) {
     double qq = std::stod(q);
     Cartesian coord(load(card("{nx1: 16, nghost: 3, x1rat: " + q + "}")));
@@ -155,7 +133,6 @@ TEST(StretchedX1, x1rat_gives_a_geometric_grid) {
   }
 }
 
-// a deck with no key, and x1rat: 1, keep today's uniform grid bit for bit
 TEST(StretchedX1, x1rat_one_is_the_uniform_grid) {
   Cartesian none(load(card("{nx1: 12, nghost: 3}")));
   Cartesian one(load(card("{nx1: 12, nghost: 3, x1rat: 1.}")));
@@ -171,8 +148,6 @@ TEST(StretchedX1, x1rat_one_is_the_uniform_grid) {
   EXPECT_TRUE(torch::equal(none->dx1v, torch::ones(18, torch::kFloat64) * dx));
 }
 
-// equal cell counts per block; each block is a slice of the one global
-// vector, so a face shared by two blocks has one value
 TEST(StretchedX1, blocks_slice_the_global_face_vector) {
   std::vector<double> faces;
   double q = 0.9;
@@ -183,7 +158,6 @@ TEST(StretchedX1, blocks_slice_the_global_face_vector) {
                           "{x1min: 0., x1max: 100.}"));
   auto parsed = faces;
   auto g = mirrored(parsed, 3);
-
   for (int l = 0; l < 3; ++l) {
     auto op = global->clone();
     op->x1min(parsed[4 * l]).x1max(parsed[4 * l + 4]).nx1(4);
@@ -192,7 +166,6 @@ TEST(StretchedX1, blocks_slice_the_global_face_vector) {
     expect_metrics(coord, g, 4 * l);
   }
 
-  // a block whose bounds are not faces of the global grid is refused
   auto op = global->clone();
   op->x1min(parsed[0]).x1max(0.5 * (parsed[4] + parsed[5])).nx1(4);
   EXPECT_THROW(Cartesian{op}, c10::Error);
@@ -202,34 +175,23 @@ TEST(StretchedX1, refuses_bad_keys) {
   auto refused = [](std::string const& config) {
     EXPECT_THROW(load(config), c10::Error) << config;
   };
-  // both keys together
   refused(card("{nx1: 8, nghost: 3, x1rat: 0.95}", face_list(kFaces)));
-  // non-positive ratio
   refused(card("{nx1: 8, nghost: 3, x1rat: 0.}"));
   refused(card("{nx1: 8, nghost: 3, x1rat: -1.05}"));
-  // non-increasing list
   auto bad = kFaces;
   bad[4] = bad[3];
   refused(card("{nx1: 8, nghost: 3}", face_list(bad)));
-  // wrong length
   refused(card("{nx1: 7, nghost: 3}", face_list(kFaces)));
-  // bounds that disagree with the list
   refused(card("{nx1: 8, nghost: 3}", face_list(kFaces),
                "{x1min: 0., x1max: 15.}"));
-  // too few cells to mirror x1f_ghosts() = max(nghost, 3) + 1 widths
   refused(card("{nx1: 3, nghost: 3, x1rat: 0.95}"));
-  // a list without cells
   refused("geometry:\n  type: cartesian\n" + face_list(kFaces));
 }
 
-// global_x1f() carries 3 faces per end beyond the interior plus one more
-// mirrored face for dx1v, whatever nghost is: 4 per end for nghost <= 3, so
-// global face g sits at index g + 4. Route A reads its stencils from it.
 TEST(StretchedX1, global_faces_do_not_depend_on_nghost) {
   int const G = 4;
   for (int ng : {1, 2, 3}) {
     auto cells = "{nx1: 8, nghost: " + std::to_string(ng);
-    // stretched: rule (c) mirrored faces, 4 per end
     auto op = load(card(cells + "}", face_list(kFaces)));
     auto g = op->global_x1f();
     ASSERT_EQ(g.size(0), 8 + 2 * G + 1) << "nghost " << ng;
@@ -238,8 +200,6 @@ TEST(StretchedX1, global_faces_do_not_depend_on_nghost) {
     Cartesian st(op);
     EXPECT_TRUE(torch::equal(st->x1f, g.narrow(0, G - ng, 8 + 2 * ng + 1)));
     expect_metrics(st, mirrored(kFaces, G), G - ng - 1);
-
-    // uniform: the block's faces are a slice of it, bit for bit
     auto uop = load(card(cells + "}"));
     auto ug = uop->global_x1f();
     ASSERT_EQ(ug.size(0), 8 + 2 * G + 1) << "nghost " << ng;
@@ -252,9 +212,6 @@ TEST(StretchedX1, global_faces_do_not_depend_on_nghost) {
   }
 }
 
-// Mesh calls repartition() on its own (mesh.cpp), past the deck-level check in
-// from_yaml. A stretched x1 whose cell count does not split evenly into the x1
-// blocks must throw there, not drop the top cells from the last block.
 TEST(StretchedX1, repartition_refuses_an_uneven_x1_split) {
   auto split = [](CoordinateOptions const& op, int nb1, int rank) {
     auto layout = LayoutOptionsImpl::create();

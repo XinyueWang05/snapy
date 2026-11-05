@@ -76,11 +76,6 @@ void ReconstructImpl::reset() {
   pinterp2 = InterpImpl::create(options->interp(), this, "interp2");
 }
 
-//! Install route A per-face coefficients on both interpolators (snapy#280).
-/*!
- * This block's own `x1f` reaches far enough for the WENO5/cp5 stencils (they
- * close on global faces -3..gnx+3); derivation in the note, frozen bc29594f.
- */
 void ReconstructImpl::set_x1_faces(torch::Tensor const& x1f) {
   pinterp1->set_x1_coeffs(x1f);
   pinterp2->set_x1_coeffs(x1f);

@@ -1,11 +1,9 @@
-// torch
 #include <ATen/Dispatch.h>
 #include <ATen/TensorIterator.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <limits>
 
-// snap
 #include <snap/utils/loops.cuh>
 
 #include "interp_impl_nu.cuh"
@@ -15,11 +13,6 @@
 namespace snap {
 namespace {
 
-//! Launch geometry of the tiled path: a line-for-line copy of
-//! `stencil_kernel_tiled` (recon_dispatch.cu:46-93), which has internal
-//! linkage, so duplicating it is what keeps recon_dispatch.cu byte identical.
-//! `grid.x == 1` is the invariant the face index depends on (layout note
-//! Sec. 8.1).
 template <typename scalar_t, int Arity, typename func_t>
 void stencil_kernel_tiled_nu(at::TensorIterator& iter, int dim, int block_x,
                              size_t shared_bytes, const func_t& f) {
@@ -70,9 +63,6 @@ void stencil_kernel_tiled_nu(at::TensorIterator& iter, int dim, int block_x,
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-//! Tile width for the per-face path: `recon_tile_width`
-//! (recon_dispatch.cu:18-41) minus the coefficient term, because route A
-//! reads the rows from global memory (note Sec. 4.3).
 int recon_tile_width_nu(int64_t nline, int nvar, int stencil,
                         size_t scalar_size, size_t* shared_bytes) {
   if (nline <= 1024) {

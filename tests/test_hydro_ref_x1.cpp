@@ -274,15 +274,6 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu) {
   }
 }
 
-//! Distance in representable steps between two tensors of the same float type,
-//! with NaN handled by POSITION rather than by value.
-/*!
- * `torch::equal` and `torch::allclose` both report disagreement for a NaN that
- * sits in the same place on both sides, which is agreement for our purpose, and
- * `allclose`'s relative tolerance is meaningless at float32 next to a float64
- * threshold. The verdict here is therefore the ULP distance over the non-NaN
- * elements plus an exact match of the NaN positions.
- */
 struct UlpDiff {
   int64_t max_ulp = 0;
   double max_rel = 0.0;
@@ -333,9 +324,6 @@ UlpDiff ulp_diff(torch::Tensor const& cpu, torch::Tensor const& gpu, int nc1) {
   return d;
 }
 
-//! A genuinely stretched x1: geometric widths with a FIXED total stretch of 5x,
-//! so the grid is equally non-uniform at every nc1 (a fixed per-cell ratio
-//! would overflow at nc1 in the thousands) and the column keeps height 1.
 torch::Tensor stretched_dx1f(int nc1, torch::ScalarType dtype) {
   auto f64 = torch::TensorOptions().dtype(torch::kFloat64);
   auto d =
@@ -343,33 +331,6 @@ torch::Tensor stretched_dx1f(int nc1, torch::ScalarType dtype) {
   return (d / d.sum()).to(dtype).contiguous();
 }
 
-//! CUDA must reproduce the CPU on the keyed-stretched x1 reference, for lines
-//! both inside and well past a CUDA thread block.
-/*!
- * `cuda_matches_cpu` (above) passes an UNDEFINED `rows`, so the #280 device
- * pointer is null on both sides there and the `kX1RefStretched` branch of
- * `hydro_ref_x1_cell_impl` (src/hydro/hydro_ref_x1_impl.h:239-254) never
- * executes on device. This test hands it DEFINED rows and so is the only
- * registered coverage of that branch on a GPU.
- *
- * nc1 crosses 1024 on purpose. The reference kernel launches a fixed
- * 256-thread block and walks x1 with a stride loop
- * (src/hydro/hydro_dispatch.cu:27,58), so a line longer than one block is
- * meant to be ordinary; 1024/1025/2048 is where that would break if the
- * launcher ever tied blockDim.x to nc1, as `stencil_kernel`
- * (src/utils/loops.cuh:96) does for the reconstruction path.
- *
- * TOLERANCE. 32 ULP, against a measured CPU-vs-CUDA spread of at most 6 ULP
- * over 641,280 elements of this kernel across nc1 = 64..4096 at both float
- * types (max relative 6.9e-16 at float64, 4.0e-07 at float32), most of which
- * is nvcc's default FMA contraction: rebuilding the CUDA objects -fmad=false
- * takes float64 down to 2 ULP. 32 leaves roughly a five-fold margin over that
- * noise while staying ~5e-15 relative at float64 and ~4e-06 at float32. A real
- * divergence on this path is not a near-miss: a wrong six-face row, a dropped
- * cell, a stale or out-of-range `rows` read, or a lost bracket guard moves the
- * cell pressure by a fraction of its own magnitude, i.e. by 1e11 ULP or more,
- * so no plausible fault lands between 6 and 32.
- */
 TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
   if (!snapy_cuda_test_enabled()) {
     GTEST_SKIP() << "CUDA is not available";
@@ -379,8 +340,6 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
   constexpr int nc3 = 2, nc2 = 3;
 
   for (auto dtype : {torch::kFloat64, torch::kFloat32}) {
-    // one line inside a block, the two either side of the 1024 boundary, and
-    // one line eight blocks long
     for (int nc1 : {24, 1024, 1025, 2048}) {
       auto f64 = torch::TensorOptions().dtype(torch::kFloat64);
       auto options = torch::TensorOptions().dtype(dtype).device(torch::kCPU);
@@ -400,8 +359,6 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
                       .to(w.options())
                       .contiguous();
 
-      // the branch must actually be live: rows defined, and at least one cell
-      // carrying a real six-face row rather than the two-face fallback
       ASSERT_TRUE(rows.defined());
       ASSERT_EQ(rows.size(0), nc1);
       ASSERT_GT((rows.select(1, 0) >= 0).sum().item<int64_t>(), 0)
@@ -422,8 +379,6 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
                                     true, true, true, rows.to(torch::kCUDA));
       torch::cuda::synchronize();
 
-      // the stretched rows must be doing work: without the six-face average
-      // pref would be exactly the two-face mean everywhere
       auto mean2 = 0.5 * (expected.psf_lo + expected.psf_hi);
       EXPECT_GT((expected.pref != mean2).sum().item<int64_t>(), 0)
           << "the stretched branch collapsed to the two-face mean at nc1 = "

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """run_hydro's initial column on a stretched x1 (#280).
 
 The example drivers build their initial column by stepping an adiabat from one
@@ -55,9 +54,6 @@ def column(exe, workdir, q):
     name = "u" if q is None else f"q{q}"
     d = os.path.join(workdir, name)
     os.makedirs(d)
-    # kintera resolves its resources against the running process's cwd, and the
-    # example below runs in `d`. The build leaves nasa9.dat in this script's own
-    # working directory instead (tests/CMakeLists.txt:508-511), so link it in.
     for res in ("nasa9.dat",):
         src = os.path.join(os.getcwd(), res)
         if os.path.exists(src):
@@ -80,18 +76,15 @@ def main():
     args = parser.parse_args()
     args.exe = os.path.abspath(args.exe)
 
-    # a configuration that does not build the examples has nothing to drive
     if not os.path.exists(args.exe):
         print(f"{args.exe} was not built")
         sys.exit(125)
 
-    # which snapy this arm actually tests: the build tree, not the install (#280)
     import snapy
     print(f"snapy.__file__ = {snapy.__file__}", flush=True)
 
     import kintera
 
-    # gas constant of the deck gas, as kintera weighs it
     with tempfile.TemporaryDirectory() as tmp:
         with open(os.path.join(tmp, "thermo.yaml"), "w") as f:
             f.write(DECK.format(n=N, rat="", g=G, ps=PS, ts=TS))
