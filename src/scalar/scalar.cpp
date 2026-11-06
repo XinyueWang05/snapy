@@ -171,23 +171,12 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   };
 
   auto cells = pmb->part({0, 0, 0}, PartOptions().exterior(false));
-  if (pmb->phydro->options->eos()->limiter() || cov) {
-    auto theta = flux_positivity_theta(u, _flux1, _flux2, _flux3, pcoord, dt);
-    _positivity_hits += (theta.index(cells) < 1.).sum();
-    flux_positivity_scale_(sync_theta(theta), _flux1, _flux2, _flux3, pcoord);
-  }
-
   // r <= b is positivity of the complement b*rho - s, whose flux is b*F_mass -
   // F_s, so the same limiter applies to it -- a SECOND theta, not the one
-  // above. Scaling the complement blends F_s toward b*F_mass, the donor-cell
+  // below. Scaling the complement blends F_s toward b*F_mass, the donor-cell
   // flux of a tracer at the bound; scaling F_s toward zero would bound it too
   // but stop a plateau advecting.
-  //
-  // ⚠ This weakens the lower bound above from unconditional to conditional on
-  // the mass Courant number staying below 1: past that, theta can leave a cell
-  // exporting tracer it does not have. The premise also assumes rho moves by
-  // -dt*div(F_mass) alone, which the implicit vertical correction and any
-  // forcing writing du[IDN] both break.
+  // r <= b assumes rho moves by -dt*div(F_mass) alone (not so if implicit)
   if (options->upper_bound() > 0.) {
     auto b = options->upper_bound();
     auto mf = [&](int dim) {
@@ -213,6 +202,13 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
     if (_flux1.defined()) _flux1.add_(h1 - g1);
     if (_flux2.defined()) _flux2.add_(h2 - g2);
     if (_flux3.defined()) _flux3.add_(h3 - g3);
+  }
+
+  // positivity last: the blend above can export tracer a donor lacks
+  if (pmb->phydro->options->eos()->limiter() || cov) {
+    auto theta = flux_positivity_theta(u, _flux1, _flux2, _flux3, pcoord, dt);
+    _positivity_hits += (theta.index(cells) < 1.).sum();
+    flux_positivity_scale_(sync_theta(theta), _flux1, _flux2, _flux3, pcoord);
   }
 
   _div.set_(pcoord->divergence(_flux1, _flux2, _flux3));
