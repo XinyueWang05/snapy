@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """upper-bound must not drive a donor negative: the bound's flux blend ran after the positivity limiter.
 python test_scalar_upper_bound_donor.py [--device cuda]"""
-import math, sys, yaml
+import math, sys, torch, yaml
 from pathlib import Path
 import test_tracer_dry_convention as J
 from snapy import kIPR
 
 DEV = "cuda" if "cuda" in sys.argv else "cpu"
+if DEV == "cuda" and not torch.cuda.is_available(): sys.exit(125)  # no visible GPU: skip
 c = yaml.safe_load(open(Path(__file__).resolve().parent / "test_tracer_dry_convention.yaml"))
 c["dynamics"]["equation-of-state"]["limiter"] = True
 c["scalar"]["upper-bound"] = 1.0e-3
