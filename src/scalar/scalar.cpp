@@ -38,9 +38,11 @@ void ScalarImpl::reset() {
   recon->interp() = std::make_shared<InterpOptionsImpl>(*recon->interp());
   recon->interp()->scale() = true;
   precon = ReconstructImpl::create(recon, this);
-  if (pcoord && pcoord->options->stretched_x1()) {
+  auto x1f =
+      pcoord ? pcoord->x1_row_faces(recon->interp()->type()) : torch::Tensor();
+  if (x1f.defined()) {
     precon1 = ReconstructImpl::create(recon, this, "recon1");
-    precon1->set_x1_faces(pcoord->x1f);
+    precon1->set_x1_faces(x1f);
   } else {
     precon1 = precon;
   }
