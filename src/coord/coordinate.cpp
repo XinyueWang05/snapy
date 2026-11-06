@@ -540,6 +540,24 @@ void CoordinateImpl::print(std::ostream& stream) const {
   stream << "]" << std::endl;
 }
 
+torch::Tensor CoordinateImpl::x1_row_faces(std::string const& interp) const {
+  auto const& t = options->type();
+  bool radial = (t == "spherical-polar" || t == "gnomonic-equiangle") &&
+                options->nx1() > 1;
+  if (!radial || (interp != "weno5" && interp != "cp5"))
+    return options->stretched_x1() ? x1f : torch::Tensor();
+  // ghost widths mirrored in V at a wall, so mirrored ghosts keep its flux 0
+  auto v = x1f.pow(3) / 3.;
+  int ng = options->nghost(), n = v.size(0);
+  if (pmb && pmb->options->is_physical_boundary(0, 0, -1))
+    v.slice(0, 0, ng).copy_(2. * v[ng] -
+                            v.slice(0, ng + 1, 2 * ng + 1).flip(0));
+  if (pmb && pmb->options->is_physical_boundary(0, 0, 1))
+    v.slice(0, n - ng).copy_(2. * v[n - 1 - ng] -
+                             v.slice(0, n - 1 - 2 * ng, n - 1 - ng).flip(0));
+  return v;
+}
+
 torch::Tensor CoordinateImpl::center_width1() const {
   return dx1f.unsqueeze(0).unsqueeze(1);
 }

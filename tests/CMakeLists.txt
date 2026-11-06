@@ -413,6 +413,7 @@ snapy_add_python_test(test_flux_covariance_seams TIMEOUT 300
 snapy_add_python_test(test_flux_covariance_rowset TIMEOUT 300 LABELS "python;hydro")
 snapy_add_python_test(test_wb_ref4_order TIMEOUT 300 LABELS "python;hydro")
 snapy_add_python_test(test_x1_centroid_rest TIMEOUT 300 LABELS "python;hydro")
+snapy_add_python_test(test_radial_order TIMEOUT 300 LABELS "python;hydro")
 # #289: a passive scalar and the same tracer as a hydro species, covariance on and off
 snapy_add_python_test(test_scalar_flux_covariance TIMEOUT 300 LABELS "python;hydro;scalar")
 snapy_add_python_test(test_scalar_stratified TIMEOUT 300 LABELS "python;scalar")
@@ -460,6 +461,8 @@ if(CUDA)
   snapy_add_python_test(test_x1_centroid_rest_cuda
     SCRIPT test_x1_centroid_rest.py ARGS --device cuda
     TIMEOUT 300 LABELS "python;hydro;cuda")
+  snapy_add_python_test(test_radial_order_cuda
+    SCRIPT test_radial_order.py ARGS --device cuda TIMEOUT 300 LABELS "python;hydro;cuda")
   snapy_add_python_test(test_gravity_work_radial_exact_cuda
     SCRIPT test_gravity_work_radial_exact.py ARGS --device cuda
     TIMEOUT 300 LABELS "python;hydro;gravity;cuda")
@@ -478,6 +481,7 @@ if(CUDA)
     test_vic_moist_device_python
     test_wb_ref4_order_cuda_python
     test_x1_centroid_rest_cuda_python
+    test_radial_order_cuda_python
     test_gravity_work_radial_exact_cuda_python
     test_scalar_flux_covariance_cuda_python
     test_scalar_upper_bound_donor_cuda_python
