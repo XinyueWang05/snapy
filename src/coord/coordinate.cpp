@@ -390,9 +390,10 @@ CoordinateImpl::CoordinateImpl(const CoordinateOptions& options_,
   // the geometric source coefficients amplify that ULP by ~7 orders. Sliced
   // from a global array, a face has one value whoever owns it.
   if (op->stretched_x1()) {
-    TORCH_CHECK(op->type() == "cartesian",
+    TORCH_CHECK(op->type() == "cartesian" || op->type() == "gnomonic-equiangle",
                 "a stretched x1 (geometry/x1f or cells/x1rat) is supported "
-                "only on a cartesian geometry in stage 1 (#280); got '",
+                "only on a cartesian geometry or a gnomonic-equiangle one "
+                "(#280); got '",
                 op->type(), "'");
     x1f = op->global_x1f()
               .narrow(0, op->ix1() - op->nghost() + op->x1f_ghosts(),
@@ -427,6 +428,22 @@ torch::Tensor CoordinateOptionsImpl::global_x1f() const {
   auto lo = 2. * f[0] - f.slice(0, 1, ng + 1).flip(0);
   auto hi = 2. * f[gnx] - f.slice(0, gnx - ng, gnx).flip(0);
   return torch::cat({lo, f, hi});
+}
+
+std::array<torch::Tensor, 3> CoordinateImpl::x1_metrics_() const {
+  auto const& op = options;
+  int n = op->nc1();
+  auto v = 0.5 * (x1f.slice(0, 0, n) + x1f.slice(0, 1, n + 1));
+  if (!op->stretched_x1()) {  // the global width, not this block's own
+    auto dx = op->dx1();
+    return {torch::ones(n, torch::kFloat64) * dx, v,
+            torch::ones(n, torch::kFloat64) * dx};
+  }
+  auto fe = op->global_x1f().narrow(
+      0, op->ix1() - op->nghost() + op->x1f_ghosts() - 1, n + 3);
+  auto ve = 0.5 * (fe.slice(0, 0, n + 2) + fe.slice(0, 1, n + 3));
+  return {x1f.slice(0, 1, n + 1) - x1f.slice(0, 0, n), v,
+          ve.slice(0, 1, n + 1) - ve.slice(0, 0, n)};
 }
 
 torch::Tensor CoordinateImpl::block_faces_(double gmin, double gmax, int gnx,
