@@ -76,7 +76,9 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   auto rho = other.at("hydro_u")[IDN].unsqueeze(0);
   // r = q_face / rho_face; q / rho of cell averages is second order (S177)
   auto face_r = [&](int dim) {
-    return precon->forward(u, dim) / precon->forward(rho, dim);
+    auto rf = precon->forward(rho, dim), r = u / rho;  // donor r if rf <= 0
+    return torch::where(rf > 0., precon->forward(u, dim) / rf,
+                        torch::stack({r.roll(1, dim), r}));
   };
 
   if (_flux1.defined()) {
