@@ -275,11 +275,6 @@ TEST(StretchedX1Ref, refuses_spherical_polar) {
           "reflecting", "spherical-polar");
 }
 
-TEST(StretchedX1Ref, refuses_gnomonic_equiangle) {
-  refuses("is supported only on a cartesian geometry", "}", "reflecting",
-          "reflecting", "gnomonic-equiangle");
-}
-
 TEST(StretchedX1Ref, wb_ref4_switch_runs) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
   EXPECT_NO_THROW(build_and_step(card(true)));

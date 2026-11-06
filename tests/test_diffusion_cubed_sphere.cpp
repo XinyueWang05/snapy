@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 #include <future>
 #include <snap/coord/coord_utils.hpp>
@@ -124,6 +125,29 @@ double harmonic_error(int n) {
   EXPECT_LT(diss, 0.);
   return std::sqrt(error / norm);
 }
+// the stage-2 stretched x1 faces (#280), or the same faces mapped onto [10, 11]
+MeshOptions stretched_cs_options(int nx2 = 24, bool unit = false) {
+  auto f = YAML::LoadFile("test_stage2_cubed_stretched.yaml")["geometry"]["x1f"]
+               .as<std::vector<double>>();
+  double f0 = f.front(), f1 = f.back();
+  if (unit)
+    for (auto &x : f) x = 10. + (x - f0) / (f1 - f0);
+  auto op = MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere.yaml");
+  op->block()->coord()->nx1(30).global_nx1(30).nx2(nx2).global_nx2(nx2);
+  op->block()->coord()->nx3(nx2).global_nx3(nx2).nghost(3).x1min(f.front());
+  op->block()->coord()->x1max(f.back()).global_x1min(f.front());
+  op->block()->coord()->global_x1max(f.back()).x1f_interior(f);
+  op->block()->hydro()->recon1()->interp()->type("weno5");
+  op->blocks_per_process(6);
+  return op;
+}
+Mesh to_device(Mesh mesh, bool gpu) {
+  if (gpu) {
+    for (auto b : mesh->blocks) b->get_layout()->options->device("cuda");
+    mesh->to(torch::Device(torch::kCUDA));
+  }
+  return mesh;
+}
 }  // namespace
 TEST(CubedSphereDiffusion, constant_state_and_rigid_rotation) {
   torch::set_num_threads(1);
@@ -148,17 +172,27 @@ TEST(CubedSphereDiffusion, harmonic_convergence_and_heat_conservation) {
 }
 TEST(CubedSphereDiffusion, radial_conductive_equilibrium) {
   torch::set_num_threads(1);
-  auto mesh = make_mesh();
-  for (auto b : mesh->blocks) {
-    b->phydro->pdiffusion->options->temperature_inner() = 300. + 2. / 10.;
-    b->phydro->pdiffusion->options->temperature_outer() = 300. + 2. / 11.;
+  // uniform x1, then the stage-2 faces mapped onto [10, 11] on CPU and CUDA
+  for (int arm : {0, 1, 2}) {
+    if (arm == 2 && !snapy_cuda_test_enabled()) continue;
+    auto mesh = arm ? Mesh(stretched_cs_options(12, true)) : make_mesh();
+    for (auto b : mesh->blocks) {
+      b->phydro->pdiffusion->options->temperature_inner() = 300. + 2. / 10.;
+      b->phydro->pdiffusion->options->temperature_outer() = 300. + 2. / 11.;
+    }
+    auto s = states(mesh, 2);
+    for (auto &x : s)
+      if (arm == 2) x.w = x.w.cuda(), x.t = x.t.cuda();
+    auto du = apply_diffusion(to_device(mesh, arm == 2), s);
+    for (size_t i = 0; i < s.size(); ++i) {
+      EXPECT_LT(du[i][IPR]
+                    .index(interior(mesh->blocks[i]))
+                    .abs()
+                    .max()
+                    .item<double>(),
+                2.e-11);
+    }
   }
-  auto s = states(mesh, 2);
-  auto du = apply_diffusion(mesh, s);
-  for (size_t i = 0; i < s.size(); ++i)
-    EXPECT_LT(
-        du[i][IPR].index(interior(mesh->blocks[i])).abs().max().item<double>(),
-        2.e-11);
 }
 TEST(CubedSphereDiffusion, viscous_energy_conservation_and_dissipation) {
   torch::set_num_threads(1);
