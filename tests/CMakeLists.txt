@@ -36,7 +36,7 @@ foreach(_arm "wb_ref4;SNAP_WB_REF4=1" "x1_centroid;SNAP_X1_CENTROID_EXACT=1")
   list(GET _arm 1 _env)
   add_test(NAME test_stretched_x1_ref_${_name}.${buildl}
            COMMAND test_stretched_x1_ref.${buildl}
-                   --gtest_filter=StretchedX1Ref.refuses_wb_ref4_switch:StretchedX1Ref.balance_column_refuses_wb_ref4)
+                   --gtest_filter=StretchedX1Ref.wb_ref4_switch_runs:StretchedX1Ref.balance_column_wb_ref4_runs)
   set_tests_properties(test_stretched_x1_ref_${_name}.${buildl}
                        PROPERTIES ENVIRONMENT "${_env}")
 endforeach()
@@ -47,7 +47,7 @@ set_tests_properties(test_stretched_x1_ref_radial_exact_off.${buildl}
                      PROPERTIES ENVIRONMENT "SNAP_GRAVITY_WORK_RADIAL_EXACT=0")
 add_test(NAME test_stretched_x1_ref_x1_mass_covariance.${buildl}
          COMMAND test_stretched_x1_ref.${buildl}
-                 --gtest_filter=StretchedX1Ref.refuses_x1_mass_covariance_switch)
+                 --gtest_filter=StretchedX1Ref.x1_mass_covariance_switch_runs)
 set_tests_properties(
   test_stretched_x1_ref_x1_mass_covariance.${buildl}
   PROPERTIES ENVIRONMENT "SNAP_X1_MASS_COVARIANCE=1"
