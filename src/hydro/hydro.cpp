@@ -25,7 +25,6 @@ HydroImpl::HydroImpl(const HydroOptions& options_, torch::nn::Module* p)
 
 void HydroImpl::reset() {
   TORCH_CHECK(pmb, "[Hydro] Parent MeshBlock is null");
-  bool stretched = pmb->pcoord && pmb->pcoord->options->stretched_x1();
 
   //// ---- (1) set up equation-of-state model ---- ////
   peos = EquationOfStateImpl::create(options->eos(), this);
@@ -35,8 +34,11 @@ void HydroImpl::reset() {
 
   //// ---- (3) set up reconstruction-x1 model ---- ////
   precon1 = ReconstructImpl::create(options->recon1(), this, "recon1");
-  if (stretched) {
-    precon1->set_x1_faces(pmb->pcoord->x1f);
+  // SNAP_X1_CENTROID_EXACT hands this module plain means (hydro_forward.cpp)
+  if (pmb->pcoord && !(x1_centroid_exact_enabled() &&
+                       pmb->pcoord->options->type() == "spherical-polar")) {
+    auto x1f = pmb->pcoord->x1_row_faces(options->recon1()->interp()->type());
+    if (x1f.defined()) precon1->set_x1_faces(x1f);
   }
   if (options->verbose()) {
     SINFO(Hydro) << "Reconstruction-x1 type: "
