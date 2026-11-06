@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 #include <snap/snap.h>
 #include <unistd.h>
+#include <yaml-cpp/yaml.h>
 
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <snap/forcing/forcing.hpp>
 #include <snap/hydro/balance_column.hpp>
 #include <snap/hydro/hydro.hpp>
 #include <snap/mesh/meshblock.hpp>
@@ -13,6 +15,7 @@
 #include <vector>
 
 #include "../src/hydro/hydro_dispatch.hpp"
+#include "../src/hydro/x1_mass_covariance.hpp"
 using namespace snap;
 
 namespace {
@@ -64,7 +67,7 @@ std::string write_temp(std::string const& text) {
   std::ofstream(fname) << text;
   return fname;
 }
-void build_and_step(std::string const& text) {
+std::shared_ptr<MeshBlockImpl> make_block(std::string const& text) {
   auto fname = write_temp(text);
   std::shared_ptr<MeshBlockImpl> block;
   try {
@@ -76,6 +79,13 @@ void build_and_step(std::string const& text) {
     throw;
   }
   block->to(torch::kCPU, torch::kFloat64);
+  return block;
+}
+
+//! build the block from the card and take one forward step of a resting
+//! isothermal column
+void build_and_step(std::string const& text) {
+  auto block = make_block(text);
   auto coord = block->pcoord;
   auto w = torch::zeros({block->phydro->peos->nvar(), coord->options->nc3(),
                          coord->options->nc2(), coord->options->nc1()},
@@ -124,15 +134,15 @@ TEST(StretchedX1Ref, uniform_and_stretched_reflecting_decks_run) {
 
 TEST(StretchedX1Ref, refuses_curvature_correction) {
   refuses(
-      "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-      "supported on a stretched x1",
+      "the dx^2/12 x1 curvature flux H of cp3/cp5/weno5 is a uniform-grid "
+      "device: a stretched x1 uses option F",
       ", gravity-work: face-wallc}");
 }
 
 TEST(StretchedX1Ref, refuses_curvature_correction_cp5) {
   refuses(
-      "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-      "supported on a stretched x1",
+      "the dx^2/12 x1 curvature flux H of cp3/cp5/weno5 is a uniform-grid "
+      "device: a stretched x1 uses option F",
       ", gravity-work: face-wallc}", "reflecting", "reflecting", "cartesian",
       "cp5");
 }
@@ -147,28 +157,53 @@ TEST(StretchedX1Ref, refuses_curvature_with_radial_exact_off) {
   if (HydroImpl::gravity_work_radial_exact())
     GTEST_SKIP() << "SNAP_GRAVITY_WORK_RADIAL_EXACT is on";
   refuses(
-      "the dx^2/12 x1 curvature correction of cp3/cp5/weno5 is not "
-      "supported on a stretched x1");
+      "the dx^2/12 x1 curvature flux H of cp3/cp5/weno5 is a uniform-grid "
+      "device: a stretched x1 uses option F");
 }
 
-TEST(StretchedX1Ref, refuses_diffusion_kappa_iso_only) {
-  refuses("[Diffusion] not supported on a stretched x1",
-          "}\n  diffusion: {kappa_iso: 1.e-3}");
+// vx = a x1 heats by dt nu (4/3) a^2 exactly; RED: refused
+TEST(StretchedX1Ref, viscous_heating_exact_on_linear_velocity) {
+  auto b = make_block(card(true));
+  auto w = torch::zeros({5, 1, 1, 30}, torch::kFloat64);
+  w[IDN].fill_(1.), w[IPR].fill_(1.e5), w[IVX].copy_(1.e-3 * b->pcoord->x1v);
+  Diffusion d(DiffusionOptionsImpl::from_yaml(
+                  YAML::Load("diffusion: {nu_iso: 2., dynamic: true}")),
+              b->phydro.get());
+  auto du = d->forward(torch::zeros_like(w), w,
+                       b->phydro->peos->compute("W->T", {w}), 0.5);
+  EXPECT_LT((du[IPR].narrow(-1, 3, 24) - 4.e-6 / 3.).abs().max().item<double>(),
+            1.e-16);
 }
 
-TEST(StretchedX1Ref, refuses_diffusion) {
-  refuses("[Diffusion] not supported on a stretched x1",
-          "}\n  diffusion: {nu_iso: 1.e-3}");
+// a thickness layer deposits flux dt in the column; RED: unknown key
+TEST(StretchedX1Ref, heat_layer_deposits_flux_dt) {
+  auto b = make_block(card(true));
+  auto w = torch::ones({5, 1, 1, 30}, torch::kFloat64);
+  auto t = b->phydro->peos->compute("W->T", {w});
+  BotHeat bot(BotHeatOptionsImpl::from_yaml(
+                  YAML::Load("bot-heat: {flux: 100., thickness: 230.}")),
+              b->phydro.get());
+  TopCool top(TopCoolOptionsImpl::from_yaml(
+                  YAML::Load("top-cool: {flux: -40., thickness: 7.}")),
+              b->phydro.get());
+  auto e = [&](torch::Tensor du) {
+    return (du[IPR] * b->pcoord->dx1f).narrow(-1, 3, 24).sum().item<double>();
+  };
+  EXPECT_NEAR(e(bot->forward(torch::zeros_like(w), w, t, 0.25)), 25., 1.e-12);
+  EXPECT_NEAR(e(top->forward(torch::zeros_like(w), w, t, 0.25)), -10., 1.e-12);
 }
 
-TEST(StretchedX1Ref, refuses_bot_heat) {
-  refuses("[BotHeat] not supported on a stretched x1",
-          "}\n  bot-heat: {flux: 1., depth: 1}");
-}
-
-TEST(StretchedX1Ref, refuses_top_cool) {
-  refuses("[TopCool] not supported on a stretched x1",
-          "}\n  top-cool: {flux: -1., depth: 1}");
+// the x1 mass-covariance slopes are exact for a quadratic; RED: (-3, 4, -1)/2h
+TEST(StretchedX1Ref, covariance_slopes_exact_for_quadratic) {
+  auto x = make_block(card(true))->pcoord->x1v / 1000.;
+  auto q = (2. - 0.7 * x + 0.3 * x * x).view({1, 1, -1}), d = 0.6 * x - 0.7;
+  auto x1v = x * 1000.;
+  EXPECT_NEAR(x1_cov_one_sided(q, x1v, 3, 1, true).item<double>() * 1000.,
+              d[3].item<double>(), 1.e-12);
+  EXPECT_NEAR(x1_cov_one_sided(q, x1v, 26, -1, true).item<double>() * 1000.,
+              d[26].item<double>(), 1.e-12);
+  auto c = x1_cov_d1_centred(q, x1v, true).view({-1}) * 1000. - d;
+  EXPECT_LT(c.narrow(0, 1, 28).abs().max().item<double>(), 1.e-12);
 }
 
 TEST(StretchedX1Ref, refuses_periodic_x1) {
@@ -245,21 +280,18 @@ TEST(StretchedX1Ref, refuses_gnomonic_equiangle) {
           "reflecting", "gnomonic-equiangle");
 }
 
-TEST(StretchedX1Ref, refuses_wb_ref4_switch) {
+TEST(StretchedX1Ref, wb_ref4_switch_runs) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
-  refuses(
-      "SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies it) is not "
-      "supported on a stretched x1 (geometry/x1f or cells/x1rat, #280)");
+  EXPECT_NO_THROW(build_and_step(card(true)));
+  EXPECT_NO_THROW(build_and_step(card(false)));
 }
 
-TEST(StretchedX1Ref, refuses_x1_mass_covariance_switch) {
+// ctest test_stretched_x1_ref_x1_mass_covariance: SNAP_X1_MASS_COVARIANCE=1
+TEST(StretchedX1Ref, x1_mass_covariance_switch_runs) {
   if (!HydroImpl::x1_mass_covariance())
     GTEST_SKIP() << "SNAP_X1_MASS_COVARIANCE is not set";
-  refuses(
-      "SNAP_X1_MASS_COVARIANCE is not supported on a stretched x1 "
-      "(geometry/x1f or cells/x1rat, #280)");
-  EXPECT_NO_THROW(build_and_step(card(false)))
-      << "a uniform x1 with SNAP_X1_MASS_COVARIANCE set must still run";
+  EXPECT_NO_THROW(build_and_step(card(true)));
+  EXPECT_NO_THROW(build_and_step(card(false)));
 }
 
 namespace {
@@ -285,27 +317,15 @@ TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
                      /*max_iter=*/400, "cartesian", /*stretched=*/true);
   std::printf("keyed nx1 = 128: residual %.3e after %d sweeps\n", err, sweeps);
   EXPECT_LT(err, 1.e-13);
-  EXPECT_THROW(balance_column(w, dx1f, 22., true, 1.e-13, 400, "cartesian",
-                              /*stretched=*/false),
-               c10::Error);
 }
 
-TEST(StretchedX1Ref, balance_column_refuses_wb_ref4) {
+// ctest test_stretched_x1_ref_wb_ref4 (and _x1_centroid) runs this with it set
+TEST(StretchedX1Ref, balance_column_wb_ref4_runs) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
-  std::string message =
-      "balance_column: SNAP_WB_REF4 (or SNAP_X1_CENTROID_EXACT, which implies "
-      "it) is not supported on a stretched x1 (#280)";
   auto [w, dx1f] = column(32, 1.058, 3.e5);
-  bool threw = false;
-  try {
-    balance_column(w, dx1f, 22., true, 1.e-10, 120, "cartesian",
-                   /*stretched=*/true);
-  } catch (c10::Error const& e) {
-    threw = true;
-    EXPECT_NE(std::string(e.what()).find(message), std::string::npos)
-        << e.what();
-  }
-  EXPECT_TRUE(threw) << "balance_column did not refuse REF4 on a stretched x1";
+  auto [wb, err, sweeps] = balance_column(w, dx1f, 22., true, 1.e-13, 400,
+                                          "cartesian", /*stretched=*/true);
+  EXPECT_LT(err, 1.e-13);
   auto [wu, dxu] = column(32, 1.0 + 1.e-12, 3.e5);  // uniform to round-off
   dxu.fill_(3.e5 / 32.);
   EXPECT_NO_THROW(balance_column(wu, dxu, 22., true, 1.e-10, 120, "cartesian",
