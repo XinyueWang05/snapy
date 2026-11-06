@@ -205,6 +205,7 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   }
 
   // positivity last: the blend above can export tracer a donor lacks
+  // by design: Courant>1 can make explicit rho<0; no scaling keeps both, so r>b
   if (pmb->phydro->options->eos()->limiter() || cov) {
     auto theta = flux_positivity_theta(u, _flux1, _flux2, _flux3, pcoord, dt);
     _positivity_hits += (theta.index(cells) < 1.).sum();
