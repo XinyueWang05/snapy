@@ -254,14 +254,21 @@ Tensor DiffusionImpl::forward_cubed_sphere(Tensor du, Tensor w, Tensor temp,
     // wall extrapolation falls back to the nearest cell if it is negative.
     auto cf = torch::empty({2, face.size(1), face.size(2), face.size(3)},
                            w.options());
+    // linear in position: x1 cell widths from the faces (#280), equal in x2/x3
+    auto h = dir ? torch::ones({n}, w.options())
+                 : c->dx1f.to(w.options()).slice(0, lo[2], hi[2]);
+    std::vector<int64_t> hs(4, 1);
+    hs[axis + 4] = n - 1;
+    auto hl = h.slice(0, 0, n - 1).view(hs), hr = h.slice(0, 1, n).view(hs);
     cf.narrow(axis, 1, n - 1)
-        .copy_(0.5 * (coefficients.narrow(axis, 0, n - 1) +
-                      coefficients.narrow(axis, 1, n - 1)));
+        .copy_(hr / (hl + hr) * coefficients.narrow(axis, 0, n - 1) +
+               hl / (hl + hr) * coefficients.narrow(axis, 1, n - 1));
     for (int side = 0; side < 2; ++side) {
       int near = side ? n - 1 : 0, next = side ? n - 2 : 1,
           index = side ? n : 0;
       auto v = coefficients.select(axis, near);
-      auto extrap = 1.5 * v - 0.5 * coefficients.select(axis, next);
+      auto g = h[near] / (h[near] + h[next]);
+      auto extrap = (1. + g) * v - g * coefficients.select(axis, next);
       cf.select(axis, index).copy_(torch::where(extrap >= 0., extrap, v));
     }
     auto div = vg[0][0] + vg[1][1] + vg[2][2];

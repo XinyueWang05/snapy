@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 #include <future>
 #include <snap/coord/coord_utils.hpp>
@@ -148,17 +149,101 @@ TEST(CubedSphereDiffusion, harmonic_convergence_and_heat_conservation) {
 }
 TEST(CubedSphereDiffusion, radial_conductive_equilibrium) {
   torch::set_num_threads(1);
-  auto mesh = make_mesh();
-  for (auto b : mesh->blocks) {
-    b->phydro->pdiffusion->options->temperature_inner() = 300. + 2. / 10.;
-    b->phydro->pdiffusion->options->temperature_outer() = 300. + 2. / 11.;
+  auto n5 =
+      YAML::LoadFile("test_stage2_cubed_stretched.yaml")["geometry"]["x1f"]
+          .as<std::vector<double>>();
+  for (bool gpu : {false, true}) {
+    if (gpu && !snapy_cuda_test_enabled()) continue;
+    double coarse = 0.;
+    for (int n : {30, 60}) {
+      std::vector<double> f = n5;
+      if (n == 60)
+        for (int i = 29; i >= 0; --i)
+          f.insert(f.begin() + i + 1, (f[i] + f[i + 1]) / 2);
+      auto op = MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere.yaml");
+      auto c = op->block()->coord();
+      c->nx1(n)
+          .global_nx1(n)
+          .nx2(24)
+          .global_nx2(24)
+          .nx3(24)
+          .global_nx3(24)
+          .nghost(3)
+          .x1min(f.front())
+          .x1max(f.back())
+          .global_x1min(f.front())
+          .global_x1max(f.back());
+      c->x1f_interior(f);
+      op->block()->hydro()->recon1()->interp()->type("weno5");
+      op->block()
+          ->hydro()
+          ->diffusion()
+          ->nu_iso(0.)
+          .kappa_iso(1.e9)
+          .dynamic(true)
+          .temperature_inner(300.)
+          .temperature_outer(310.);
+      op->blocks_per_process(6);
+      auto mesh = Mesh(op);
+      auto s = states(mesh, 0);
+      double bcoef = -10. / (1. / f.front() - 1. / f.back());
+      double acoef = 300. - bcoef / f.front(), error = 0.;
+      for (size_t ib = 0; ib < s.size(); ++ib) {
+        auto block = mesh->blocks[ib];
+        auto coord = block->pcoord;
+        s[ib].t.copy_(acoef + bcoef / coord->x1v.view({1, 1, -1}));
+        double gas = block->phydro->peos->species_cv_ref() *
+                     (block->phydro->peos->options->gammad() - 1.);
+        s[ib].w[IPR].copy_(gas * s[ib].t);
+      }
+      if (gpu) {
+        for (auto block : mesh->blocks)
+          block->get_layout()->options->device("cuda");
+        mesh->to(torch::Device(torch::kCUDA));
+        for (auto &v : s) {
+          v.w = v.w.cuda();
+          v.t = v.t.cuda();
+        }
+      }
+      auto du = apply_diffusion(mesh, s);
+      for (size_t ib = 0; ib < s.size(); ++ib) {
+        auto block = mesh->blocks[ib];
+        auto coord = block->pcoord;
+        auto rm = coord->x1f.slice(0, coord->il(), coord->iu() + 1);
+        auto rp = coord->x1f.slice(0, coord->il() + 1, coord->iu() + 2);
+        auto exact = acoef + 1.5 * bcoef * (rp + rm) /
+                                 (rp.square() + rp * rm + rm.square());
+        error = std::max(
+            error, (s[ib].t.index(interior(block)) - exact.view({1, 1, -1}))
+                       .abs()
+                       .max()
+                       .item<double>());
+        EXPECT_LT((du[ib][IPR].index(interior(block)) /
+                   block->phydro->peos->species_cv_ref())
+                      .abs()
+                      .max()
+                      .item<double>(),
+                  1.e-12);
+      }
+      auto block = mesh->blocks[0];
+      s[0].t.select(-1, block->pcoord->il()).add_(0.1);
+      s[0].w[IPR]
+          .select(-1, block->pcoord->il())
+          .add_(0.1 * block->phydro->peos->species_cv_ref() *
+                (block->phydro->peos->options->gammad() - 1.));
+      auto response = apply_diffusion(mesh, s);
+      EXPECT_GT((response[0][IPR].index(interior(mesh->blocks[0])) /
+                 mesh->blocks[0]->phydro->peos->species_cv_ref())
+                    .abs()
+                    .max()
+                    .item<double>(),
+                1.e-6);
+      if (n == 60)
+        EXPECT_LT(error, coarse / 3.8);
+      else
+        coarse = error;
+    }
   }
-  auto s = states(mesh, 2);
-  auto du = apply_diffusion(mesh, s);
-  for (size_t i = 0; i < s.size(); ++i)
-    EXPECT_LT(
-        du[i][IPR].index(interior(mesh->blocks[i])).abs().max().item<double>(),
-        2.e-11);
 }
 TEST(CubedSphereDiffusion, viscous_energy_conservation_and_dissipation) {
   torch::set_num_threads(1);
