@@ -31,12 +31,13 @@ setup_test(test_coordinate)
 setup_test(test_stretched_x1)
 setup_test(test_deck_x1_wiring)
 setup_test(test_stretched_x1_ref)
+# #280: the REF4 switch (or SNAP_X1_CENTROID_EXACT) on a stretched x1, read once
 foreach(_arm "wb_ref4;SNAP_WB_REF4=1" "x1_centroid;SNAP_X1_CENTROID_EXACT=1")
   list(GET _arm 0 _name)
   list(GET _arm 1 _env)
   add_test(NAME test_stretched_x1_ref_${_name}.${buildl}
            COMMAND test_stretched_x1_ref.${buildl}
-                   --gtest_filter=StretchedX1Ref.refuses_wb_ref4_switch:StretchedX1Ref.balance_column_refuses_wb_ref4)
+                   --gtest_filter=StretchedX1Ref.wb_ref4_switch_runs:StretchedX1Ref.balance_column_wb_ref4_runs)
   set_tests_properties(test_stretched_x1_ref_${_name}.${buildl}
                        PROPERTIES ENVIRONMENT "${_env}")
 endforeach()
@@ -45,9 +46,10 @@ add_test(NAME test_stretched_x1_ref_radial_exact_off.${buildl}
                  --gtest_filter=StretchedX1Ref.refuses_curvature_with_radial_exact_off)
 set_tests_properties(test_stretched_x1_ref_radial_exact_off.${buildl}
                      PROPERTIES ENVIRONMENT "SNAP_GRAVITY_WORK_RADIAL_EXACT=0")
+# #280: SNAP_X1_MASS_COVARIANCE on a stretched x1; the regex fails a skipped arm
 add_test(NAME test_stretched_x1_ref_x1_mass_covariance.${buildl}
          COMMAND test_stretched_x1_ref.${buildl}
-                 --gtest_filter=StretchedX1Ref.refuses_x1_mass_covariance_switch)
+                 --gtest_filter=StretchedX1Ref.x1_mass_covariance_switch_runs)
 set_tests_properties(
   test_stretched_x1_ref_x1_mass_covariance.${buildl}
   PROPERTIES ENVIRONMENT "SNAP_X1_MASS_COVARIANCE=1"
