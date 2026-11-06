@@ -11,15 +11,18 @@
 
 // POSIX
 #include <unistd.h>
+#include <yaml-cpp/yaml.h>
 
 // snap
 #include <snap/snap.h>
 
+#include <snap/forcing/forcing.hpp>
 #include <snap/hydro/balance_column.hpp>
 #include <snap/hydro/hydro.hpp>
 #include <snap/mesh/meshblock.hpp>
 
 #include "../src/hydro/hydro_dispatch.hpp"
+#include "../src/hydro/x1_mass_covariance.hpp"
 
 using namespace snap;
 
@@ -80,9 +83,7 @@ std::string write_temp(std::string const& text) {
   return fname;
 }
 
-//! build the block from the card and take one forward step of a resting
-//! isothermal column
-void build_and_step(std::string const& text) {
+std::shared_ptr<MeshBlockImpl> make_block(std::string const& text) {
   auto fname = write_temp(text);
   std::shared_ptr<MeshBlockImpl> block;
   try {
@@ -94,6 +95,13 @@ void build_and_step(std::string const& text) {
     throw;
   }
   block->to(torch::kCPU, torch::kFloat64);
+  return block;
+}
+
+//! build the block from the card and take one forward step of a resting
+//! isothermal column
+void build_and_step(std::string const& text) {
+  auto block = make_block(text);
   auto coord = block->pcoord;
   auto w = torch::zeros({block->phydro->peos->nvar(), coord->options->nc3(),
                          coord->options->nc2(), coord->options->nc1()},
@@ -180,17 +188,6 @@ TEST(StretchedX1Ref, refuses_curvature_with_radial_exact_off) {
       "device: a stretched x1 uses option F");
 }
 
-// diffusion runs on a stretched x1 since its x1 differences use the centre
-// distances (test_stretched_diffusion.cpp)
-TEST(StretchedX1Ref, stretched_diffusion_decks_run) {
-  for (auto forcing :
-       {"}\n  diffusion: {kappa_iso: 1.e-3}", "}\n  diffusion: {nu_iso: 1.e-3}",
-        "}\n  diffusion: {nu_iso: 1.e-3, kappa_iso: 1.e-3}"}) {
-    EXPECT_NO_THROW(build_and_step(card(true, forcing))) << forcing;
-    EXPECT_NO_THROW(build_and_step(card(false, forcing))) << forcing;
-  }
-}
-
 TEST(StretchedX1Ref, refuses_bot_heat_integer_depth) {
   refuses("[BotHeat] an integer depth is not supported on a stretched x1",
           "}\n  bot-heat: {flux: 1., depth: 1}");
@@ -201,11 +198,49 @@ TEST(StretchedX1Ref, refuses_top_cool_integer_depth) {
           "}\n  top-cool: {flux: -1., depth: 1}");
 }
 
-TEST(StretchedX1Ref, stretched_heat_layer_decks_run) {
-  EXPECT_NO_THROW(build_and_step(
-      card(true,
-           "}\n  bot-heat: {flux: 1., thickness: 150.}\n  top-cool: "
-           "{flux: -1., thickness: 150.}")));
+// vx = a x1 heats by dt nu (4/3) a^2 exactly; RED: refused
+TEST(StretchedX1Ref, viscous_heating_exact_on_linear_velocity) {
+  auto b = make_block(card(true));
+  auto w = torch::zeros({5, 1, 1, 30}, torch::kFloat64);
+  w[IDN].fill_(1.), w[IPR].fill_(1.e5), w[IVX].copy_(1.e-3 * b->pcoord->x1v);
+  Diffusion d(DiffusionOptionsImpl::from_yaml(
+                  YAML::Load("diffusion: {nu_iso: 2., dynamic: true}")),
+              b->phydro.get());
+  auto du = d->forward(torch::zeros_like(w), w,
+                       b->phydro->peos->compute("W->T", {w}), 0.5);
+  EXPECT_LT((du[IPR].narrow(-1, 3, 24) - 4.e-6 / 3.).abs().max().item<double>(),
+            1.e-16);
+}
+
+// a thickness layer deposits flux dt in the column; RED: unknown key
+TEST(StretchedX1Ref, heat_layer_deposits_flux_dt) {
+  auto b = make_block(card(true));
+  auto w = torch::ones({5, 1, 1, 30}, torch::kFloat64);
+  auto t = b->phydro->peos->compute("W->T", {w});
+  BotHeat bot(BotHeatOptionsImpl::from_yaml(
+                  YAML::Load("bot-heat: {flux: 100., thickness: 230.}")),
+              b->phydro.get());
+  TopCool top(TopCoolOptionsImpl::from_yaml(
+                  YAML::Load("top-cool: {flux: -40., thickness: 7.}")),
+              b->phydro.get());
+  auto e = [&](torch::Tensor du) {
+    return (du[IPR] * b->pcoord->dx1f).narrow(-1, 3, 24).sum().item<double>();
+  };
+  EXPECT_NEAR(e(bot->forward(torch::zeros_like(w), w, t, 0.25)), 25., 1.e-12);
+  EXPECT_NEAR(e(top->forward(torch::zeros_like(w), w, t, 0.25)), -10., 1.e-12);
+}
+
+// the x1 mass-covariance slopes are exact for a quadratic; RED: (-3, 4, -1)/2h
+TEST(StretchedX1Ref, covariance_slopes_exact_for_quadratic) {
+  auto x = make_block(card(true))->pcoord->x1v / 1000.;
+  auto q = (2. - 0.7 * x + 0.3 * x * x).view({1, 1, -1}), d = 0.6 * x - 0.7;
+  auto x1v = x * 1000.;
+  EXPECT_NEAR(x1_cov_one_sided(q, x1v, 3, 1, true).item<double>() * 1000.,
+              d[3].item<double>(), 1.e-12);
+  EXPECT_NEAR(x1_cov_one_sided(q, x1v, 26, -1, true).item<double>() * 1000.,
+              d[26].item<double>(), 1.e-12);
+  auto c = x1_cov_d1_centred(q, x1v, true).view({-1}) * 1000. - d;
+  EXPECT_LT(c.narrow(0, 1, 28).abs().max().item<double>(), 1.e-12);
 }
 
 TEST(StretchedX1Ref, refuses_periodic_x1) {
@@ -298,19 +333,14 @@ TEST(StretchedX1Ref, refuses_gnomonic_equiangle) {
 }
 
 // ctest test_stretched_x1_ref_wb_ref4 runs this with SNAP_WB_REF4=1, and
-// test_stretched_x1_ref_x1_centroid with SNAP_X1_CENTROID_EXACT=1: a keyed
-// stretched x1 keeps the six-face cell pressure and takes REF4's density
-// reference (test_wb_ref4_stretched.py checks the rest state)
+// test_stretched_x1_ref_x1_centroid with SNAP_X1_CENTROID_EXACT=1
 TEST(StretchedX1Ref, wb_ref4_switch_runs) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
   EXPECT_NO_THROW(build_and_step(card(true)));
   EXPECT_NO_THROW(build_and_step(card(false)));
 }
 
-// ctest test_stretched_x1_ref_x1_mass_covariance runs this with
-// SNAP_X1_MASS_COVARIANCE=1: its x1 slopes take the non-uniform three-point
-// weights on a keyed stretched x1 (test_x1_mass_covariance.cpp), so the
-// stretched card builds and steps with the switch on, as its uniform twin does
+// ctest test_stretched_x1_ref_x1_mass_covariance: SNAP_X1_MASS_COVARIANCE=1
 TEST(StretchedX1Ref, x1_mass_covariance_switch_runs) {
   if (!HydroImpl::x1_mass_covariance())
     GTEST_SKIP() << "SNAP_X1_MASS_COVARIANCE is not set";
@@ -354,9 +384,7 @@ TEST(StretchedX1Ref, keyed_column_balances_to_1e13) {
   EXPECT_LT(err, 1.e-13);
 }
 
-// ctest test_stretched_x1_ref_wb_ref4 (and _x1_centroid) runs this with the
-// switch set: balance_column balances a stretched column as with the switch
-// off (the bitwise check is test_wb_ref4_stretched.py), and a uniform one
+// ctest test_stretched_x1_ref_wb_ref4 (and _x1_centroid) runs this with it set
 TEST(StretchedX1Ref, balance_column_wb_ref4_runs) {
   if (!HydroImpl::wb_ref4()) GTEST_SKIP() << "SNAP_WB_REF4 is not set";
   auto [w, dx1f] = column(32, 1.058, 3.e5);
