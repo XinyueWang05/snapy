@@ -18,7 +18,7 @@ def setup(arm, implicit, device):
     if arm == "tracer":
         cfg.pop("forcing")
         cfg["scalar"] = {"nvar": 1, "names": ["uniform_q"],
-                         "reconstruct": {"type": "weno5", "scale": True, "shock": False},
+                         "reconstruct": {"type": "weno5", "shock": False},
                          "riemann-solver": {"type": "upwind"}}
     if arm == "conduction":
         cfg["forcing"]["diffusion"] = {"nu_iso": 0., "kappa_iso": 1.e5,

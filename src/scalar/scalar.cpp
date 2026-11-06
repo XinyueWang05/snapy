@@ -32,10 +32,14 @@ void ScalarImpl::reset() {
       "side alone leaves the other unbounded");
 
   pcoord = pmb->pcoord;
-  precon = ReconstructImpl::create(options->recon(), this);
-
+  // q and rho get the same scale-invariant weights: a uniform r stays uniform
+  TORCH_CHECK(options->recon(), "[Scalar] Reconstruct options are null");
+  auto recon = std::make_shared<ReconstructOptionsImpl>(*options->recon());
+  recon->interp() = std::make_shared<InterpOptionsImpl>(*recon->interp());
+  recon->interp()->scale() = true;
+  precon = ReconstructImpl::create(recon, this);
   if (pcoord && pcoord->options->stretched_x1()) {
-    precon1 = ReconstructImpl::create(options->recon(), this, "recon1");
+    precon1 = ReconstructImpl::create(recon, this, "recon1");
     precon1->set_x1_faces(pcoord->x1f);
   } else {
     precon1 = precon;
@@ -76,10 +80,16 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
               "[Scalar] hydro_u is required for passive scalar transport");
 
   auto rho = other.at("hydro_u")[IDN].unsqueeze(0);
-  auto r = u / rho;
+  // r = q_face / rho_face; q / rho of cell averages is second order (S177)
+  auto face_r = [&](int dim) {
+    auto recon = dim == DIM1 ? precon1 : precon;
+    auto rf = recon->forward(rho, dim), r = u / rho;  // donor r if rf <= 0
+    return torch::where(rf > 0., recon->forward(u, dim) / rf,
+                        torch::stack({r.roll(1, dim), r}));
+  };
 
   if (_flux1.defined()) {
-    auto rlr = precon1->forward(r, DIM1);
+    auto rlr = face_r(DIM1);
     _flux1.set_(
         priemann->forward(rlr[ILT], rlr[IRT], DIM1, pmb->phydro->flux1()[IDN]));
   }
@@ -92,7 +102,7 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   std::vector<CommWorkPtr> works2, works3;
 
   if (_flux2.defined()) {
-    rtmp2 = precon->forward(r, DIM2);
+    rtmp2 = face_r(DIM2);
     if (playout->options->type() == "cubed-sphere") {
       // Ship the two reconstructed states under DIRECTION-SUFFIXED keys, as the
       // hydro does (hydro_forward.cpp). The ':' suffix selects the directional
@@ -107,7 +117,7 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   }
 
   if (_flux3.defined()) {
-    rtmp3 = precon->forward(r, DIM3);
+    rtmp3 = face_r(DIM3);
     if (playout->options->type() == "cubed-sphere") {
       // See the DIM2 comment above.
       send_vars3["scalar_wl:+"] = rtmp3[ILT];
