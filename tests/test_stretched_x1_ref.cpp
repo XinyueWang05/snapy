@@ -175,6 +175,24 @@ TEST(StretchedX1Ref, viscous_heating_exact_on_linear_velocity) {
             1.e-16);
 }
 
+// v1 = (2 + b x1)(1 + d x2): du2 = dt nu b d / 3; RED: plain x1-face mean
+TEST(StretchedX1Ref, viscous_cross_term_exact_at_x1_faces) {
+  auto text = card(true);
+  auto b = make_block(text.replace(text.find("nx2: 1"), 6, "nx2: 8"));
+  auto x1 = b->pcoord->x1v.view({1, 1, -1});
+  auto x2 = b->pcoord->x2v.view({1, -1, 1});
+  auto w = torch::zeros({5, 1, 14, 30}, torch::kFloat64);
+  w[IDN].fill_(1.), w[IPR].fill_(1.e5);
+  w[IVX].copy_((2. + 1.e-3 * x1) * (1. + .3 * x2));
+  Diffusion d(DiffusionOptionsImpl::from_yaml(
+                  YAML::Load("diffusion: {nu_iso: 2., dynamic: true}")),
+              b->phydro.get());
+  auto du = d->forward(torch::zeros_like(w), w,
+                       b->phydro->peos->compute("W->T", {w}), 0.5)[IVY];
+  auto err = (du.slice(1, 4, 10).slice(2, 5, 25) / 1.e-4 - 1.).abs().max();
+  EXPECT_LT(err.item<double>(), 1.e-12);
+}
+
 // a thickness layer deposits flux dt in the column; RED: unknown key
 TEST(StretchedX1Ref, heat_layer_deposits_flux_dt) {
   auto b = make_block(card(true));
