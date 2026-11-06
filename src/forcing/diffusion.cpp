@@ -104,6 +104,23 @@ torch::Tensor face_normal_derivative(torch::Tensor value,
          spacing_slice(center_distance(coord, idir), idir, start, end);
 }
 
+torch::Tensor face_mean(torch::Tensor below, torch::Tensor above,
+                        Coordinate const& coord, int idir, Region start,
+                        Region end) {
+  // #280, a stretched x1: distance-weighted, as rf in hydro_dispatch.cpp
+  if (idir == 0 && coord->options->stretched_x1()) {
+    auto lower = start;
+    auto lower_end = end;
+    --lower[kSpatialDims[idir] - 1];
+    --lower_end[kSpatialDims[idir] - 1];
+    auto width = cell_width(coord, idir);
+    auto hd = spacing_slice(width, idir, lower, lower_end);
+    auto hu = spacing_slice(width, idir, start, end);
+    return (hu * below + hd * above) / (hd + hu);
+  }
+  return 0.5 * (above + below);
+}
+
 torch::Tensor face_average(torch::Tensor value, Coordinate const& coord,
                            int idir, Region start, Region end) {
   auto dim = kSpatialDims[idir] - 1;
@@ -111,17 +128,8 @@ torch::Tensor face_average(torch::Tensor value, Coordinate const& coord,
   auto lower_end = end;
   --lower[dim];
   --lower_end[dim];
-  // #280, a stretched x1: distance-weighted, as rf in hydro_dispatch.cpp
-  if (idir == 0 && coord->options->stretched_x1()) {
-    auto width = cell_width(coord, idir);
-    auto hd = spacing_slice(width, idir, lower, lower_end);
-    auto hu = spacing_slice(width, idir, start, end);
-    return (hu * region_slice(value, lower, lower_end) +
-            hd * region_slice(value, start, end)) /
-           (hd + hu);
-  }
-  return 0.5 * (region_slice(value, start, end) +
-                region_slice(value, lower, lower_end));
+  return face_mean(region_slice(value, lower, lower_end),
+                   region_slice(value, start, end), coord, idir, start, end);
 }
 
 //! Linear extrapolation of `value` onto a physical wall face from the two
@@ -609,10 +617,11 @@ torch::Tensor DiffusionImpl::forward(torch::Tensor du, torch::Tensor w,
           auto shear_end = face_end;
           --shear_start[dim];
           --shear_end[dim];
-          stress += 0.5 * (centered_derivative(w[IVX + idir], coord, ivar,
-                                               face_start, face_end) +
-                           centered_derivative(w[IVX + idir], coord, ivar,
-                                               shear_start, shear_end));
+          stress += face_mean(centered_derivative(w[IVX + idir], coord, ivar,
+                                                  shear_start, shear_end),
+                              centered_derivative(w[IVX + idir], coord, ivar,
+                                                  face_start, face_end),
+                              coord, idir, face_start, face_end);
         }
 
         auto momentum_flux = options->dynamic()
