@@ -228,6 +228,14 @@ setup_test(test_two_cards_species)
 setup_test(test_forcing)
 setup_parallel_test(test_exchange 2)
 setup_parallel_test(test_output_barrier 2)
+# The Gloo device must honor the selected interface rather than resolve the host.
+add_test(NAME test_gloo_invalid_interface.${buildl}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/expect_gloo_invalid_interface.py
+    torchrun --local-addr=127.0.0.1 --no-python --nproc-per-node=2
+    $<TARGET_FILE:test_output_barrier.${buildl}>)
+set_tests_properties(test_gloo_invalid_interface.${buildl}
+  PROPERTIES ENVIRONMENT "BACKEND=gloo;GLOO_SOCKET_IFNAME=snapy_no_such_interface"
+    TIMEOUT 60)
 setup_parallel_test(test_check_redo_parallel 2)
 setup_parallel_test(test_cycle_diagnostics_parallel 2)
 if(APPLE)  # Gloo is the Mac backend; Linux runs UCX
