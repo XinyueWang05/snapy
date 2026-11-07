@@ -245,36 +245,32 @@ TEST(CubedSphereDiffusion, radial_conductive_equilibrium) {
     }
   }
 }
-// #280: on a stretched x1 the cubed-sphere stencils above are uniform, so
-// viscosity and the implicit radial solve are refused; conduction is not
+// #280: on a stretched x1 the implicit radial solve is refused
 TEST(CubedSphereDiffusion, stretched_x1_refuses_viscosity) {
   auto f = YAML::LoadFile("test_stage2_cubed_stretched.yaml")["geometry"]["x1f"]
                .as<std::vector<double>>();
-  for (bool implicit : {false, true}) {
-    auto op = MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere.yaml");
-    op->block()
-        ->coord()
-        ->nx1(30)
-        .global_nx1(30)
-        .nghost(3)
-        .x1min(f.front())
-        .x1max(f.back())
-        .global_x1min(f.front())
-        .global_x1max(f.back())
-        .x1f_interior(f);
-    op->block()->hydro()->recon1()->interp()->type("weno5");
-    if (implicit)
-      op->block()->hydro()->diffusion()->nu_iso(0.).implicit_radial(true);
-    op->blocks_per_process(6);
-    try {
-      auto mesh = Mesh(op);
-      ADD_FAILURE() << "ran; implicit_radial " << implicit;
-    } catch (c10::Error const &e) {
-      EXPECT_NE(std::string(e.what()).find(
-                    "a stretched cubed sphere supports only explicit"),
-                std::string::npos)
-          << e.what();
-    }
+  auto op = MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere.yaml");
+  op->block()
+      ->coord()
+      ->nx1(30)
+      .global_nx1(30)
+      .nghost(3)
+      .x1min(f.front())
+      .x1max(f.back())
+      .global_x1min(f.front())
+      .global_x1max(f.back())
+      .x1f_interior(f);
+  op->block()->hydro()->recon1()->interp()->type("weno5");
+  op->block()->hydro()->diffusion()->nu_iso(0.).implicit_radial(true);
+  op->blocks_per_process(6);
+  try {
+    auto mesh = Mesh(op);
+    ADD_FAILURE() << "ran";
+  } catch (c10::Error const &e) {
+    EXPECT_NE(std::string(e.what()).find(
+                  "a stretched cubed sphere supports only explicit"),
+              std::string::npos)
+        << e.what();
   }
 }
 TEST(CubedSphereDiffusion, viscous_energy_conservation_and_dissipation) {
@@ -296,6 +292,78 @@ TEST(CubedSphereDiffusion, viscous_energy_conservation_and_dissipation) {
   }
   EXPECT_NEAR(energy, 0., 1.e-10);
   EXPECT_LT(work, 0.);
+}
+
+// #280: the stage-2 faces on [10, 11], split at their midpoints `levels`
+// times, with n x n cells per panel
+Mesh stretched_mesh(int levels, int n = 12) {
+  auto f = YAML::LoadFile("test_stage2_cubed_stretched.yaml")["geometry"]["x1f"]
+               .as<std::vector<double>>();
+  double f0 = f.front(), f1 = f.back();
+  for (auto &x : f) x = 10. + (x - f0) / (f1 - f0);
+  for (int l = 0; l < levels; ++l)
+    for (int i = f.size() - 2; i >= 0; --i)
+      f.insert(f.begin() + i + 1, (f[i] + f[i + 1]) / 2);
+  auto op = MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere.yaml");
+  int m = f.size() - 1;
+  op->block()->coord()->nx1(m).global_nx1(m).nx2(n).global_nx2(n).nx3(n);
+  op->block()->coord()->global_nx3(n).nghost(3).x1min(f.front());
+  op->block()->coord()->x1max(f.back()).global_x1min(f.front());
+  op->block()->coord()->global_x1max(f.back()).x1f_interior(f);
+  op->block()->hydro()->recon1()->interp()->type("weno5");
+  op->blocks_per_process(6);
+  return Mesh(op);
+}
+// v = z g(r), g = sin(2 pi (r - 10)): relative L2 error of the viscous
+// tendency nu (lap v + grad div v / 3) away from the walls
+double stretched_viscous_error(int levels, int n) {
+  auto mesh = stretched_mesh(levels, n);
+  auto s = states(mesh, 0);
+  double nu = 0.01, k = 2. * M_PI, error = 0., norm = 0.;
+  std::vector<torch::Tensor> exact;
+  for (size_t i = 0; i < s.size(); ++i) {
+    auto b = mesh->blocks[i];
+    auto c = b->pcoord;
+    int panel =
+        std::get<2>(b->get_layout()->loc_of(b->options->layout()->rank()));
+    auto a = c->x2v.view({1, -1, 1}), bb = c->x3v.view({-1, 1, 1});
+    auto r = c->x1v.view({1, 1, -1}), z = s[i].x[2];
+    auto g = (k * (r - 10.)).sin(), g1 = k * (k * (r - 10.)).cos();
+    auto g2 = -k * k * g, h = g1 / r, h1 = g2 / r - g1 / (r * r);
+    auto v = s[i].w.narrow(0, IVX, 3);
+    v.zero_();
+    v[2].copy_(g.expand_as(v[2]));
+    cs_cart_to_contra_(v, a, bb, panel);
+    auto t = (z * h1 / (3. * r)) * s[i].x;
+    t[2] += g2 + 2. * g1 / r + h / 3.;
+    t.mul_(nu);
+    cs_cart_to_contra_(t, a, bb, panel);
+    coord_vec_lower_(t, c->cosine_cell_kj);
+    exact.push_back(t);
+  }
+  auto du = apply_diffusion(mesh, s);
+  for (size_t i = 0; i < s.size(); ++i) {
+    auto c = mesh->blocks[i]->pcoord;
+    auto sl = interior(mesh->blocks[i]);
+    int m = c->iu() - c->il() - 5;  // three cells off each wall
+    auto vol = c->cell_volume().index(sl).narrow(-1, 3, m);
+    auto d = (du[i].narrow(0, IVX, 3) - exact[i]).square().sum(0).index(sl);
+    auto e = exact[i].square().sum(0).index(sl);
+    error += (vol * d.narrow(-1, 3, m)).sum().item<double>();
+    norm += (vol * e.narrow(-1, 3, m)).sum().item<double>();
+  }
+  return std::sqrt(error / norm);
+}
+// RED (the refusal lifted, the uniform x1 stencil): L2 2.90e-3, 1.39e-2,
+// 8.71e-3, no convergence
+TEST(CubedSphereDiffusion, stretched_x1_viscosity) {
+  torch::set_num_threads(1);
+  double e[3];
+  for (int l = 0; l < 3; ++l) e[l] = stretched_viscous_error(l, 12 << l);
+  std::cout << "stretched viscous L2: " << e[0] << ", " << e[1] << ", " << e[2]
+            << std::endl;
+  EXPECT_GT(e[0] / e[1], 3.);
+  EXPECT_GT(e[1] / e[2], 3.8);
 }
 
 TEST(CubedSphereDiffusion, split_panels_preserve_constants_and_rotation) {
