@@ -178,7 +178,9 @@ TEST(CubedSphereDiffusion, harmonic_convergence_and_heat_conservation) {
 }
 TEST(CubedSphereDiffusion, radial_conductive_equilibrium) {
   torch::set_num_threads(1);
-  // uniform x1, then the stage-2 faces mapped onto [10, 11] on CPU and CUDA
+  // uniform x1, then the stage-2 faces mapped onto [10, 11] on CPU and CUDA;
+  // explicit, then (u1 - u0) / dt of one implicit radial step (dt = 1e3, so
+  // the rounding of u ~ 2e5 stays well under the tolerance)
   for (int arm : {0, 1, 2}) {
     if (arm == 2 && !snapy_cuda_test_enabled()) continue;
     auto mesh = arm ? Mesh(stretched_cs_options(12, true)) : make_mesh();
@@ -197,6 +199,16 @@ TEST(CubedSphereDiffusion, radial_conductive_equilibrium) {
                     .max()
                     .item<double>(),
                 2.e-11);
+      auto b = mesh->blocks[i];
+      auto eos = b->phydro->peos;
+      auto w = s[i].w.clone();
+      w[IPR] = eos->species_cv_ref() * (eos->options->gammad() - 1.) * s[i].t;
+      auto u = eos->compute("W->U", {w}), u0 = u.clone();
+      b->phydro->pdiffusion->options->implicit_radial(true);
+      b->phydro->pdiffusion->radial_conduction_step(u, 1.e3);
+      EXPECT_LT(
+          (u - u0)[IPR].index(interior(b)).abs().max().item<double>() / 1.e3,
+          2.e-11);
     }
   }
 }
@@ -429,6 +441,45 @@ TEST(CubedSphereDiffusion, radial_implicit_conservation_stability_and_order) {
             << error[2] << std::endl;
   EXPECT_GT(error[0] / error[1], 3.5);
   EXPECT_GT(error[1] / error[2], 3.5);
+}
+
+// #280 (R19): with k linear in r on the stage-2 faces, the steady wall fluxes
+// of the implicit radial solve carry k(r_wall): the wall conductivity is
+// extrapolated linearly in position over the cell widths
+TEST(CubedSphereDiffusion, stretched_radial_implicit_wall_k) {
+  torch::set_num_threads(1);
+  auto f = YAML::LoadFile("test_stage2_cubed_stretched.yaml")["geometry"]["x1f"]
+               .as<std::vector<double>>();
+  double r0 = f.front(), r1 = f.back();
+  auto lin = [&](double x) { return 1. + 2. * (x - r0) / (r1 - r0); };
+  auto rc = [&](int i) { return 0.5 * (f[i] + f[i + 1]); };
+  auto scale = torch::empty({36}, torch::kFloat64);
+  for (int i = 0; i < 36; ++i) scale[i] = lin(rc(std::clamp(i - 3, 0, 29)));
+  for (bool gpu : {false, true}) {
+    if (gpu && !snapy_cuda_test_enabled()) continue;
+    auto op = stretched_cs_options(4);
+    auto d = op->block()->hydro()->diffusion();
+    d->nu_iso(0.).kappa_iso(1.e11).dynamic(false).implicit_radial(true);
+    d->kappa_scale_x1(scale).temperature_inner(300.).temperature_outer(310.);
+    auto mesh = Mesh(op);
+    auto b = mesh->blocks[0];
+    auto eos = b->phydro->peos;
+    auto u = eos->compute("W->U", {states(mesh, 0)[0].w});
+    u = u.to(to_device(mesh, gpu)->blocks[0]->pcoord->x1v.device());
+    for (int n = 0; n < 40; ++n)
+      b->phydro->pdiffusion->radial_conduction_step(u, 1.e9);
+    auto t = eos->compute("W->T", {eos->compute("U->W", {u})})
+                 .index(interior(b))
+                 .cpu()[0][0];
+    // k at the wall next to cell i, from the steady flux to neighbour j
+    for (auto [i, j, tw] : {std::tuple{0, 1, 300.}, std::tuple{29, 28, 310.}}) {
+      double rw = i ? r1 : r0, ti = t[i].item<double>();
+      double flux = 0.5 * (lin(rc(i)) + lin(rc(j))) * rc(i) * rc(j) /
+                    std::abs(rc(j) - rc(i)) * (ti - t[j].item<double>());
+      EXPECT_NEAR(flux * std::abs(rc(i) - rw) / (rw * rc(i) * (tw - ti)),
+                  lin(rw), 1.e-9 * lin(rw));
+    }
+  }
 }
 
 // Rayleigh-Ritz onset using the actual C++ heat/stress operator. This isolates

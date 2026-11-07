@@ -373,12 +373,6 @@ void DiffusionImpl::reset() {
   auto coord = phydro->pmb->pcoord;
   auto enabled = options->nu_iso() > 0. || options->kappa_iso() > 0.;
   bool spherical = coord->options->type() == "gnomonic-equiangle";
-  // On a stretched cubed sphere, radial conduction is explicit only.
-  TORCH_CHECK(
-      !enabled || !coord->options->stretched_x1() || !spherical ||
-          !options->implicit_radial(),
-      "[Diffusion] a stretched cubed sphere supports only explicit radial "
-      "conduction (#280)");
   TORCH_CHECK(!options->implicit_radial() ||
                   (spherical && phydro->peos->options->type() == "ideal-gas"),
               "[Diffusion] implicit_radial requires cubed sphere and dry "
