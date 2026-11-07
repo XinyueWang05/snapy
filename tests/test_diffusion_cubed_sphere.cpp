@@ -15,9 +15,15 @@
 
 using namespace snap;
 namespace {
-Mesh make_mesh(int n = 12, int partitions = 1) {
+Mesh make_mesh(int n = 12, int partitions = 1, std::vector<double> x1f = {}) {
   auto opts = MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere.yaml");
   auto c = opts->block()->coord();
+  if (!x1f.empty()) {  // #280: a stretched x1
+    int m = x1f.size() - 1;
+    c->nx1(m).global_nx1(m).nghost(3).x1min(x1f.front()).x1max(x1f.back());
+    c->global_x1min(x1f.front()).global_x1max(x1f.back()).x1f_interior(x1f);
+    opts->block()->hydro()->recon1()->interp()->type("weno5");
+  }
   c->nx2() = n;
   c->nx3() = n;
   c->global_nx2() = n * partitions;
@@ -213,6 +219,61 @@ TEST(CubedSphereDiffusion, viscous_energy_conservation_and_dissipation) {
   }
   EXPECT_NEAR(energy, 0., 1.e-10);
   EXPECT_LT(work, 0.);
+}
+
+// #280: v = z g(r), g = sin(2 pi (r - 10)), on the stage-2 faces mapped onto
+// [10, 11] and split at their midpoints `l` times: relative L2 error of the
+// viscous tendency nu (lap v + grad div v / 3)
+double stretched_viscous_error(int l) {
+  auto f = YAML::LoadFile("test_stage2_cubed_stretched.yaml")["geometry"]["x1f"]
+               .as<std::vector<double>>();
+  double f0 = f.front(), f1 = f.back(), k = 2. * M_PI, error = 0., norm = 0.;
+  for (auto &x : f) x = 10. + (x - f0) / (f1 - f0);
+  for (int j = 0; j < l; ++j)
+    for (int i = f.size() - 2; i >= 0; --i)
+      f.insert(f.begin() + i + 1, (f[i] + f[i + 1]) / 2);
+  auto mesh = make_mesh(12 << l, 1, f);
+  auto s = states(mesh, 0);
+  auto du = std::vector<torch::Tensor>();
+  for (size_t i = 0; i < s.size(); ++i) {
+    auto c = mesh->blocks[i]->pcoord;
+    int panel = std::get<2>(mesh->blocks[i]->get_layout()->loc_of(
+        mesh->blocks[i]->options->layout()->rank()));
+    auto a = c->x2v.view({1, -1, 1}), b = c->x3v.view({-1, 1, 1});
+    auto r = c->x1v.view({1, 1, -1}), z = s[i].x[2];
+    auto g = (k * (r - 10.)).sin(), g1 = k * (k * (r - 10.)).cos();
+    auto g2 = -k * k * g, h = g1 / r, h1 = g2 / r - g1 / (r * r);
+    auto v = s[i].w.narrow(0, IVX, 3);
+    v[2].copy_(g.expand_as(v[2]));
+    cs_cart_to_contra_(v, a, b, panel);
+    auto t = (z * h1 / (3. * r)) * s[i].x;
+    t[2] += g2 + 2. * g1 / r + h / 3.;
+    t.mul_(0.01);  // nu_iso
+    cs_cart_to_contra_(t, a, b, panel);
+    coord_vec_lower_(t, c->cosine_cell_kj);
+    du.push_back(t);
+  }
+  auto got = apply_diffusion(mesh, s);
+  for (size_t i = 0; i < s.size(); ++i) {
+    auto c = mesh->blocks[i]->pcoord;
+    auto sl = interior(mesh->blocks[i]);
+    auto l2 = [&](torch::Tensor q) {  // three cells off each x1 wall
+      auto e = c->cell_volume().index(sl) * q.square().sum(0).index(sl);
+      return e.narrow(-1, 3, c->iu() - c->il() - 5).sum().item<double>();
+    };
+    error += l2(got[i].narrow(0, IVX, 3) - du[i]);
+    norm += l2(du[i]);
+  }
+  return std::sqrt(error / norm);
+}
+TEST(CubedSphereDiffusion, stretched_x1_viscosity) {
+  torch::set_num_threads(1);
+  double e[3] = {stretched_viscous_error(0), stretched_viscous_error(1),
+                 stretched_viscous_error(2)};
+  std::cout << "stretched viscous L2: " << e[0] << ", " << e[1] << ", " << e[2]
+            << std::endl;
+  EXPECT_GT(e[0] / e[1], 3.);
+  EXPECT_GT(e[1] / e[2], 3.8);
 }
 
 TEST(CubedSphereDiffusion, split_panels_preserve_constants_and_rotation) {
