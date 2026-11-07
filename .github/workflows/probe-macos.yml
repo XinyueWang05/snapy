@@ -7,33 +7,27 @@ on:
 jobs:
   probe:
     runs-on: macOS-latest
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Hostname candidates, resolver cache flushed before each
+      - name: Install dependencies and the v2 fix
         run: |
-          cat > /tmp/t.py <<'EOP'
-          import socket, time
-          def t(name, f, *a):
-              s = time.time()
-              try: r = f(*a)
-              except Exception as e: r = repr(e)
-              print(f"{name:34s} {time.time() - s:8.3f} s  {r}", flush=True)
-          h = socket.gethostname()
-          print("hostname:", h)
-          t("getfqdn(gethostname())", socket.getfqdn, h)
-          t("getfqdn() again", socket.getfqdn)
-          t("getaddrinfo(hostname)", lambda: socket.getaddrinfo(h, None)[0][4])
-          EOP
-          scutil --dns | head -40
-          s=$(date +%s); dig +time=2 +tries=1 -x 127.0.0.1 | tail -5; echo "dig -x took $(( $(date +%s)-s )) s"
-          echo "--- original hostname $(date -u +%T)"; python /tmp/t.py
-          sudo mkdir -p /etc/resolver
-          for z in in-addr.arpa ip6.arpa; do echo "nameserver 127.0.0.1" | sudo tee /etc/resolver/$z; done
-          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
-          echo "--- reverse zones to 127.0.0.1 $(date -u +%T)"; python /tmp/t.py
+          pip install wheel numpy pyyaml pytest netcdf4 py-spy
+          pip install 'torch==2.10.0'
+          pip install 'kintera>=2.6.3'
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
           sudo scutil --set HostName localhost
-          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
-          echo "--- and HostName localhost $(date -u +%T)"; python /tmp/t.py; date -u +%T
+          echo 'import socket; socket.getfqdn = lambda name="": name or "localhost"' \
+            > "$(python -c 'import site; print(site.getsitepackages()[0])')/sitecustomize.py"
+      - name: Build test_exchange only
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCUDA=OFF -DNETCDF=ON -DBUILD_TESTS=ON
+          cmake --build build --parallel 3 --target test_exchange.release
+      - name: Probe
+        env:
+          LOGLEVEL: INFO
+          TORCH_DISTRIBUTED_DEBUG: DETAIL
+        run: bash .github/probe-macos.sh
