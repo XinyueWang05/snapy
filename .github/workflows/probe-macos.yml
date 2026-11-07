@@ -7,30 +7,27 @@ on:
 jobs:
   probe:
     runs-on: macOS-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dependencies
+      - name: Hostname lookups before and after an /etc/hosts entry
         run: |
-          pip install wheel numpy pyyaml pytest netcdf4 py-spy
-          pip install 'torch==2.10.0'
-          pip install 'kintera>=2.6.3'
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
-      - name: Build test_exchange only
-        run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCUDA=OFF -DNETCDF=ON -DBUILD_TESTS=ON
-          cmake --build build --parallel 3 --target test_exchange.release
-      - name: Probe
-        env:
-          LOGLEVEL: INFO
-          TORCH_DISTRIBUTED_DEBUG: DETAIL
-        run: bash .github/probe-macos.sh
-      - name: Upload torchrun logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: torchrun-logs
-          path: /tmp/probe
+          cat > /tmp/t.py <<'EOP'
+          import socket, time
+          def t(name, f, *a):
+              s = time.time()
+              try: r = f(*a)
+              except Exception as e: r = repr(e)
+              print(f"{name:40s} {time.time() - s:8.3f} s  {r}", flush=True)
+          h = socket.gethostname()
+          t("gethostname", socket.gethostname)
+          t("gethostbyname(hostname)", socket.gethostbyname, h)
+          t("getaddrinfo(hostname)", lambda: socket.getaddrinfo(h, None)[0][4])
+          t("gethostbyaddr(hostname)", socket.gethostbyaddr, h)
+          t("getfqdn()", socket.getfqdn)
+          EOP
+          date -u +%T; hostname; python /tmp/t.py; date -u +%T
+          echo "127.0.0.1 $(hostname)" | sudo tee -a /etc/hosts
+          date -u +%T; python /tmp/t.py; date -u +%T
