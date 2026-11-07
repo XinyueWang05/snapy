@@ -27,10 +27,13 @@ jobs:
           t("getfqdn() again", socket.getfqdn)
           t("getaddrinfo(hostname)", lambda: socket.getaddrinfo(h, None)[0][4])
           EOP
-          cat /etc/hosts | grep -v '^#'
-          for name in localhost 127.0.0.1 snapyci; do
-            [ $name = snapyci ] && echo "127.0.0.1 snapyci" | sudo tee -a /etc/hosts
-            sudo scutil --set HostName $name
-            sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
-            echo "--- $name $(date -u +%T)"; python /tmp/t.py
-          done
+          scutil --dns | head -40
+          s=$(date +%s); dig +time=2 +tries=1 -x 127.0.0.1 | tail -5; echo "dig -x took $(( $(date +%s)-s )) s"
+          echo "--- original hostname $(date -u +%T)"; python /tmp/t.py
+          sudo mkdir -p /etc/resolver
+          for z in in-addr.arpa ip6.arpa; do echo "nameserver 127.0.0.1" | sudo tee /etc/resolver/$z; done
+          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+          echo "--- reverse zones to 127.0.0.1 $(date -u +%T)"; python /tmp/t.py
+          sudo scutil --set HostName localhost
+          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+          echo "--- and HostName localhost $(date -u +%T)"; python /tmp/t.py; date -u +%T
