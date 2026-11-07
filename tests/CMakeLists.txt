@@ -396,6 +396,10 @@ snapy_add_python_test(test_cubed_sphere_cell_volume TIMEOUT 120
 set(_stage2_device cpu)
 if(CUDA)
   set(_stage2_device cuda)
+  # the CPU arm, so a CUDA build still runs stage 2 on the CPU
+  snapy_add_python_test(test_stage2_cubed_stretched_cpu
+                        SCRIPT test_stage2_cubed_stretched.py ARGS --device cpu
+                        TIMEOUT 3600 LABELS "python;coordinate;cubed-sphere;stage2")
 endif()
 snapy_add_python_test(test_stage2_cubed_stretched
                       ARGS --device ${_stage2_device} TIMEOUT 3600
