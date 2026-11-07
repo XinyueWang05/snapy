@@ -1,0 +1,36 @@
+name: probe macOS torchrun
+
+on:
+  push:
+    branches: ["probe/**"]
+
+jobs:
+  probe:
+    runs-on: macOS-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install wheel numpy pyyaml pytest netcdf4 py-spy
+          pip install 'torch==2.10.0'
+          pip install 'kintera>=2.6.3'
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
+      - name: Build test_exchange only
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCUDA=OFF -DNETCDF=ON -DBUILD_TESTS=ON
+          cmake --build build --parallel 3 --target test_exchange.release
+      - name: Probe
+        env:
+          LOGLEVEL: INFO
+          TORCH_DISTRIBUTED_DEBUG: DETAIL
+        run: bash .github/probe-macos.sh
+      - name: Upload torchrun logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: torchrun-logs
+          path: /tmp/probe
