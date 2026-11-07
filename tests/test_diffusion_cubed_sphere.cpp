@@ -245,6 +245,38 @@ TEST(CubedSphereDiffusion, radial_conductive_equilibrium) {
     }
   }
 }
+// #280: on a stretched x1 the cubed-sphere stencils above are uniform, so
+// viscosity and the implicit radial solve are refused; conduction is not
+TEST(CubedSphereDiffusion, stretched_x1_refuses_viscosity) {
+  auto f = YAML::LoadFile("test_stage2_cubed_stretched.yaml")["geometry"]["x1f"]
+               .as<std::vector<double>>();
+  for (bool implicit : {false, true}) {
+    auto op = MeshOptionsImpl::from_yaml("test_diffusion_cubed_sphere.yaml");
+    op->block()
+        ->coord()
+        ->nx1(30)
+        .global_nx1(30)
+        .nghost(3)
+        .x1min(f.front())
+        .x1max(f.back())
+        .global_x1min(f.front())
+        .global_x1max(f.back())
+        .x1f_interior(f);
+    op->block()->hydro()->recon1()->interp()->type("weno5");
+    if (implicit)
+      op->block()->hydro()->diffusion()->nu_iso(0.).implicit_radial(true);
+    op->blocks_per_process(6);
+    try {
+      auto mesh = Mesh(op);
+      ADD_FAILURE() << "ran; implicit_radial " << implicit;
+    } catch (c10::Error const &e) {
+      EXPECT_NE(std::string(e.what()).find(
+                    "a stretched cubed sphere supports only explicit"),
+                std::string::npos)
+          << e.what();
+    }
+  }
+}
 TEST(CubedSphereDiffusion, viscous_energy_conservation_and_dissipation) {
   torch::set_num_threads(1);
   auto mesh = make_mesh();
