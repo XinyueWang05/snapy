@@ -160,10 +160,9 @@ endif()
 setup_parallel_test(test_x1_seam_split_mp 2)
 function(seam_arm_mp name env)
   set(_n test_x1_seam_split_mp${name}.${buildl})
-  add_test(NAME ${_n} COMMAND torchrun --local-addr=127.0.0.1 --no-python --nproc-per-node=2
+  add_test(NAME ${_n} COMMAND torchrun --no-python --nproc-per-node=2
                               $<TARGET_FILE:test_x1_seam_split_mp.${buildl}>)
   set_tests_properties(${_n} PROPERTIES ENVIRONMENT "${env}")
-  snapy_test_gloo_loopback(${_n})
 endfunction()
 seam_arm_mp(_x1_centroid "SNAP_X1_CENTROID_EXACT=1")
 seam_arm_mp(_radial_exact "SNAP_GRAVITY_WORK_RADIAL_EXACT=1")
@@ -191,12 +190,11 @@ setup_test(test_diffusion)
 setup_test(test_diffusion_cubed_sphere)
 set_tests_properties(test_diffusion_cubed_sphere.${buildl} PROPERTIES TIMEOUT 120)
 add_test(NAME test_diffusion_cubed_sphere_mp.${buildl}
-  COMMAND torchrun --standalone --local-addr=127.0.0.1 --no-python --nproc-per-node=2
+  COMMAND torchrun --standalone --no-python --nproc-per-node=2
     $<TARGET_FILE:test_diffusion_cubed_sphere.${buildl}>
     --gtest_filter=CubedSphereDiffusion.constant_state_and_rigid_rotation:CubedSphereDiffusion.split_panels_preserve_constants_and_rotation:CubedSphereDiffusion.distributed_shared_heat_flux)
 set_tests_properties(test_diffusion_cubed_sphere_mp.${buildl}
   PROPERTIES TIMEOUT 120 LABELS "parallel;forcing" ENVIRONMENT "BACKEND=gloo")
-snapy_test_gloo_loopback(test_diffusion_cubed_sphere_mp.${buildl})
 setup_test(test_diffusion_cubed_sphere_two_gpu)
 set_tests_properties(test_diffusion_cubed_sphere_two_gpu.${buildl} PROPERTIES
   TIMEOUT 60
@@ -207,14 +205,13 @@ if(CUDA AND UCX_FOUND AND COMMUX_CUDA_FOUND)
   if(SNAPY_TWO_GPU_TORCHRUN_EXECUTABLE)
     add_test(NAME test_diffusion_cubed_sphere_two_gpu_ucx.${buildl}
       COMMAND ${SNAPY_TWO_GPU_TORCHRUN_EXECUTABLE}
-        --standalone --local-addr=127.0.0.1 --no-python --nproc-per-node=2
+        --standalone --no-python --nproc-per-node=2
         $<TARGET_FILE:test_diffusion_cubed_sphere_two_gpu.${buildl}>)
     set_tests_properties(test_diffusion_cubed_sphere_two_gpu_ucx.${buildl}
       PROPERTIES TIMEOUT 60 PROCESSORS 2 LABELS "parallel;forcing;gpu;ucx"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/tests
         SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
         ENVIRONMENT "BACKEND=ucx;DEVICE=cuda;UCX_TLS=self,tcp,cuda_copy,cuda_ipc")
-    snapy_test_gloo_loopback(test_diffusion_cubed_sphere_two_gpu_ucx.${buildl})
   endif()
 endif()
 setup_test(test_diffusion_moist)
@@ -236,7 +233,7 @@ setup_parallel_test(test_output_barrier 2)
 # The Gloo device must honor the selected interface rather than resolve the host.
 add_test(NAME test_gloo_invalid_interface.${buildl}
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/expect_gloo_invalid_interface.py
-    torchrun --local-addr=127.0.0.1 --no-python --nproc-per-node=2
+    torchrun --no-python --nproc-per-node=2
     $<TARGET_FILE:test_output_barrier.${buildl}>)
 set_tests_properties(test_gloo_invalid_interface.${buildl}
   PROPERTIES ENVIRONMENT "BACKEND=gloo;GLOO_SOCKET_IFNAME=snapy_no_such_interface"
@@ -265,19 +262,18 @@ endif()
 setup_parallel_test(test_parentless_cloud_nb1_mp 2)
 if(UCX_FOUND)  # the same two ranks on Gloo, which Linux (UCX) would not reach
   add_test(NAME test_parentless_cloud_nb1_mp_gloo
-           COMMAND torchrun --local-addr=127.0.0.1 --no-python --nproc-per-node=2
+           COMMAND torchrun --no-python --nproc-per-node=2
                    $<TARGET_FILE:test_parentless_cloud_nb1_mp.${buildl}>)
   set_tests_properties(test_parentless_cloud_nb1_mp_gloo PROPERTIES
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/tests
     ENVIRONMENT "BACKEND=gloo")
-  snapy_test_gloo_loopback(test_parentless_cloud_nb1_mp_gloo)
 endif()
 
 if(UCX_FOUND)
   add_test(
     NAME test_exchange_ucx
     COMMAND torchrun
-            --local-addr=127.0.0.1
+
             --no-python
             --nproc-per-node=2
             $<TARGET_FILE:test_exchange.${buildl}>
@@ -288,7 +284,6 @@ if(UCX_FOUND)
       "BACKEND=ucx;BLOCKS_PER_PROCESS=3;EXPECT_LOCAL_NEIGHBOR=1;EXPECT_REMOTE_NEIGHBOR=1"
     LABELS "ucx;exchange"
   )
-  snapy_test_gloo_loopback(test_exchange_ucx)
 
   if(CUDA)
     add_test(

@@ -40,9 +40,8 @@ macro(setup_parallel_test namel cores)
 
   add_test(NAME ${namel}.${buildl}
            COMMAND torchrun
-                   --local-addr=127.0.0.1
+
                    --no-python
                    --nproc-per-node=${cores}
                    $<TARGET_FILE:${namel}.${buildl}>)
-  snapy_test_gloo_loopback(${namel}.${buildl})
 endmacro()
