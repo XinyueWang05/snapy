@@ -40,7 +40,7 @@ macro(setup_parallel_test namel cores)
 
   add_test(NAME ${namel}.${buildl}
            COMMAND torchrun
-                  
+
                    --no-python
                    --nproc-per-node=${cores}
                    $<TARGET_FILE:${namel}.${buildl}>)

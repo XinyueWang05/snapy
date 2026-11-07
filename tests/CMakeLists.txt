@@ -273,7 +273,7 @@ if(UCX_FOUND)
   add_test(
     NAME test_exchange_ucx
     COMMAND torchrun
-           
+
             --no-python
             --nproc-per-node=2
             $<TARGET_FILE:test_exchange.${buildl}>
