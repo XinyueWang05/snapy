@@ -306,9 +306,47 @@ TEST(StretchedX1Ref, refuses_outflow_x1_inner) {
           "reflecting");
 }
 
-TEST(StretchedX1Ref, refuses_spherical_polar) {
-  refuses("is supported only on a cartesian geometry", "}", "reflecting",
-          "reflecting", "spherical-polar");
+TEST(StretchedX1Ref, refuses_spherical_polar) {  // x2 from 0: a pole
+  refuses("pole-free spherical-polar", "}", "reflecting", "reflecting",
+          "spherical-polar");
+}
+
+// x2 [0, 1] split in two: block 1, [0.5, 1], is off the pole but the mesh is
+// not, so it refuses too and no rank of an x2-split deck goes on alone
+TEST(StretchedX1Ref, refuses_the_off_pole_block_of_a_pole_deck) {
+  auto text = card(true, "}", "reflecting", "reflecting", "spherical-polar");
+  text.replace(text.find("nx2: 1"), 6, "nx2: 8");
+  auto fname = write_temp(text + "    x2-inner: reflecting\n" +
+                          "    x2-outer: reflecting\n" +
+                          "distribute: {layout: cubed, nb2: 2}\n");
+  auto op = MeshBlockOptionsImpl::from_yaml(fname);
+  std::remove(fname.c_str());
+  op->layout()->blocks_per_process(2).world_size(2).rank(1);  // as Mesh does
+  op->coord()->repartition(op->layout());
+  ASSERT_EQ(op->coord()->x2min(), 0.5);
+  try {
+    std::make_shared<MeshBlockImpl>(op);
+    ADD_FAILURE() << "the off-pole block of a pole deck built";
+  } catch (c10::Error const& e) {
+    EXPECT_NE(std::string(e.what()).find("pole-free spherical-polar"),
+              std::string::npos)
+        << e.what();
+  }
+}
+
+// diffusion stays refused on a stretched spherical-polar x1 off the poles
+TEST(StretchedX1Ref, refuses_diffusion_on_stretched_spherical_polar) {
+  auto text = card(true, "}\n  diffusion: {nu_iso: 1.e-3}", "reflecting",
+                   "reflecting", "spherical-polar");
+  try {
+    build_and_step(text.replace(text.find("x2min: 0., x2max: 1."), 20,
+                                "x2min: 1., x2max: 2."));
+    ADD_FAILURE() << "diffusion ran on a stretched spherical-polar x1";
+  } catch (c10::Error const& e) {
+    EXPECT_NE(std::string(e.what()).find("Supported coordinates"),
+              std::string::npos)
+        << e.what();
+  }
 }
 
 TEST(StretchedX1Ref, wb_ref4_switch_runs) {
