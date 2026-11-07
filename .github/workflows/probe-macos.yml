@@ -29,5 +29,8 @@ jobs:
           t("getfqdn()", socket.getfqdn)
           EOP
           date -u +%T; hostname; python /tmp/t.py; date -u +%T
-          echo "127.0.0.1 $(hostname)" | sudo tee -a /etc/hosts
-          date -u +%T; python /tmp/t.py; date -u +%T
+          printf '127.0.0.1 %s\n::1 %s\n' "$(hostname)" "$(hostname)" | sudo tee -a /etc/hosts
+          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+          echo "--- hosts v4+v6 and cache flush"; date -u +%T; python /tmp/t.py; date -u +%T
+          sudo scutil --set HostName localhost
+          echo "--- HostName localhost"; hostname; date -u +%T; python /tmp/t.py; date -u +%T
