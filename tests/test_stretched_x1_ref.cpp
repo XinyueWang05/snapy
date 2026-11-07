@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <snap/forcing/forcing.hpp>
 #include <snap/hydro/balance_column.hpp>
 #include <snap/hydro/hydro.hpp>
@@ -447,7 +448,8 @@ TEST(StretchedX1Ref, iv_rows_on_uniform_faces_are_the_uniform_weights) {
     }
   }
   std::printf("max |dw| against the uniform weights: %.3e\n", dw);
-  EXPECT_EQ(dw, 0.);
+  // Row construction can differ by a few ulps across compilers.
+  EXPECT_LE(dw, 4 * std::numeric_limits<double>::epsilon());
 }
 
 int main(int argc, char** argv) {
