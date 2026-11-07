@@ -7,12 +7,12 @@ on:
 jobs:
   probe:
     runs-on: macOS-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Hostname lookups before and after an /etc/hosts entry
+      - name: Hostname candidates, resolver cache flushed before each
         run: |
           cat > /tmp/t.py <<'EOP'
           import socket, time
@@ -20,17 +20,17 @@ jobs:
               s = time.time()
               try: r = f(*a)
               except Exception as e: r = repr(e)
-              print(f"{name:40s} {time.time() - s:8.3f} s  {r}", flush=True)
+              print(f"{name:34s} {time.time() - s:8.3f} s  {r}", flush=True)
           h = socket.gethostname()
-          t("gethostname", socket.gethostname)
-          t("gethostbyname(hostname)", socket.gethostbyname, h)
+          print("hostname:", h)
+          t("getfqdn(gethostname())", socket.getfqdn, h)
+          t("getfqdn() again", socket.getfqdn)
           t("getaddrinfo(hostname)", lambda: socket.getaddrinfo(h, None)[0][4])
-          t("gethostbyaddr(hostname)", socket.gethostbyaddr, h)
-          t("getfqdn()", socket.getfqdn)
           EOP
-          date -u +%T; hostname; python /tmp/t.py; date -u +%T
-          printf '127.0.0.1 %s\n::1 %s\n' "$(hostname)" "$(hostname)" | sudo tee -a /etc/hosts
-          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
-          echo "--- hosts v4+v6 and cache flush"; date -u +%T; python /tmp/t.py; date -u +%T
-          sudo scutil --set HostName localhost
-          echo "--- HostName localhost"; hostname; date -u +%T; python /tmp/t.py; date -u +%T
+          cat /etc/hosts | grep -v '^#'
+          for name in localhost 127.0.0.1 snapyci; do
+            [ $name = snapyci ] && echo "127.0.0.1 snapyci" | sudo tee -a /etc/hosts
+            sudo scutil --set HostName $name
+            sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+            echo "--- $name $(date -u +%T)"; python /tmp/t.py
+          done
