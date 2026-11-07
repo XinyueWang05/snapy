@@ -289,9 +289,29 @@ TEST(StretchedX1Ref, refuses_outflow_x1_inner) {
           "reflecting");
 }
 
-TEST(StretchedX1Ref, refuses_spherical_polar) {
-  refuses("is supported only on a cartesian geometry", "}", "reflecting",
-          "reflecting", "spherical-polar");
+TEST(StretchedX1Ref, refuses_spherical_polar) {  // x2 from 0: a pole
+  refuses("pole-free spherical-polar", "}", "reflecting", "reflecting",
+          "spherical-polar");
+}
+
+// block 1, x2 [0.5, 1], of a deck on x2 [0, 1] split in two refuses too
+TEST(StretchedX1Ref, refuses_the_off_pole_block_of_a_pole_deck) {
+  auto text = card(true, "}", "reflecting", "reflecting", "spherical-polar");
+  text.replace(text.find("nx2: 1"), 6, "nx2: 8");
+  auto fname = write_temp(text +
+                          "    x2-inner: reflecting\n    x2-outer: reflecting\n"
+                          "distribute: {layout: cubed, nb2: 2}\n");
+  auto op = MeshBlockOptionsImpl::from_yaml(fname);
+  std::remove(fname.c_str());
+  op->layout()->blocks_per_process(2).world_size(2).rank(1);  // as Mesh does
+  op->coord()->repartition(op->layout());
+  ASSERT_EQ(op->coord()->x2min(), 0.5);
+  try {
+    std::make_shared<MeshBlockImpl>(op);
+    ADD_FAILURE() << "the off-pole block of a pole deck built";
+  } catch (c10::Error const& e) {
+    EXPECT_NE(std::string(e.what()).find("pole-free"), std::string::npos);
+  }
 }
 
 TEST(StretchedX1Ref, wb_ref4_switch_runs) {
