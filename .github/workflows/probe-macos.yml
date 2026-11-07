@@ -7,23 +7,24 @@ on:
 jobs:
   probe:
     runs-on: macOS-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: TCPStore creation time
+      - name: Reverse lookups of the loopback address
         run: |
-          pip install 'torch==2.10.0' py-spy
           sudo scutil --set HostName localhost
-          cat > /tmp/s.py <<'EOP'
-          import os, sys, time, torch.distributed as d
-          host, port = sys.argv[1], int(sys.argv[2])
-          t = time.time()
-          s = d.TCPStore(host, port, 1, True)
-          print(f"TCPStore({host}) libuv={os.environ.get('TORCH_TCPSTORE_USE_LIBUV', 'default')}: {time.time() - t:.3f} s", flush=True)
+          cat > /tmp/n.py <<'EOP'
+          import socket, time
+          def t(name, f, *a):
+              s = time.time()
+              try: r = f(*a)
+              except Exception as e: r = repr(e)
+              print(f"{name:44s} {time.time() - s:8.3f} s  {r}", flush=True)
+          t("getnameinfo(127.0.0.1, NUMERICHOST|SERV)", socket.getnameinfo, ("127.0.0.1", 29500), socket.NI_NUMERICHOST | socket.NI_NUMERICSERV)
+          t("getnameinfo(127.0.0.1, NUMERICSERV)", socket.getnameinfo, ("127.0.0.1", 29500), socket.NI_NUMERICSERV)
+          t("getnameinfo(::1, NUMERICSERV)", socket.getnameinfo, ("::1", 29500, 0, 0), socket.NI_NUMERICSERV)
+          t("getaddrinfo(None, 29500, PASSIVE)", lambda: socket.getaddrinfo(None, 29500, flags=socket.AI_PASSIVE)[0][4])
           EOP
-          python /tmp/s.py 127.0.0.1 29601 & p=$!
-          sleep 8; sudo py-spy dump --native --pid $p 2>&1 | head -40; wait $p
-          TORCH_TCPSTORE_USE_LIBUV=0 python /tmp/s.py 127.0.0.1 29602
-          python /tmp/s.py localhost 29603
+          python /tmp/n.py
