@@ -7,27 +7,23 @@ on:
 jobs:
   probe:
     runs-on: macOS-latest
-    timeout-minutes: 90
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dependencies and the v2 fix
+      - name: TCPStore creation time
         run: |
-          pip install wheel numpy pyyaml pytest netcdf4 py-spy
-          pip install 'torch==2.10.0'
-          pip install 'kintera>=2.6.3'
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
+          pip install 'torch==2.10.0' py-spy
           sudo scutil --set HostName localhost
-          echo 'import socket; socket.getfqdn = lambda name="": name or "localhost"' \
-            > "$(python -c 'import site; print(site.getsitepackages()[0])')/sitecustomize.py"
-      - name: Build test_exchange only
-        run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCUDA=OFF -DNETCDF=ON -DBUILD_TESTS=ON
-          cmake --build build --parallel 3 --target test_exchange.release
-      - name: Probe
-        env:
-          LOGLEVEL: INFO
-          TORCH_DISTRIBUTED_DEBUG: DETAIL
-        run: bash .github/probe-macos.sh
+          cat > /tmp/s.py <<'EOP'
+          import os, sys, time, torch.distributed as d
+          host, port = sys.argv[1], int(sys.argv[2])
+          t = time.time()
+          s = d.TCPStore(host, port, 1, True)
+          print(f"TCPStore({host}) libuv={os.environ.get('TORCH_TCPSTORE_USE_LIBUV', 'default')}: {time.time() - t:.3f} s", flush=True)
+          EOP
+          python /tmp/s.py 127.0.0.1 29601 & p=$!
+          sleep 8; sudo py-spy dump --native --pid $p 2>&1 | head -40; wait $p
+          TORCH_TCPSTORE_USE_LIBUV=0 python /tmp/s.py 127.0.0.1 29602
+          python /tmp/s.py localhost 29603
