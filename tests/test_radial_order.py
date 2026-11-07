@@ -34,14 +34,14 @@ def error(geom, kind, n, stretched):  # max face error of the deck's recon1 on e
 
 
 fails = []
-for geom, grids in (("spherical-polar", (False,)), ("gnomonic-equiangle", (False, True))):
+for geom, grids in (("spherical-polar", (False, True)), ("gnomonic-equiangle", (False, True))):
     for kind in ("weno5", "cp5"):
         for st in grids:
             e = [error(geom, kind, n, st) for n in (32, 64, 128)]
             o = [math.log2(e[0] / e[1]), math.log2(e[1] / e[2])]
             case = f"{geom} {kind} {'stretched' if st else 'uniform'}"
             print(f"{case}: err {e[0]:.2e} {e[1]:.2e} {e[2]:.2e} orders {o[0]:.2f} {o[1]:.2f}")
-            threshold = 4.3 if (geom, kind, st) == ("gnomonic-equiangle", "weno5", True) else 4.5
+            threshold = 4.3 if (kind, st) == ("weno5", True) else 4.5
             fails += [f"{case} order {o[1]:.2f} < {threshold}"] * (o[1] < threshold)
 print("FAIL:", fails) if fails else print("### radial order test passed. ###")
 sys.exit(1 if fails else 0)

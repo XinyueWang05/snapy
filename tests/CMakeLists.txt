@@ -250,6 +250,19 @@ if(UCX_FOUND)
     LABELS "exchange")
 endif()
 
+# a pole refusal every rank reaches: two x2 blocks, one per process (#280).
+# One deck per run, as in a run: under UCX a process-group mesh built after a
+# refused one in the same process can fail to connect.
+setup_parallel_test(test_sph_pole_split_mp 2)
+set_tests_properties(test_sph_pole_split_mp.${buildl} PROPERTIES TIMEOUT 60
+                     ENVIRONMENT "GTEST_FILTER=*pole_free*")
+foreach(_p inner outer)
+  add_test(NAME test_sph_pole_split_mp_${_p}.${buildl}
+           COMMAND torchrun --no-python --nproc-per-node=2
+                   $<TARGET_FILE:test_sph_pole_split_mp.${buildl}>
+                   --gtest_filter=*refuses_the_${_p}_pole*)
+  set_tests_properties(test_sph_pole_split_mp_${_p}.${buildl} PROPERTIES TIMEOUT 60)
+endforeach()
 setup_parallel_test(test_parentless_cloud_nb1_mp 2)
 if(UCX_FOUND)  # the same two ranks on Gloo, which Linux (UCX) would not reach
   add_test(NAME test_parentless_cloud_nb1_mp_gloo

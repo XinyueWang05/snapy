@@ -390,11 +390,14 @@ CoordinateImpl::CoordinateImpl(const CoordinateOptions& options_,
   // the geometric source coefficients amplify that ULP by ~7 orders. Sliced
   // from a global array, a face has one value whoever owns it.
   if (op->stretched_x1()) {
-    TORCH_CHECK(op->type() == "cartesian" || op->type() == "gnomonic-equiangle",
-                "a stretched x1 (geometry/x1f or cells/x1rat) is supported "
-                "only on a cartesian geometry or a gnomonic-equiangle one "
-                "(#280); got '",
-                op->type(), "'");
+    bool sph = op->type() == "spherical-polar" && op->global_x2min() > 0. &&
+               op->global_x2max() < M_PI;  // the mesh's: every rank agrees
+    TORCH_CHECK(
+        op->type() == "cartesian" || op->type() == "gnomonic-equiangle" || sph,
+        "a stretched x1 (geometry/x1f or cells/x1rat) is supported "
+        "only on a cartesian, a gnomonic-equiangle or a pole-free "
+        "spherical-polar geometry (#280); got '",
+        op->type(), "'");
     x1f = op->global_x1f()
               .narrow(0, op->ix1() - op->nghost() + op->x1f_ghosts(),
                       op->nx1() + 2 * op->nghost() + 1)

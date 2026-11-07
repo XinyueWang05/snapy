@@ -43,13 +43,14 @@ NG, IV1 = 3, 1
 GLX, GLW = np.polynomial.legendre.leggauss(6)
 
 
-def config(r0, scheme, nh):
+def config(r0, scheme, nh, rat=1.0, nz=NZ):
     half = 0.05
     return {"geometry": {"type": "spherical-polar",
                          "bounds": {"x1min": r0, "x1max": r0 + LZ,
                                     "x2min": 0.5 * math.pi - half, "x2max": 0.5 * math.pi + half,
                                     "x3min": 0.0, "x3max": 2.0 * half},
-                         "cells": {"nx1": NZ, "nx2": 4, "nx3": 4, "nghost": NG}},
+                         "cells": {"nx1": nz, "nx2": 4, "nx3": 4, "nghost": NG,
+                                   **({"x1rat": rat} if rat != 1.0 else {})}},
             "dynamics": {"equation-of-state": {"type": "ideal-gas", "gammad": 1.4, "weight": 8.31446,
                                                "density-floor": 1.e-12, "pressure-floor": 1.e-12,
                                                "temperature-floor": 1.e-12, "limiter": True},
@@ -78,17 +79,37 @@ def r2_means(rf, r0):
     return tuple((q * w).sum(1) / w.sum(1) for q in column(r, r0))
 
 
-def imbalance(r0, scheme, nh, device):
+def make(cfg, device):
     import yaml
-    from snapy import MeshBlock, MeshBlockOptions, kIDN, kIPR
+    from snapy import MeshBlock, MeshBlockOptions
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, dir=os.getcwd()) as f:
-        yaml.safe_dump(config(r0, scheme, nh), f)
+        yaml.safe_dump(cfg, f)
         tmp = f.name
     try:
         block = MeshBlock(MeshBlockOptions.from_yaml(tmp))
     finally:
         os.unlink(tmp)
     block.to(torch.device(device), torch.float64)
+    return block
+
+
+def face_order(kind, device):  # x1 recon on plain means of a stretched x1, N 32/64/128
+    f, e = lambda r: 1.0 + 0.5 * np.sin(2.0 * r), []
+    for nz in (32, 64, 128):
+        cfg = config(R0S[0], 0, 1.0, 1.058 ** (32.0 / nz), nz)
+        cfg["dynamics"]["reconstruct"]["vertical"]["type"] = kind
+        block = make(cfg, device)
+        rf = block.buffer("coord.x1f").cpu().numpy()
+        r = 0.5 * (rf[1:] + rf[:-1])[:, None] + 0.5 * np.diff(rf)[:, None] * GLX[None, :]
+        w = torch.tensor((GLW[None, :] * f(r)).sum(1) / 2.0).view(1, 1, 1, -1).repeat(5, 1, 1, 1)
+        out, i = block.module("hydro.recon1").forward(w.to(device), 3, False).cpu(), np.arange(6, nz + 1)
+        e.append(max(np.abs(out[s][0, 0, 0].numpy()[i] - f(rf[i])).max() for s in (0, 1)))
+    return [math.log2(e[0] / e[1]), math.log2(e[1] / e[2])]
+
+
+def imbalance(r0, scheme, nh, device, rat=1.0):
+    from snapy import kIDN, kIPR
+    block = make(config(r0, scheme, nh, rat), device)
     rf = block.buffer("coord.x1f").cpu().numpy()
     w = block.buffer("hydro.D").clone().zero_()
     # interior means; ghosts get the same formula (the reflecting walls refill them)
@@ -96,7 +117,7 @@ def imbalance(r0, scheme, nh, device):
     w[kIDN] = rho
     w[kIPR] = p
     bv, _ = block.initialize({"hydro_w": w})
-    dt = 0.3 * (LZ / NZ) / math.sqrt(1.4)
+    dt = 0.3 * (LZ / NZ if rat == 1.0 else float(np.diff(rf).min())) / math.sqrt(1.4)
     block.inc_cycle()
     for st in range(len(block.intg.stages)):
         block.forward(bv, dt, st)
@@ -107,8 +128,11 @@ def imbalance(r0, scheme, nh, device):
 
 
 def child(device):
-    return {f"{r0:g}/{s}/{nh:g}": imbalance(r0, s, nh, device)
-            for r0 in R0S for s in SCHEMES for nh in NHS}
+    out = {f"{r0:g}/{s}/{nh:g}/{rat:g}": imbalance(r0, s, nh, device, rat)
+           for r0 in R0S for s in SCHEMES for nh in NHS for rat in (1.0, 1.058)}
+    if os.environ.get("SNAP_X1_CENTROID_EXACT"):
+        out["order"] = {k: face_order(k, device) for k in ("weno5", "cp5")}
+    return out
 
 
 def run(switch, device, tmpdir):
@@ -137,10 +161,13 @@ def main():
     failures = []
     with tempfile.TemporaryDirectory(dir=os.getcwd()) as tmp:
         res = {s: run(s, a.device, tmp) for s in (None, "1")}
+    for k, o in res["1"].pop("order").items():
+        print(f"switch on, stretched x1 {k}: face orders {o[0]:.2f} {o[1]:.2f}")
+        failures += [f"{k} face order {o[1]:.2f} < 4.5"] * (o[1] < 4.5)
     for key in res[None]:
         off, on = res[None][key], res["1"][key]
-        r0, scheme, nh = key.split("/")
-        print(f"r0/H {r0:>5s} implicit-scheme {scheme} non-hydrostatic {nh}: "
+        r0, scheme, nh, rat = key.split("/")
+        print(f"r0/H {r0:>5s} x1rat {rat} implicit-scheme {scheme} non-hydrostatic {nh}: "
               "max |rho v1|/(dt g rho), interior / wall: "
               f"off {off['interior']:.3e} / {off['wall']:.3e}  on {on['interior']:.3e} / {on['wall']:.3e}",
               flush=True)

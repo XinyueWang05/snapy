@@ -306,9 +306,24 @@ TEST(StretchedX1Ref, refuses_outflow_x1_inner) {
           "reflecting");
 }
 
-TEST(StretchedX1Ref, refuses_spherical_polar) {
-  refuses("is supported only on a cartesian geometry", "}", "reflecting",
-          "reflecting", "spherical-polar");
+TEST(StretchedX1Ref, refuses_spherical_polar) {  // x2 from 0: a pole
+  refuses("pole-free spherical-polar", "}", "reflecting", "reflecting",
+          "spherical-polar");
+}
+
+// diffusion stays refused on a stretched spherical-polar x1 off the poles
+TEST(StretchedX1Ref, refuses_diffusion_on_stretched_spherical_polar) {
+  auto text = card(true, "}\n  diffusion: {nu_iso: 1.e-3}", "reflecting",
+                   "reflecting", "spherical-polar");
+  try {
+    build_and_step(text.replace(text.find("x2min: 0., x2max: 1."), 20,
+                                "x2min: 1., x2max: 2."));
+    ADD_FAILURE() << "diffusion ran on a stretched spherical-polar x1";
+  } catch (c10::Error const& e) {
+    EXPECT_NE(std::string(e.what()).find("Supported coordinates"),
+              std::string::npos)
+        << e.what();
+  }
 }
 
 TEST(StretchedX1Ref, wb_ref4_switch_runs) {
