@@ -69,6 +69,8 @@ jobs:
             sudo apt-get install -y libnetcdf-dev libucx-dev nco autoconf automake libtool pkg-config
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
             HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
+            # each lookup of the runner's .local name takes 35 s; torchrun makes several
+            sudo scutil --set HostName localhost
           fi
 
       - name: Install commux UCX backend
