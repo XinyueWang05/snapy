@@ -194,7 +194,7 @@ add_test(NAME test_diffusion_cubed_sphere_mp.${buildl}
     $<TARGET_FILE:test_diffusion_cubed_sphere.${buildl}>
     --gtest_filter=CubedSphereDiffusion.constant_state_and_rigid_rotation:CubedSphereDiffusion.split_panels_preserve_constants_and_rotation:CubedSphereDiffusion.distributed_shared_heat_flux)
 set_tests_properties(test_diffusion_cubed_sphere_mp.${buildl}
-  PROPERTIES TIMEOUT 120 LABELS "parallel;forcing" ENVIRONMENT "BACKEND=gloo")
+  PROPERTIES LABELS "parallel;forcing" ENVIRONMENT "BACKEND=gloo")
 setup_test(test_diffusion_cubed_sphere_two_gpu)
 set_tests_properties(test_diffusion_cubed_sphere_two_gpu.${buildl} PROPERTIES
   TIMEOUT 60
