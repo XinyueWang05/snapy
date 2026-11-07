@@ -431,6 +431,95 @@ TEST(CubedSphereDiffusion, radial_implicit_conservation_stability_and_order) {
   EXPECT_GT(error[1] / error[2], 3.5);
 }
 
+namespace {
+// the stage-2 stretched cubed sphere with the implicit radial solve on:
+// k = kappa (dynamic) or kappa * rho cv * scale (kinematic)
+Mesh stretched_radial_mesh(bool gpu, double kappa, torch::Tensor scale) {
+  auto op = stretched_cs_options(4);
+  auto d = op->block()->hydro()->diffusion();
+  d->nu_iso(0.)
+      .kappa_iso(kappa)
+      .dynamic(!scale.defined())
+      .implicit_radial(true)
+      .temperature_inner(300.)
+      .temperature_outer(310.);
+  if (scale.defined()) d->kappa_scale_x1(scale);
+  return to_device(Mesh(op), gpu);
+}
+// set T (x1 interior, density 1) on block 0, take implicit radial steps,
+// return T along one column
+torch::Tensor radial_steps(Mesh mesh, torch::Tensor t,
+                           std::vector<double> dts) {
+  auto b = mesh->blocks[0];
+  auto c = b->pcoord;
+  auto eos = b->phydro->peos;
+  auto w =
+      torch::zeros({5, c->options->nc3(), c->options->nc2(), c->options->nc1()},
+                   torch::kFloat64);
+  w[IDN].fill_(1.);
+  double gas = eos->species_cv_ref() * (eos->options->gammad() - 1.);
+  w[IPR].fill_(gas * 305.);
+  w[IPR].narrow(-1, c->il(), t.size(0)).copy_(gas * t.view({1, 1, -1}));
+  auto u = eos->compute("W->U", {w.to(c->x1v.device())});
+  for (double dt : dts) b->phydro->pdiffusion->radial_conduction_step(u, dt);
+  return eos->compute("W->T", {eos->compute("U->W", {u})})
+      .index(interior(b))
+      .cpu()[0][0];
+}
+}  // namespace
+
+// #280: implicit radial conduction on the stretched cubed sphere (R19)
+TEST(CubedSphereDiffusion, stretched_radial_implicit) {
+  torch::set_num_threads(1);
+  auto f = YAML::LoadFile("test_stage2_cubed_stretched.yaml")["geometry"]["x1f"]
+               .as<std::vector<double>>();
+  double r0 = f.front(), r1 = f.back();
+  std::vector<double> rc(30);
+  for (int i = 0; i < 30; ++i) rc[i] = 0.5 * (f[i] + f[i + 1]);
+  auto r = torch::tensor(rc, torch::kFloat64);
+  for (bool gpu : {false, true}) {
+    if (gpu && !snapy_cuda_test_enabled()) continue;
+    // the discrete steady state T = A + B/r at the centres holds
+    double b_ = -10. / (1. / r0 - 1. / r1), a_ = 300. - b_ / r0;
+    auto t = a_ + b_ / r;
+    auto drift = ((radial_steps(stretched_radial_mesh(gpu, 1.e14, {}), t,
+                                {0.2, 0.2, 1.e3}) -
+                   t) /
+                  t)
+                     .abs()
+                     .max()
+                     .item<double>();
+    // with k linear in r, the steady wall fluxes carry k(r_wall): the wall
+    // conductivity is extrapolated linearly in position over the widths
+    double kappa = 1.e11;
+    auto lin = [&](double x) { return 1. + 2. * (x - r0) / (r1 - r0); };
+    auto scale = torch::empty({36}, torch::kFloat64);
+    for (int i = 0; i < 36; ++i)
+      scale[i] = lin(rc[std::min(std::max(i - 3, 0), 29)]);
+    auto mesh = stretched_radial_mesh(gpu, kappa, scale);
+    auto ts = radial_steps(mesh, torch::full({30}, 305., torch::kFloat64),
+                           std::vector<double>(40, 1.e9));
+    double cap = mesh->blocks[0]->phydro->peos->species_cv_ref();  // rho 1
+    auto k = [&](int i) { return kappa * cap * lin(rc[i]); };
+    // k at the wall rw next to cell i, from the steady flux to neighbour j
+    auto wall_error = [&](int i, int j, double rw, double tw) {
+      double ti = ts[i].item<double>(), tj = ts[j].item<double>();
+      double flux = 0.5 * (k(i) + k(j)) * rc[i] * rc[j] /
+                    std::abs(rc[j] - rc[i]) * (ti - tj);
+      double kf = flux * std::abs(rc[i] - rw) / (rw * rc[i] * (tw - ti));
+      return kf / (kappa * cap * lin(rw)) - 1.;
+    };
+    double ein = wall_error(0, 1, r0, 300.),
+           eout = wall_error(29, 28, r1, 310.);
+    std::cout << (gpu ? "CUDA" : "CPU") << " stretched radial: A+B/r drift "
+              << drift << "; wall k error inner " << ein << ", outer " << eout
+              << std::endl;
+    EXPECT_LT(drift, 1.e-12);
+    EXPECT_LT(std::abs(ein), 1.e-9);
+    EXPECT_LT(std::abs(eout), 1.e-9);
+  }
+}
+
 // Rayleigh-Ritz onset using the actual C++ heat/stress operator. This isolates
 // diffusion accuracy; it is NOT an unconstrained compressible onset run.
 TEST(CubedSphereDiffusion, thin_shell_modal_onset) {
