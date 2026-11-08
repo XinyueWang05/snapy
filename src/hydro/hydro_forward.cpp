@@ -1109,10 +1109,10 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     //
     // Scale ONLY the dt handed to the correction. du, the flux divergence and
     // the forcings stay at the full dt, or this becomes a different operator.
-    // Applied only for the 3-stage integrator, matching the behaviour
+    // Applied for integrators of 3+ stages (rk3, rk3s4), matching the behaviour
     // already in production; generalising would change rk1/rk2 results.
     double dt_corr = dt;
-    if (pmb->pintg->stages.size() == 3) {
+    if (pmb->pintg->stages.size() >= 3) {
       if (rk_stage >= 0 && rk_stage < pmb->pintg->stages.size()) {
         dt_corr *= pmb->pintg->stages[rk_stage].wght2();
       } else {
