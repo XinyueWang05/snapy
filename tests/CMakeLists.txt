@@ -461,6 +461,8 @@ if(CUDA)
   snapy_add_python_test(test_flux_positivity_cubedsphere_moist_cuda
     SCRIPT test_flux_positivity_cubedsphere_moist.py ARGS --device cuda
     TIMEOUT 300 LABELS "python;positivity;cubed-sphere;cuda")
+  snapy_add_python_test(test_implicit_face_work_operator_cuda SCRIPT test_implicit_face_work_operator.py
+    ARGS --device cuda TIMEOUT 300 LABELS "python;hydro;implicit;gravity;cuda")
   snapy_add_python_test(test_vic_moist_device
     TIMEOUT 120 LABELS "python;implicit;cuda")
   snapy_add_python_test(test_wb_ref4_order_cuda
