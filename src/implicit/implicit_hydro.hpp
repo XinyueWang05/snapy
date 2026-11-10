@@ -122,6 +122,9 @@ class ImplicitHydroImpl : public torch::nn::Cloneable<ImplicitHydroImpl> {
   //! factors, built once per grid (#291)
   X1GridKey _rx_key;
   torch::Tensor _rx_lo, _rx_mid, _rx_hi;
+  //! g1 sigma^2 S[2][0] and g1 sigma^2 S[n-3][n-1]: the wall slopes' third
+  //! points, the border of vic_solve_bordered_* (nx1 >= 4)
+  double _rx_wlo = 0., _rx_whi = 0.;
   CorrectedPEFactors _rx_work;
 
   // grid-only factors of forward_masked, rebuilt only

@@ -324,12 +324,17 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
   // Courant ~200 (#296). The matrix holds s as a tridiagonal stencil (the
   // one-sided wall slope's third point lumped onto the neighbour), coupled to
   // the solved minus the explicit density change; the post-solve term books
-  // the rest, so the total stays g1 sigma^2 s[du - du0].
+  // the rest, so the total stays g1 sigma^2 s[du - du0]. With nx1 >= 4 the
+  // wall slopes' third points are not lumped: they are the two border entries
+  // of vic_solve_bordered_* (forward_sweep_bordered_impl.h), so the solve is
+  // implicit in the full 3-point slope (lumped, the remainder booked after the
+  // solve is explicit, and a rest column grows from round-off at large dt).
   bool radial_exact = phydro->radial_exact_work();
   auto in3 =
       phydro->pmb->part({0, 0, 0}, PartOptions().exterior(false).ndim(3));
   int nx1 = pcoord->options->nx1();
   torch::Tensor rx_lo, rx_mid, rx_hi, rx_fluid, rx_mass0;
+  bool rx_border = false;  // the wall third-cell entries solved as a border
   auto rx_tri = [&](torch::Tensor const& q) {  // q: [nx3, nx2, nx1]
     auto s = rx_mid * q;
     s.narrow(-1, 1, nx1 - 1) +=
@@ -366,8 +371,13 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
       rx_hi = torch::zeros_like(rx_mid);
       rx_lo.narrow(0, 1, nx1 - 1).copy_(S.diagonal(1));
       rx_hi.narrow(0, 0, nx1 - 1).copy_(S.diagonal(-1));
-      rx_hi[0] += S[2][0];
-      rx_lo[nx1 - 1] += S[nx1 - 3][nx1 - 1];
+      if (nx1 >= 4) {
+        _rx_wlo = (gv[0] * S[2][0]).item<double>();
+        _rx_whi = (gv[nx1 - 1] * S[nx1 - 3][nx1 - 1]).item<double>();
+      } else {
+        rx_hi[0] += S[2][0];
+        rx_lo[nx1 - 1] += S[nx1 - 3][nx1 - 1];
+      }
       rx_lo *= gv;
       rx_hi *= gv;
       _rx_key = key;
@@ -398,19 +408,28 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
     if (du.size(0) > ICY)
       rx_mass0 += _du0.narrow(0, ICY, du.size(0) - ICY).sum(0).index(in3);
     du[IPR].index(in3).sub_(rx_tri(rx_mass0));
+    rx_border = nx1 >= 4;
   };
 
   if ((options->scheme() >> 3) & 1) {
     at::native::vic_assemble_full(du.device().type(), iter, dt, grav1, adir);
     couple_radial_exact();
-    at::native::vic_solve_full(du.device().type(), iter, dt, grav1, 0);
+    if (rx_border)
+      at::native::vic_solve_bordered_full(du.device().type(), iter, dt, grav1,
+                                          0, _rx_wlo, _rx_whi);
+    else
+      at::native::vic_solve_full(du.device().type(), iter, dt, grav1, 0);
 
   } else {
     // Match the full-VIC pipeline: assemble coefficients, run the column
     // solve + reductions, then apply the per-cell redistribution map.
     at::native::vic_assemble_partial(du.device().type(), iter, dt, grav1, adir);
     couple_radial_exact();
-    at::native::vic_solve_partial(du.device().type(), iter, dt, grav1, 0);
+    if (rx_border)
+      at::native::vic_solve_bordered_partial(du.device().type(), iter, dt,
+                                             grav1, 0, _rx_wlo, _rx_whi);
+    else
+      at::native::vic_solve_partial(du.device().type(), iter, dt, grav1, 0);
   }
 
   // Both dispatches share the same rejection sentinel. This also catches
@@ -547,9 +566,14 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
     if (rx_mass0.defined()) {
       int nx2 = pcoord->options->nx2(), nx3 = pcoord->options->nx3();
       auto raw = _delta.view({nx3, nx2, nx1, options->size()}).select(-1, 0);
-      work.slice(-2, pcoord->jl(), pcoord->ju() + 1)
-          .slice(-3, pcoord->kl(), pcoord->ku() + 1)
-          .sub_(rx_tri(raw - rx_mass0));
+      auto wi = work.slice(-2, pcoord->jl(), pcoord->ju() + 1)
+                    .slice(-3, pcoord->kl(), pcoord->ku() + 1);
+      auto q = raw - rx_mass0;
+      wi.sub_(rx_tri(q));
+      if (rx_border) {  // the matrix holds the wall third points as well
+        wi.select(-1, 0).sub_(_rx_wlo * q.select(-1, 2));
+        wi.select(-1, nx1 - 1).sub_(_rx_whi * q.select(-1, nx1 - 3));
+      }
     }
     // solid cells get none: their slope stencil reads fluid neighbours
     if (no_solid)

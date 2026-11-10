@@ -16,6 +16,7 @@
 
 #include <snap/utils/loops.cuh>
 
+#include "forward_sweep_bordered_impl.h"
 #include "forward_sweep_impl.h"
 #include "implicit_dispatch.hpp"
 #include "vic_assemble_full_impl.h"
@@ -180,6 +181,36 @@ template void vic_solve_cuda<3>(at::TensorIterator &, double, double, int);
 template void vic_solve_cuda<5>(at::TensorIterator &, double, double, int);
 
 template <int N>
+void vic_solve_bordered_cuda(at::TensorIterator &iter, double dt, double grav,
+                             int dir, double wlo, double whi) {
+  at::cuda::CUDAGuard device_guard(iter.device());
+
+  AT_DISPATCH_FLOATING_TYPES(iter.dtype(), "vic_solve_bordered_cuda", [&]() {
+    auto nhydro = at::native::ensure_nonempty_size(iter.output(), 0);
+    auto nlayer = at::native::ensure_nonempty_size(iter.output(), 3);
+    auto stride1 = at::native::ensure_nonempty_stride(iter.output(), 0);
+    auto stride2 = at::native::ensure_nonempty_stride(iter.output(), 3);
+
+    int ny = nhydro - ICY;
+
+    using Matrix = Eigen::Matrix<scalar_t, N, N>;
+    using Vector = Eigen::Matrix<scalar_t, N, 1>;
+
+    native::gpu_kernel<13>(
+        iter, [=] GPU_LAMBDA(char *const data[13], unsigned int strides[13]) {
+          auto du = reinterpret_cast<scalar_t *>(data[0] + strides[0]);
+          auto a = reinterpret_cast<Matrix *>(data[6] + strides[6]);
+          auto b = reinterpret_cast<Matrix *>(data[7] + strides[7]);
+          auto c = reinterpret_cast<Matrix *>(data[8] + strides[8]);
+          auto delta = reinterpret_cast<Vector *>(data[9] + strides[9]);
+          auto solid = reinterpret_cast<scalar_t *>(data[10] + strides[10]);
+          BorderedSweep(a, b, c, delta, du, solid, dt, 0, nlayer - 1, dir, ny,
+                        stride1, stride2, N == 3, wlo, whi);
+        });
+  });
+}
+
+template <int N>
 void vic_redistribute_cuda(at::TensorIterator &iter, double /*dt*/,
                            double /*grav*/, int dir) {
   at::cuda::CUDAGuard device_guard(iter.device());
@@ -284,6 +315,10 @@ REGISTER_CUDA_DISPATCH(vic_assemble_partial, &snap::vic_assemble_partial_cuda);
 REGISTER_CUDA_DISPATCH(vic_assemble_full, &snap::vic_assemble_full_cuda);
 REGISTER_CUDA_DISPATCH(vic_solve_partial, &snap::vic_solve_cuda<3>);
 REGISTER_CUDA_DISPATCH(vic_solve_full, &snap::vic_solve_cuda<5>);
+REGISTER_CUDA_DISPATCH(vic_solve_bordered_partial,
+                       &snap::vic_solve_bordered_cuda<3>);
+REGISTER_CUDA_DISPATCH(vic_solve_bordered_full,
+                       &snap::vic_solve_bordered_cuda<5>);
 REGISTER_CUDA_DISPATCH(vic_redistribute_partial,
                        &snap::vic_redistribute_cuda<3>);
 REGISTER_CUDA_DISPATCH(vic_redistribute_full, &snap::vic_redistribute_cuda<5>);

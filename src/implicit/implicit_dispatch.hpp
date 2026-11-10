@@ -12,11 +12,17 @@ using vic_redistribute_fn = void (*)(at::TensorIterator& iter, double dt,
                                      double grav, int dir);
 using donor_cap_fn = void (*)(at::Tensor& P, at::Tensor const& held, int is,
                               int ie);
+//! vic_solve_* with the corrected-PE wall third-cell entries (weights wlo,
+//! whi) carried as a border in the same pass (forward_sweep_bordered_impl.h)
+using vic_bordered_fn = void (*)(at::TensorIterator& iter, double dt,
+                                 double grav, int dir, double wlo, double whi);
 
 DECLARE_DISPATCH(vic_stage_fn, vic_assemble_partial);
 DECLARE_DISPATCH(vic_stage_fn, vic_assemble_full);
 DECLARE_DISPATCH(vic_stage_fn, vic_solve_partial);
 DECLARE_DISPATCH(vic_stage_fn, vic_solve_full);
+DECLARE_DISPATCH(vic_bordered_fn, vic_solve_bordered_partial);
+DECLARE_DISPATCH(vic_bordered_fn, vic_solve_bordered_full);
 DECLARE_DISPATCH(vic_redistribute_fn, vic_redistribute_partial);
 DECLARE_DISPATCH(vic_redistribute_fn, vic_redistribute_full);
 DECLARE_DISPATCH(donor_cap_fn, donor_cap);
