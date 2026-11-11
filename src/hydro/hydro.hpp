@@ -186,10 +186,6 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! read once from SNAP_FLUX_COVARIANCE; on unless set to 0/false/off/no
   //! (or empty)
   static bool flux_covariance();
-  //! fourth-order, cell/face-consistent x1 reference density for the
-  //! well-balanced reconstruction (#289); read once from SNAP_WB_REF4, off
-  //! unless it is set
-  static bool wb_ref4();
   //! subtract the x1 rho-w covariance dz^2/12 rho_1 w_1 / rho from the
   //! reconstructed cell velocity? read once from SNAP_X1_MASS_COVARIANCE; off
   //! unless it is set
@@ -274,7 +270,8 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   mutable torch::Tensor x1_rows_;
 
   void _check_stretched_x1(torch::Tensor const& u) const;
-  //! SNAP_WB_REF4 stencils for this block's x1 grid, built on first use
+  //! conversion-order 4 face-density stencils for this block's x1 grid, built
+  //! on first use
   mutable std::shared_ptr<WbRef4Stencils> wb_ref4_;
   //! the x1 reconstruction's optimal-linear rows (cp5) for the face density
   mutable std::shared_ptr<Center5InterpImpl> dsf_lin_;
