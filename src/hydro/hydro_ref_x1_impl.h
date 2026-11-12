@@ -11,8 +11,14 @@
 #include <snap/snap.h>
 
 #include "hydro_dispatch.hpp"
+#include "split_reference_scalar.hpp"
 
 namespace snap {
+using std::exp;
+using std::fabs;
+using std::floor;
+using std::log;
+using std::pow;
 
 template <typename T>
 inline DISPATCH_MACRO T hydro_ref_x1_face(T const* psf_lo, T const* psf_hi,
@@ -29,7 +35,7 @@ inline DISPATCH_MACRO void hydro_ref_x1_pressure_scan_impl(
     int nc1, int iu, T grav) {
   int flat = column * nc1;
   T face = top_anchor;
-  T min_positive = std::numeric_limits<T>::min();
+  T min_positive = reference_min_positive<T>();
   for (int i = iu; i >= 0; --i) {
     T dp = grav * rho[flat + i] * dx1f[i];
     T lo = face + dp;

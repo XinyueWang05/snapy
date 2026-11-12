@@ -81,6 +81,20 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
   int blocks = ncolumns;
   auto stream = at::cuda::getCurrentCUDAStream();
 
+  // A trailing pair dimension selects finite-increment reference arithmetic.
+  if (w.dim() == 5) {
+    TORCH_CHECK(w.scalar_type() == torch::kFloat64 && w.size(4) == 2,
+                "split reference requires packed FP64 pairs");
+    auto ptr = [](torch::Tensor const& t) -> SRS* {
+      return t.defined() ? reinterpret_cast<SRS*>(t.data_ptr<double>()) : nullptr;
+    };
+    hydro_ref_x1_cuda_kernel<<<blocks, threads, 0, stream>>>(
+        ptr(w), ptr(dx1f), ptr(anchor), ptr(psf_lo), ptr(psf_hi), ptr(pref),
+        ptr(dsf), ptr(dref), ncolumns, nc1, iu, SRS(grav), x1_grid, phys_in,
+        phys_out, wall_clamp, ptr(rows));
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return;
+  }
   AT_DISPATCH_FLOATING_TYPES(w.scalar_type(), "hydro_ref_x1_cuda", [&] {
     auto anchor_ptr = anchor.defined() ? anchor.data_ptr<scalar_t>() : nullptr;
     auto rows_ptr = rows.defined() ? rows.data_ptr<scalar_t>() : nullptr;

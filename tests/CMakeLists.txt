@@ -8,6 +8,8 @@ setup_test(test_eos)
 setup_test(test_fp32_storage)
 # ideal-gas refuses a moist card; AthenaArray keeps float32 values
 setup_test(test_eos_io_core)
+setup_test(test_split_reference)
+set_tests_properties(test_split_reference.${buildl} PROPERTIES LABELS "fp32-foundations;fp32-dynamics;hydro")
 setup_test(test_pressure_scan_x1)
 set_tests_properties(test_pressure_scan_x1.${buildl} PROPERTIES
   LABELS "fp32-foundations;fp32-pressure-scan;hydro")
@@ -405,6 +407,12 @@ snapy_add_python_test(test_flux_covariance_rowset TIMEOUT 300 LABELS "python;hyd
 snapy_add_python_test(test_wb_ref4_order TIMEOUT 300 LABELS "python;hydro")
 snapy_add_python_test(test_x1_centroid_rest TIMEOUT 300 LABELS "python;hydro")
 snapy_add_python_test(test_radial_order TIMEOUT 300 LABELS "python;hydro")
+snapy_add_python_test(test_perturbation_flux_split TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-dynamics")
+snapy_add_python_test(test_perturbation_flux TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-dynamics")
+snapy_add_python_test(test_perturbation_flux_wb4 SCRIPT test_perturbation_flux.py
+  TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-dynamics")
+set_tests_properties(test_perturbation_flux_wb4_python PROPERTIES
+  ENVIRONMENT "SNAP_WB_REF4=1;SNAP_X1_MASS_COVARIANCE=1")
 snapy_add_python_test(test_conversion_order TIMEOUT 600 LABELS "python;hydro")
 snapy_add_python_test(test_balance_column_order4 TIMEOUT 60 LABELS "python;hydro")
 snapy_add_python_test(test_radial_order_x1_centroid SCRIPT test_radial_order.py

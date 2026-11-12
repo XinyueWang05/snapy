@@ -9,7 +9,7 @@ Updated: 2026-11-12. Roadmap: [FP32_ROADMAP.md](FP32_ROADMAP.md).
 | M0 Baseline and records | Merged baseline | PR #326 merged as 2d92c92; M3a validation below |
 | M1 Reference consolidation | Merged (#326) | Shared operator, cache invalidation, composition restart; CPU and reviewer CUDA evidence below |
 | M2 Thermodynamic perturbations | Merged (#326) | Delta thermodynamics, exact total reads and FP32 floors; hydro wiring follows |
-| M3 Perturbation dynamics | M3a implemented, CPU validated | Signed scan passes; CUDA validation pending; M3b reference split and M3c hydro wiring remain |
+| M3 Perturbation dynamics | M3a–M3c implemented, CPU validated | 39/39 foundation tests pass; split reference, flux/source coupling, seams and restart; CUDA execution pending |
 | M4 True FP32 | Planned | Follow perturbation kernels |
 | M5 Coupled workflow/restart | Planned | Validate actual kintera build |
 | M6 Science/performance | Planned | Requires production GPU and coupled cases |
@@ -430,3 +430,74 @@ changes require CUDA CI/hardware.
 - M3a implementation is ready for review with CPU evidence. GPU execution and
   actual MPS validation remain outstanding. M3b and M3c are not implemented;
   the new scan is an internal building block, not an enabled hydro mode.
+
+### M3b/M3c implementation in progress
+
+- Reused the complete CPU/CUDA reference kernel with finite-increment FP64
+  scalar pairs, including the M3a recurrence. Nonlinear branches inspect totals;
+  the base follows the selected branch, rather than a second independently
+  guarded background solution. Exponential/logarithmic increments use
+  `expm1`/`log1p`. Floors discard the increment when active.
+- Simplified caching: retain the existing validated geometry/stencil cache only.
+  Recompute branch-dependent values each sweep; there is no derived background
+  cache to invalidate on reference replacement, restart, or thermodynamic change.
+- Extended existing anchor relay and owner-cell ghost exchange to carry pressure
+  pairs. wb_ref4 retains its existing ordering and total density semantics.
+- Wiring opt-in `dynamics: {anomaly: true, perturbation-flux: true}` for Cartesian
+  constant-cv ideal-moist HLLC. Reconstruction and sensitive reference operations
+  remain FP64 in M3; true FP32 computation remains M4. Immersed solids and MPS
+  are outside this initial path. No kintera API/dependency change.
+- Pending: compile, nonlinear reference tests, full dynamics equivalence,
+  balanced/unbalanced rest, heating, split-column and conservation checks.
+
+
+### M3b/M3c completion — 2026-11-12
+
+- M3b and M3c implementation is complete for the documented Cartesian,
+  constant-cv ideal-moist HLLC scope. Numerical contract and remaining M4
+  boundaries: [fp32-perturbation-dynamics.md](docs/derivations/fp32-perturbation-dynamics.md).
+- The full paired reference shares existing CPU/CUDA scan and cell kernels;
+  FP32 or FP64 input increments are evaluated in FP64. Current-state guards
+  select both components. Tests cover uniform, stretched and legacy log-mean
+  grids, finite changes, sub-FP64-ulp increments, and active pressure floors.
+- Hydro now carries x1 pressure increments through reconstruction and HLLC;
+  horizontal/gravity-free sweeps use static face gauges after FP64
+  reconstruction. All directions retain background gradients. Vertical source
+  coupling uses mixture-density increments and preserves floor residuals and
+  unbalanced initial profiles. Total face pressure remains available to implicit
+  and energy consumers. The existing gravity energy operator is reused.
+- Anchor/owner-cell exchange carries paired pressures; remote seam flux payloads
+  also carry the background with the corresponding source correction. Same-process
+  four-block column tests pass for smooth and discontinuous tracers. No extra
+  mutable background cache or restart schema was introduced.
+- Built all 15 C++ executables in the foundation label from current source via
+  `PYTHONPATH=/tmp/snapy-rebase-python cmake --build build --parallel 4 --target test_balance_column.release test_coordinate.release test_eos.release test_fp32_storage.release test_gravity_work_cache_to.release test_hydro_ref_x1.release test_hydro_ref_x1_rf_wall.release test_implicit_face_work_jacobian.release test_pressure_scan_x1.release test_riemann.release test_split_reference.release test_stretched_x1_ref.release test_wb_ref_wall.release test_wb_wall_corner.release test_x1_seam_split.release`:
+  passed. The final mixed-dtype reference test was rebuilt with
+  `PYTHONPATH=/tmp/snapy-rebase-python cmake --build build --parallel 4 --target test_split_reference.release`.
+- Rebuilt Python bindings using
+  `PYTHONPATH=/tmp/snapy-rebase-python SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk MAX_JOBS=4 python -m pip install --no-deps --no-build-isolation --upgrade --target /tmp/snapy-rebase-python .`;
+  refreshed the final library with
+  `cp build/lib/libsnap_release.dylib /tmp/snapy-rebase-python/snapy/lib/libsnap_release.dylib`.
+- `ctest --test-dir build --output-on-failure -L fp32-dynamics`:
+  **4/4 passed**. Includes the wb_ref4 plus mass-covariance configuration.
+- Final `ctest --test-dir build --output-on-failure -L fp32-foundations`:
+  **39/39 passed**, 67.86 seconds. Paired reference tests: 6 CPU cases passed,
+  6 CUDA cases skipped. The final run includes FP32 increments compared with
+  correctly promoted FP64 oracle values (an earlier test harness comparison
+  rejected mixed dtypes; fixed without changing numerical tolerances).
+- Full dynamics comparisons: normalized differences no greater than
+  **3.63e-14**, including conversion-order 4, stretched grids, VIC scheme 9,
+  partial hydrostatic correction, heating and moist sedimentation. Deliberately
+  unbalanced rest still accelerates. Balanced rest with FP32 storage rounding
+  for 20 steps has maximum vertical momentum **1.27e-13**. Closed-domain mass
+  and gravity-free total energy are conserved within **2e-13** relative.
+  Same-dtype restart continuation is **bit-identical**.
+- Cross-repo compatibility: tested against isolated **kintera 2.6.10**; minimum
+  remains **2.6.9**. No kintera source/API changes. Legacy restarts without the
+  species background cannot enable perturbation fluxes. No claim of true FP32
+  compute, GPU performance, or production Jupiter acceptance is made here.
+  CUDA source is implemented but uncompiled/unexecuted on this CPU-only host;
+  MPS and immersed solids are explicitly outside the enabled scope.
+- Next implementation milestone: **M4**, including reconstruction dtype policy,
+  FP64 implicit/chemistry boundaries, and full moist GPU acceptance. M3 CPU
+  implementation is no longer blocking that work.
