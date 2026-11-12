@@ -77,6 +77,35 @@ equivalence and conservation; retain exact same-dtype restart continuation.
 Gate: FP64 equivalence, conservation, storage-emulated rest noise and split
 columns. A velocity target alone cannot distinguish initialization imbalance.
 
+#### M3 delivery stages after merged PR #326
+
+1. **M3a — Explicit signed pressure scan (current branch).** Extract the
+   top-to-bottom/bottom-to-top recurrence from the existing reference kernel.
+   Accept an explicit anchor increment and mixture-density increments; return
+   signed lower/upper face-pressure increments without floors or a total-state
+   subtraction. Share the recurrence with the default CPU/CUDA path, retaining
+   its anchor calculation and floors. Gate: default-reference regression,
+   sub-ulp signed increments, linearity, zero gravity, irregular widths,
+   ghost-face orientation, and vertically split-column anchor relay. Keep this
+   internal; do not expose a working perturbation-flux mode yet.
+2. **M3b — Split complete reference evaluation.** Use M3a with background plus
+   deltas; evaluate anchor changes, pressure floors, pressure quadrature guards,
+   and rho/p wall continuation from FP64 totals. Define guard/fallback behavior
+   and retain the static residual force for unbalanced backgrounds. Cache only
+   immutable background evaluations, invalidating on reference, restart, grid,
+   device, and dtype changes. Preserve wb_ref4/conversion-order 4 and seams.
+3. **M3c — Wire reconstruction, HLLC, and sources together.** Carry pressure
+   deltas through all sweeps and the existing perturbation HLLC entry point;
+   separate pressure-delta momentum flux from total energy pressure. Add the
+   opt-in configuration only when flux/source, positivity, boundaries, and
+   explicit/implicit pressure consumers have matching contracts. Validate
+   balanced and deliberately unbalanced rest, heating, and split columns before
+   advancing to M4.
+
+M3a alone is not a complete hydrostatic-reference split: log means, wall
+continuation, quadrature guards and pressure floors are nonlinear. Full FP32
+execution remains gated on M3b/M3c and M4, not on pressure-scan tests alone.
+
 ### M4 — True FP32 with explicit boundaries
 
 FP32 storage, reconstruction, fluxes and tendencies; FP64 background/geometry
