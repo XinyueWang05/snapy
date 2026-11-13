@@ -412,6 +412,7 @@ snapy_add_python_test(test_fp32_split SCRIPT test_perturbation_flux_split.py
 snapy_add_python_test(test_fp32_compute TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-compute")
 snapy_add_python_test(test_fp32_policy TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-compute")
 snapy_add_python_test(test_fp32_implicit TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-compute")
+snapy_add_python_test(test_fp32_vic_pivot TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-compute")
 snapy_add_python_test(test_fp32_compute_1000 SCRIPT test_fp32_compute.py
   ARGS --steps 1000 TIMEOUT 600 LABELS "python;hydro;fp32-acceptance")
 snapy_add_python_test(test_fp32_jupiter TIMEOUT 600 LABELS "python;hydro;fp32-acceptance")
