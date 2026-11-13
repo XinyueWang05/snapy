@@ -501,3 +501,23 @@ changes require CUDA CI/hardware.
 - Next implementation milestone: **M4**, including reconstruction dtype policy,
   FP64 implicit/chemistry boundaries, and full moist GPU acceptance. M3 CPU
   implementation is no longer blocking that work.
+
+### Rebase onto main aced752 — 2026-11-13
+
+- Rebased PR #342 onto main's consolidated hydrostatic density reference,
+  reconstruction, VIC gravity work, moist EOS base and deck-option defaults.
+  Kept the main implementation of each operator and layered paired reference
+  evaluation onto it. The earlier commit IDs above describe historical runs.
+- Replaced the obsolete wb_ref4/environment-switch test variant with an explicit
+  `--x1-mass-covariance` fixture using the current dynamics deck key. Conversion
+  order 4 retains main's unconditional face-density correction.
+- Updated main's new wall-test member-pointer call for the extended reference
+  signature. Freshly rebuilt the foundation C++ executables plus
+  `test_pref_local_seam.release`, `test_options_defaults.release`,
+  `test_eos_io_core.release` and `test_lu_failure.release`; rebuilt bindings with
+  `PYTHONPATH=/tmp/snapy-rebase-python SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk MAX_JOBS=2 python -m pip install --no-deps --no-build-isolation --upgrade --target /tmp/snapy-rebase-python .`.
+- `ctest --test-dir build --output-on-failure -L fp32-foundations`: **31/31 passed**,
+  56.76 seconds. Main removed duplicate variants, accounting for the smaller
+  count. `ctest --test-dir build --output-on-failure -R 'test_(options_defaults|eos_io_core|lu_failure|pref_local_seam)\.release'`:
+  **4/4 passed**, 3.02 seconds. Kintera remains 2.6.10; no cross-repo API changes.
+  CUDA remains untested on this CPU host.

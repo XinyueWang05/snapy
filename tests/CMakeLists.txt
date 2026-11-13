@@ -409,10 +409,8 @@ snapy_add_python_test(test_x1_centroid_rest TIMEOUT 300 LABELS "python;hydro")
 snapy_add_python_test(test_radial_order TIMEOUT 300 LABELS "python;hydro")
 snapy_add_python_test(test_perturbation_flux_split TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-dynamics")
 snapy_add_python_test(test_perturbation_flux TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-dynamics")
-snapy_add_python_test(test_perturbation_flux_wb4 SCRIPT test_perturbation_flux.py
-  TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-dynamics")
-set_tests_properties(test_perturbation_flux_wb4_python PROPERTIES
-  ENVIRONMENT "SNAP_WB_REF4=1;SNAP_X1_MASS_COVARIANCE=1")
+snapy_add_python_test(test_perturbation_flux_x1_mass_covariance SCRIPT test_perturbation_flux.py
+  ARGS --x1-mass-covariance TIMEOUT 300 LABELS "python;hydro;fp32-foundations;fp32-dynamics")
 snapy_add_python_test(test_conversion_order TIMEOUT 600 LABELS "python;hydro")
 snapy_add_python_test(test_balance_column_order4 TIMEOUT 60 LABELS "python;hydro")
 snapy_add_python_test(test_radial_order_x1_centroid SCRIPT test_radial_order.py
