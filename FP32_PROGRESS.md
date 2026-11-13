@@ -1,6 +1,6 @@
 # FP32 project progress
 
-Updated: 2026-11-12. Roadmap: [FP32_ROADMAP.md](FP32_ROADMAP.md).
+Updated: 2026-11-13. Roadmap: [FP32_ROADMAP.md](FP32_ROADMAP.md).
 
 ## Milestones
 
@@ -9,8 +9,8 @@ Updated: 2026-11-12. Roadmap: [FP32_ROADMAP.md](FP32_ROADMAP.md).
 | M0 Baseline and records | Merged baseline | PR #326 merged as 2d92c92; M3a validation below |
 | M1 Reference consolidation | Merged (#326) | Shared operator, cache invalidation, composition restart; CPU and reviewer CUDA evidence below |
 | M2 Thermodynamic perturbations | Merged (#326) | Delta thermodynamics, exact total reads and FP32 floors; hydro wiring follows |
-| M3 Perturbation dynamics | M3a–M3c implemented, CPU validated | 39/39 foundation tests pass; split reference, flux/source coupling, seams and restart; CUDA execution pending |
-| M4 True FP32 | M4a–M4c implemented, CPU validated | 43/43 foundations; 1000-step moist/Jupiter acceptance; FP32 VIC with checked FP64 fallback; GPU validation pending |
+| M3 Perturbation dynamics | M3a–M3c implemented, CPU validated | 31/31 foundation tests pass after main rebase; split reference, flux/source coupling, seams and restart; CUDA execution pending |
+| M4 True FP32 | M4a–M4c implemented, CPU validated | 35/35 foundations after main rebase; 1000-step moist/Jupiter acceptance; FP32 VIC with checked FP64 fallback; GPU validation pending |
 | M5 Coupled workflow/restart | Planned | Validate actual kintera build |
 | M6 Science/performance | Planned | Requires production GPU and coupled cases |
 
@@ -610,3 +610,22 @@ changes require CUDA CI/hardware.
   were not compiled/executed here; production decks and GPU performance remain
   unvalidated. M5 covers broader coupled workflow/restart integration; M6 retains
   production science/performance validation. No new kintera dependency or API.
+
+### M4 rebase validation — 2026-11-13
+
+- Rebased PR #343 onto validated M3 `337b157`, based on main `aced752`.
+  Preserved main's consolidated reconstruction, moist EOS and VIC operators,
+  including corrected-PE wall coupling, while retaining FP32 views/workspaces
+  and checked FP64 fallback. The stack contains M3 once, followed by M4.
+- Freshly rebuilt the same C++ target set and Python bindings as the M3 rebase
+  above. `ctest --test-dir build --output-on-failure -L fp32-foundations`:
+  **35/35 passed**, 72.03 seconds. Main removed eight duplicate variants from
+  the previous 43-test gate. Formatting and `git diff --check` pass.
+- `ctest --test-dir build --output-on-failure -R 'test_(options_defaults|eos_io_core|lu_failure|pref_local_seam)\.release'`:
+  **4/4 passed**, 2.91 seconds.
+- `ctest --test-dir build --output-on-failure -L fp32-acceptance`:
+  **2/2 passed**, 89.09 seconds. The FP32 VIC moist case has relative mass drift
+  **1.674e-7** and reduced Jupiter **2.347e-7**, after 1000 steps; zero FP64
+  implicit fallbacks. The stress test separately confirms fallback recovery.
+- Cross-repo compatibility unchanged: kintera 2.6.10 tested, minimum 2.6.9,
+  no kintera edits/API changes. CUDA and production GPU validation remain pending.
