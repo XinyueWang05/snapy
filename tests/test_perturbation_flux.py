@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """M3 integration: full RHS, unbalanced rest, heating, conversion and VIC."""
+import argparse
 import os
 import tempfile
 import torch
@@ -8,10 +9,13 @@ from test_anomaly_storage import initial_state, interior, run_steps
 from snapy import MeshBlock, MeshBlockOptions, kIDN, kIPR, kIV1, balance_column
 
 
+test_covariance = False
+
 def make(split, order=2, scheme=0, nh=1., gravity=True, outputs=None, stretched=False, sediment=False, anomaly=True, solver="hllc"):
     with open(os.path.join(os.path.dirname(__file__), "test_anomaly_storage.yaml")) as f:
         cfg = yaml.safe_load(f)
     cfg["dynamics"].update({"anomaly": anomaly, "perturbation-flux": split,
+                            "x1-mass-covariance": test_covariance,
                             "conversion-order": order, "riemann-solver": {"type": solver}})
     if stretched:
         cfg["geometry"]["cells"]["x1rat"] = 1.02
@@ -87,6 +91,10 @@ def restart():
 
 
 def main():
+    global test_covariance
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--x1-mass-covariance", action="store_true")
+    test_covariance = parser.parse_args().x1_mass_covariance
     torch.set_num_threads(1)
     for invalid in ({"anomaly": False}, {"solver": "lmars"}):
         try:

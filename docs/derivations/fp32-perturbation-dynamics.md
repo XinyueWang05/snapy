@@ -40,8 +40,10 @@ Only geometry/stencil setup is cached. Branch-dependent values are reevaluated
 every sweep, so reference replacement and restart cannot retain stale derived
 backgrounds. The existing geometry cache checks identity, version, device, dtype
 and wall/grid configuration. Vertical seams relay both pressure components and
-exchange owner-cell reference components before reconstruction. wb_ref4 still
-corrects total face density after the existing owner-cell exchange.
+exchange owner-cell reference components before reconstruction. Conversion order 4
+corrects total face density after the existing owner-cell exchange. The removed
+`SNAP_WB_REF4` switch is not used; the interior density reference follows main
+and uses each cell's own rho/p.
 
 ## Reconstruction and flux/source contract
 
