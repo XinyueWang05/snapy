@@ -184,7 +184,12 @@ torch::Tensor CoriolisXYZImpl::forward(torch::Tensor du, torch::Tensor w,
     // planetary AAM gains from mass moved along x1 is the term those
     // equations leave out. This makes the force not skew-symmetric (the rest
     // of it uses the cell momentum): see the note at the option.
-    if (phydro->axial_skew_form()) {
+    // the option-A path acts on the call that carries the x2/x3 mass fluxes;
+    // the x1-only call of the mass-w path (input (1, m1, 0, 0)) has no
+    // horizontal velocity and must not overwrite the stage's torque sums
+    if (phydro->axial_skew_form() &&
+        (phydro->axial_mass_fluxes()[1].defined() ||
+         phydro->axial_mass_fluxes()[2].defined())) {
       // #357 option A (traditional / shallow water): the horizontal force is
       // the skew-symmetric operator from interpolated momentum, which does no
       // work (GnomonicEquiangle::axial_skew_coriolis_). Its AAM exchange
