@@ -1,4 +1,7 @@
 // yaml
+#include <cstdlib>
+#include <string>
+
 #include <yaml-cpp/yaml.h>
 
 // snap
@@ -191,11 +194,35 @@ torch::Tensor CoriolisXYZImpl::forward(torch::Tensor du, torch::Tensor w,
       // angular acceleration after the stage (MeshBlock::apply_axial_torque).
       auto pmb = phydro->pmb;
       auto pcoord = pmb->pcoord;
+      int sj = pcoord->jl(), ej = pcoord->ju() + 1;
+      int sk = pcoord->kl(), ek = pcoord->ku() + 1;
+      int si = pcoord->il(), ei = pcoord->iu() + 1;
+      // internal comparison switch (#357 option A): variant C keeps the
+      // cell-form force (pointwise skew) and lets the global uniform torque
+      // carry the whole Coriolis + mass-flux AAM error; default S
+      static bool const variant_c = [] {
+        char const *v = std::getenv("SNAP_AAM_FULL_VARIANT");
+        return v && std::string(v) == "C";
+      }();
+      torch::Tensor sums;
+      if (variant_c) {
+        auto bufs = pmb->named_buffers();
+        auto in = [&](torch::Tensor const &t) {
+          return t.slice(-3, sk, ek).slice(-2, sj, ej).slice(-1, si, ei);
+        };
+        auto k = bufs["coord.aam_k_c"].slice(1, sk, ek).slice(2, sj, ej);
+        auto kk = bufs["coord.aam_kk_c"].slice(0, sk, ek).slice(1, sj, ej);
+        auto r = bufs["coord.x1v"].slice(0, si, ei);
+        auto vol = in(pcoord->cell_volume());
+        auto ktq = (vol * r * (k[VEL2] * in(force[VEL2]) +
+                               k[VEL3] * in(force[VEL3])))
+                       .sum();
+        auto inertia = (vol * in(w[IDN]) * r * r * kk).sum();
+        sums = torch::stack(std::vector<torch::Tensor>{ktq, inertia});
+      } else {
       force[VEL2].zero_();
       force[VEL3].zero_();
       auto cells = pcoord->axial_skew_cells(w);
-      int sj = pcoord->jl(), ej = pcoord->ju() + 1;
-      int sk = pcoord->kl(), ek = pcoord->ku() + 1;
       // per direction: "l" carries the own last cell at the upper face (sent
       // +) and receives the lower neighbour at the lower face; "r" the
       // reverse. The received slots start as the ghost cells, which an
@@ -229,9 +256,10 @@ torch::Tensor CoriolisXYZImpl::forward(torch::Tensor du, torch::Tensor w,
         pmb->finalize_exchange(sv2, sync_opts.dim(SyncOptions::DIM2), works2);
         pmb->finalize_exchange(sv3, sync_opts.dim(SyncOptions::DIM3), works3);
       }
-      auto sums = pcoord->axial_skew_coriolis_(force[VEL2], force[VEL3], w[IDN],
-                                               cells, e2l, e2r, e3l, e3r,
-                                               options->omega1());
+      sums = pcoord->axial_skew_coriolis_(force[VEL2], force[VEL3], w[IDN],
+                                          cells, e2l, e2r, e3l, e3r,
+                                          options->omega1());
+      }
       // the torque the solver's mass fluxes move between relative and
       // planetary AAM (x2, x3 faces), summed over the interior
       auto const &mf = phydro->axial_mass_fluxes();
