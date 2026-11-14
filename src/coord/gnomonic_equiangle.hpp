@@ -129,6 +129,41 @@ class GnomonicEquiangleImpl
                                     torch::Tensor flux3, double omega,
                                     int ny) const override;
 
+  //! #357 option A: skew-symmetric Coriolis operator (traditional / shallow
+  //! water) from interpolated momentum
+  /*!
+   * With v the contravariant velocity, m = rho v, and on every x2 (x3) face
+   * the interpolated normal momentum flux
+   *   M_f = A_f sin_f sum_j W_fj m^n_j
+   * (W: fixed symmetric 6/4/2-point weights that read interior cells only,
+   * aam_w2 / aam_w3; a block-boundary face takes 1/2 of each side's edge cell,
+   * the neighbour's from the cross-panel face-state exchange), the operator is
+   *   A v = -Omega Kn D_P M,   C = A - A^T,
+   * with (D_P M)_c = sum_f sigma_cf (P_f - P_c) M_f, P = s^2 = r^2 cos^2(lat),
+   * Kn = K_cov / (K . K). A v is the zonal (K) force, -A^T v = Omega G^T Theta,
+   * Theta_f = sum_{c in f} sigma_cf (P_f - P_c) omega_c, omega = Kn^T v, the
+   * meridional one. sum_c V v.C v = 0 for every state (exactly skew), and it
+   * reduces to -2 Omega x rho v (traditional) for smooth flow. AAM closes
+   * against M; the rest of the solver's mass-flux torque is carried by the
+   * global uniform torque, one uniform angular acceleration per RK stage
+   * (MeshBlock::apply_axial_torque; its size is printed as aamglobal).
+   */
+  torch::Tensor axial_skew_cells(torch::Tensor const& w) const override;
+  torch::Tensor axial_skew_coriolis_(torch::Tensor row2, torch::Tensor row3,
+                                     torch::Tensor const& rho,
+                                     torch::Tensor const& cells,
+                                     torch::Tensor const& e2l,
+                                     torch::Tensor const& e2r,
+                                     torch::Tensor const& e3l,
+                                     torch::Tensor const& e3r,
+                                     double omega) const override;
+  void axial_torque_rows_(torch::Tensor row2, torch::Tensor row3,
+                          torch::Tensor const& rho_int,
+                          double scale) const override;
+
+  //! option A face weights, [nx2 + 1, nx2] and [nx3 + 1, nx3]
+  torch::Tensor aam_w2, aam_w3;
+
  private:
   //! guards K . K = 0 in a cell centred exactly on the rotation axis
   double _aam_eps2 = 0.;

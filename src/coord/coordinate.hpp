@@ -399,6 +399,30 @@ class CoordinateImpl {
     return torch::Tensor();
   }
 
+  //! conserve-axial-momentum: full, traditional Coriolis (#357 option A): the
+  //! per-cell rows (0, 0, rho v2, rho v3, angular velocity, s^2) the skew
+  //! Coriolis operator exchanges at block boundaries; see GnomonicEquiangle.
+  virtual torch::Tensor axial_skew_cells(torch::Tensor const& w) const {
+    return torch::Tensor();
+  }
+
+  //! add the skew-symmetric Coriolis force (covariant, per volume) to the
+  //! full-shape rows `row2`, `row3`; returns {sum V K.F, sum V rho K.K} over
+  //! the interior; see GnomonicEquiangle. Undefined here.
+  virtual torch::Tensor axial_skew_coriolis_(
+      torch::Tensor row2, torch::Tensor row3, torch::Tensor const& rho,
+      torch::Tensor const& cells, torch::Tensor const& e2l,
+      torch::Tensor const& e2r, torch::Tensor const& e3l,
+      torch::Tensor const& e3r, double omega) const {
+    return torch::Tensor();
+  }
+
+  //! add `scale` rho K (covariant) to the interior of `row2`, `row3`: a
+  //! uniform angular acceleration about the omega1 axis. No-op here.
+  virtual void axial_torque_rows_(torch::Tensor row2, torch::Tensor row3,
+                                  torch::Tensor const& rho_int,
+                                  double scale) const {}
+
   virtual torch::Tensor forward(torch::Tensor prim, torch::Tensor flux1,
                                 torch::Tensor flux2, torch::Tensor flux3,
                                 torch::Tensor face_pressure1 = torch::Tensor());

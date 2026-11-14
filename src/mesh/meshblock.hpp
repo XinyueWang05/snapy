@@ -215,6 +215,18 @@ class MeshBlockImpl : public torch::nn::Cloneable<MeshBlockImpl> {
   void apply_gravity_work_fixer(Variables& vars, torch::Tensor const& global);
   //! set by a Mesh with several local blocks: it reduces and applies the fix
   bool defer_gravity_work_fixer = false;
+
+  //! #357 option A (conserve-axial-momentum full, traditional): this stage's
+  //! {torque residual, sum V rho K.K} of the block (host, float64; zeros when
+  //! the option is not active)
+  torch::Tensor axial_torque_sums() const;
+  //! add the stage's share of the global uniform angular acceleration
+  //! alpha = global[0] / global[1]: w2 dt alpha rho K to the interior
+  //! momentum rows, so the Coriolis AAM exchange matches the solver's mass
+  //! fluxes on every stage. A Mesh with several local blocks sums first.
+  void apply_axial_torque(Variables& vars, double dt, int stage,
+                          torch::Tensor const& global);
+  bool defer_axial_torque = false;
   void exchange(Variables& vars, SyncOptions const& opts) const;
 
   //! Serialize state into MeshBlock-owned buffers without launching comms yet.

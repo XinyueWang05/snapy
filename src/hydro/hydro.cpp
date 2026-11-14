@@ -36,6 +36,14 @@ bool HydroImpl::axial_coriolis_form() const {
   return options->conserve_axial_momentum() == "full" && axial_flux_form();
 }
 
+bool HydroImpl::axial_skew_form() const {
+  if (!axial_coriolis_form()) return false;
+  auto const& c = options->coriolis();
+  if (!c) return false;
+  return c->traditional() ||
+         (peos && peos->options->type() == "shallow-water");
+}
+
 void HydroImpl::reset() {
   TORCH_CHECK(pmb, "[Hydro] Parent MeshBlock is null");
   TORCH_CHECK(
@@ -66,6 +74,14 @@ void HydroImpl::reset() {
         "dynamics/conserve-axial-momentum is off for this run: it needs "
         "coriolis type xyz with omega2 = omega3 = 0 (the AAM is about the "
         "omega1 axis)");
+  if (axial_coriolis_form() && options->coriolis() &&
+      !options->coriolis()->traditional() &&
+      options->eos()->type() != "shallow-water")
+    TORCH_WARN_ONCE(
+        "dynamics/conserve-axial-momentum full: the skew-symmetric Coriolis "
+        "operator needs the traditional approximation or shallow water; "
+        "without it the axial Coriolis component is taken from the face mass "
+        "fluxes as before and the force is not skew-symmetric");
 
   //// ---- (1) set up equation-of-state model ---- ////
   peos = EquationOfStateImpl::create(options->eos(), this);
@@ -265,6 +281,11 @@ void HydroImpl::reset() {
         register_buffer("conversion_trips", torch::zeros({1}, torch::kInt64));
   _lim_cut = register_buffer("lim_cut", torch::zeros({1}, torch::kFloat64));
   _lim_flux = register_buffer("lim_flux", torch::zeros({1}, torch::kFloat64));
+  // #357 option A: per-stage global-torque sums (host) and the density
+  // (plain members, not buffers: restart state is unchanged)
+  _aam_tq = torch::zeros({3}, torch::kFloat64);
+  _aam_tq_cum = torch::zeros({3}, torch::kFloat64);
+  _aam_tq_rho = torch::zeros({0}, torch::kFloat64);
   _gwfix_d = register_buffer("gwfix_d", torch::zeros({1}, torch::kFloat64));
   _gwfix_total =
       register_buffer("gwfix_total", torch::zeros({1}, torch::kFloat64));

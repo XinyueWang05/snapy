@@ -361,8 +361,28 @@ void MeshImpl::forward(MeshVariables& vars, double dt, int stage) {
   }
 
   for (auto& b : blocks) b->defer_gravity_work_fixer = true;
+  for (auto& b : blocks) b->defer_axial_torque = true;
   run_block_jobs(
       [&](size_t i) { blocks[i]->advance_local(vars[i], dt, stage); });
+  // #357 option A: one global uniform torque per stage, summed over the
+  // local blocks and reduced over the ranks
+  if (blocks.front()->phydro->axial_skew_form()) {
+    auto sums = torch::zeros({3}, torch::kFloat64);
+    for (size_t i = 0; i < blocks.size(); ++i)
+      sums += blocks[i]->axial_torque_sums();
+    std::vector<at::Tensor> reduce = {sums};
+    auto layout = blocks.front()->get_layout();
+    if (layout->has_process_group()) {
+      layout->comm->allreduce(reduce, c10d::ReduceOp::SUM);
+    }
+    run_block_jobs([&](size_t i) {
+      blocks[i]->apply_axial_torque(vars[i], dt, stage, reduce[0]);
+      auto& v = vars[i];
+      blocks[i]->apply_boundaries(
+          v, v.at("hydro_u"),
+          v.count("scalar_s") ? v.at("scalar_s") : torch::Tensor());
+    });
+  }
   // gravity-work-fixer: one sum over the local blocks, one reduction
   auto root = blocks.front();
   if (stage == static_cast<int>(root->pintg->stages.size()) - 1 &&

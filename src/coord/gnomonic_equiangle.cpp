@@ -35,6 +35,31 @@ static torch::Tensor cs_axial_rotation_field(torch::Tensor alpha,
   return k;
 }
 
+//! #357 option A: fixed symmetric interpolation of a cell field to the n + 1
+//! faces of a block line of n interior cells, reading interior cells only:
+//! the 6-point central weights (1, -8, 37, 37, -8, 1) / 60 (the central part
+//! of cp5), 4-point (-1, 7, 7, -1) / 12 and 2-point 1/2 near the block ends.
+//! A block-boundary face takes 1/2 of the own edge cell (the other half is
+//! the neighbour's). Rows: faces; columns: cells. Empty for n < 6.
+static torch::Tensor aam_face_weights(int n) {
+  if (n < 6) return torch::zeros({0}, torch::kFloat64);
+  auto W = torch::zeros({n + 1, n}, torch::kFloat64);
+  auto a = W.accessor<double, 2>();
+  a[0][0] = 0.5;
+  a[n][n - 1] = 0.5;
+  double c4[4] = {-1., 7., 7., -1.}, c6[6] = {1., -8., 37., 37., -8., 1.};
+  for (int f = 1; f < n; ++f) {
+    if (f == 1 || f == n - 1) {
+      a[f][f - 1] = a[f][f] = 0.5;
+    } else if (f == 2 || f == n - 2) {
+      for (int m = 0; m < 4; ++m) a[f][f - 2 + m] = c4[m] / 12.;
+    } else {
+      for (int m = 0; m < 6; ++m) a[f][f - 3 + m] = c6[m] / 60.;
+    }
+  }
+  return W;
+}
+
 void GnomonicEquiangleImpl::reset() {
   TORCH_CHECK(pmb, "[GnomonicEquiangle] Parent MeshBlock is null");
 
@@ -217,6 +242,10 @@ void GnomonicEquiangleImpl::reset() {
     // cell holds no AAM, its correction is zero, and the AAM flux through its
     // faces is the one leak of the flux form (one cell per polar panel)
     _aam_eps2 = 1.e-24;
+    // #357 option A face weights (axial_skew_coriolis_)
+    // (plain members, not buffers: restart state is unchanged)
+    aam_w2 = aam_face_weights(op->nx2());
+    aam_w3 = aam_face_weights(op->nx3());
   }
 
   // register metric data (placeholder, overwritten later)
@@ -773,6 +802,114 @@ torch::Tensor GnomonicEquiangleImpl::_interp_ghost_BT(torch::Tensor buf,
                                                       bool flip) const {
   return _interp_ghost(buf, flip ? usrc_BT : usrc_BT.flip(0), usrc_shift_BT,
                        -2);
+}
+
+torch::Tensor GnomonicEquiangleImpl::axial_skew_cells(
+    torch::Tensor const& w) const {
+  // rows (0, 0, rho v2, rho v3, omega, P) on every cell, ghosts included:
+  // rows 1-3 travel as a velocity through the face-state exchange
+  auto out = torch::zeros({6, w.size(1), w.size(2), w.size(3)}, w.options());
+  auto r = x1v;                                        // [nc1]
+  auto klc = aam_kl_c;                                 // [3, nc3, nc2, 1]
+  auto kk = aam_kk_c;                                  // [nc3, nc2, 1]
+  out[2] = w[IDN] * w[IVY];
+  out[3] = w[IDN] * w[IVZ];
+  out[4] = (klc[VEL2] * w[IVY] + klc[VEL3] * w[IVZ]) / (r * (kk + _aam_eps2));
+  out[5] = r * r * kk + 0. * w[IDN];
+  return out;
+}
+
+torch::Tensor GnomonicEquiangleImpl::axial_skew_coriolis_(
+    torch::Tensor row2, torch::Tensor row3, torch::Tensor const& rho,
+    torch::Tensor const& cells, torch::Tensor const& e2l,
+    torch::Tensor const& e2r, torch::Tensor const& e3l,
+    torch::Tensor const& e3r, double omega) const {
+  int si = il(), ei = iu() + 1;
+  int sj = jl(), ej = ju() + 1;
+  int sk = kl(), ek = ku() + 1;
+  int n2 = ej - sj, n3 = ek - sk;
+  TORCH_CHECK(aam_w2.dim() == 2 && aam_w2.size(1) == n2 && aam_w3.dim() == 2 &&
+                  aam_w3.size(1) == n3,
+              "conserve-axial-momentum full: the skew Coriolis operator needs "
+              "at least 6 cells per block along x2 and x3");
+  auto in = [&](torch::Tensor const& t) {
+    return t.slice(-3, sk, ek).slice(-2, sj, ej).slice(-1, si, ei);
+  };
+  auto r = x1v.slice(0, si, ei);                             // [n1]
+  auto vol = in(cell_volume());                              // [n3, n2, n1]
+  auto kk = aam_kk_c.slice(0, sk, ek).slice(1, sj, ej);      // [n3, n2, 1]
+  auto klc = aam_kl_c.slice(1, sk, ek).slice(2, sj, ej);     // [3, n3, n2, 1]
+  auto kc = aam_k_c.slice(1, sk, ek).slice(2, sj, ej);       // [3, n3, n2, 1]
+  auto rhoi = in(rho);
+  auto m2 = in(cells[2]), m3 = in(cells[3]), om = in(cells[4]), P = in(cells[5]);
+
+  // ---- x2 faces: [n3, n2 + 1, n1] ----
+  auto W2 = aam_w2.to(m2.options());
+  auto lo2 = e2l.select(2, sj).slice(1, sk, ek).slice(2, si, ei);  // [6, n3, n1]
+  auto hi2 = e2r.select(2, ej).slice(1, sk, ek).slice(2, si, ei);
+  auto Mi2 = torch::einsum("fj,kji->kfi", {W2, m2});
+  Mi2.select(1, 0) += 0.5 * lo2[2];
+  Mi2.select(1, n2) += 0.5 * hi2[2];
+  auto As2 = face_area2().slice(0, sk, ek).slice(1, sj, ej + 1).slice(2, si, ei) *
+             sine_face2_kj.slice(0, sk, ek).slice(1, sj, ej + 1);
+  auto M2 = As2 * Mi2;
+  auto Pf2 = r * r * aam_c2_f2.slice(0, sk, ek).slice(1, sj, ej + 1);
+  auto Th2 = torch::zeros_like(M2);
+  Th2.slice(1, 1, n2 + 1) += (Pf2.slice(1, 1, n2 + 1) - P) * om;
+  Th2.slice(1, 0, n2) -= (Pf2.slice(1, 0, n2) - P) * om;
+  Th2.select(1, 0) += (Pf2.select(1, 0) - lo2[5]) * lo2[4];
+  Th2.select(1, n2) -= (Pf2.select(1, n2) - hi2[5]) * hi2[4];
+  auto T = (Pf2.slice(1, 1, n2 + 1) - P) * M2.slice(1, 1, n2 + 1) -
+           (Pf2.slice(1, 0, n2) - P) * M2.slice(1, 0, n2);
+  auto G2 = torch::einsum("fj,kfi->kji", {W2, As2 * Th2});
+
+  // ---- x3 faces: [n3 + 1, n2, n1] ----
+  auto W3 = aam_w3.to(m3.options());
+  auto lo3 = e3l.select(1, sk).slice(1, sj, ej).slice(2, si, ei);  // [6, n2, n1]
+  auto hi3 = e3r.select(1, ek).slice(1, sj, ej).slice(2, si, ei);
+  auto Mi3 = torch::einsum("fk,kji->fji", {W3, m3});
+  Mi3.select(0, 0) += 0.5 * lo3[3];
+  Mi3.select(0, n3) += 0.5 * hi3[3];
+  auto As3 = face_area3().slice(0, sk, ek + 1).slice(1, sj, ej).slice(2, si, ei) *
+             sine_face3_kj.slice(0, sk, ek + 1).slice(1, sj, ej);
+  auto M3 = As3 * Mi3;
+  auto Pf3 = r * r * aam_c2_f3.slice(0, sk, ek + 1).slice(1, sj, ej);
+  auto Th3 = torch::zeros_like(M3);
+  Th3.slice(0, 1, n3 + 1) += (Pf3.slice(0, 1, n3 + 1) - P) * om;
+  Th3.slice(0, 0, n3) -= (Pf3.slice(0, 0, n3) - P) * om;
+  Th3.select(0, 0) += (Pf3.select(0, 0) - lo3[5]) * lo3[4];
+  Th3.select(0, n3) -= (Pf3.select(0, n3) - hi3[5]) * hi3[4];
+  T = T + (Pf3.slice(0, 1, n3 + 1) - P) * M3.slice(0, 1, n3 + 1) -
+      (Pf3.slice(0, 0, n3) - P) * M3.slice(0, 0, n3);
+  auto G3 = torch::einsum("fk,fji->kji", {W3, As3 * Th3});
+
+  // A v (zonal, along Kn) and -A^T v (the transpose), covariant per volume
+  auto kn = 1. / (r * (kk + _aam_eps2));
+  auto Fz = -omega * T / vol;
+  auto F2 = Fz * klc[VEL2] * kn + omega * rhoi * G2 / vol;
+  auto F3 = Fz * klc[VEL3] * kn + omega * rhoi * G3 / vol;
+  in(row2) += F2;
+  in(row3) += F3;
+
+  auto ktq = (vol * r * (kc[VEL2] * F2 + kc[VEL3] * F3)).sum();
+  auto inertia = (vol * rhoi * r * r * kk).sum();
+  return torch::stack({ktq, inertia}).to(torch::kFloat64);
+}
+
+void GnomonicEquiangleImpl::axial_torque_rows_(torch::Tensor row2,
+                                               torch::Tensor row3,
+                                               torch::Tensor const& rho_int,
+                                               double scale) const {
+  int si = il(), ei = iu() + 1;
+  int sj = jl(), ej = ju() + 1;
+  int sk = kl(), ek = ku() + 1;
+  auto r = x1v.slice(0, si, ei);
+  auto klc = aam_kl_c.slice(1, sk, ek).slice(2, sj, ej);
+  auto in = [&](torch::Tensor const& t) {
+    return t.slice(-3, sk, ek).slice(-2, sj, ej).slice(-1, si, ei);
+  };
+  in(row2) += scale * rho_int * r * klc[VEL2];
+  in(row3) += scale * rho_int * r * klc[VEL3];
 }
 
 }  // namespace snap

@@ -24,8 +24,9 @@ computed here from the coordinate buffers, independently of the option's own ari
       production path (the same at the deck's Omega, 14 times the wind's rate, is reported only);
   (k) shallow water at rest plus grid-scale noise, NENERGY steps: with transport the noise decays
       and the kinetic energy left stays within KE_BAND of off, at Omega and at 4 Omega. A state of
-      rest is used because a background flow hides the gain in its own energy. Full is reported
-      only: it keeps 2.5 times the energy of off at Omega / 4 and grows at Omega.
+      rest is used because a background flow hides the gain in its own energy. Full (#357
+      option A) at 4 Omega, where the earlier full went NaN: finite, absolute AAM at round-off;
+      its kinetic energy against off and transport is reported, not checked.
 The arms pass False and True for off and full where they predate the transport value: the key
 reads them that way. Each arm builds its own Mesh and frees it before the next.
 
@@ -243,9 +244,11 @@ def sw_kinetic_energy(blocks, mesh_vars):
     return total
 
 
-def run_sw_rest_noise(mode, omega, nstep, device, amp=0.2):
+def run_sw_rest_noise(mode, omega, nstep, device, amp=0.2, drift=None):
     """Shallow water at rest plus seeded Gaussian noise, 100 amp on phi and 5 amp m/s on both
-    velocity rows: the kinetic energy at nstep / 2 and at nstep, over the initial one."""
+    velocity rows: the kinetic energy at nstep / 2 and at nstep, over the initial one. With a
+    list `drift`, also appends max |dL| / |L| of the absolute AAM over the run (every 50 steps
+    and at the end; inf once it is not finite)."""
     from snapy import kIDN, kIV2, kIV3
 
     mesh, blocks = build(sw_config(mode, omega), device)
@@ -260,13 +263,19 @@ def run_sw_rest_noise(mode, omega, nstep, device, amp=0.2):
     mesh_vars, _ = mesh.initialize(mesh_vars)
     intg = blocks[0].module("intg")
     ke0, ke = sw_kinetic_energy(blocks, mesh_vars), []
+    l0, dmax = aam(blocks, mesh_vars, omega), 0.0
     for cycle in range(1, nstep + 1):
         mesh.set_cycle(cycle)
         dt = mesh.max_time_step(mesh_vars)
         for stage in range(len(intg.stages)):
             mesh.forward(mesh_vars, dt, stage)
+        if drift is not None and (cycle % 50 == 0 or cycle == nstep):
+            d = abs(aam(blocks, mesh_vars, omega) - l0) / abs(l0)
+            dmax = max(dmax, d) if math.isfinite(d) else math.inf
         if cycle in (nstep // 2, nstep):
             ke.append(sw_kinetic_energy(blocks, mesh_vars) / ke0)
+    if drift is not None:
+        drift.append(dmax)
     del mesh, blocks, mesh_vars
     gc.collect()
     return ke
@@ -544,10 +553,12 @@ def main(argv=None):
     #     energy). Transport has the Coriolis force of off: its noise must decay, and what is left
     #     stay within KE_BAND of off. Full is reported only: its Coriolis force does work.
     if args.nenergy > 0:
-        for mode, mult, check in (("transport", 1.0, True), ("transport", 4.0, True), ("full", 0.25, False)):
+        kes = {}
+        for mode, mult, check in (("transport", 1.0, True), ("transport", 4.0, True)):
             om = mult * SW_OMEGA
             ke_off = run_sw_rest_noise("off", om, args.nenergy, args.device)
             ke = run_sw_rest_noise(mode, om, args.nenergy, args.device)
+            kes[("off", mult)], kes[(mode, mult)] = ke_off, ke
             print("(k) noise on rest, %-9s at %4.2f Omega: KE / KE0 = %.3e at %d steps and %.3e at %d; off %.3e; "
                   "ratio to off %.3f" % (mode, mult, ke[0], args.nenergy // 2, ke[1], args.nenergy, ke_off[1],
                                          ke[1] / ke_off[1]))
@@ -557,6 +568,20 @@ def main(argv=None):
             if check and not ke[1] <= KE_BAND * ke_off[1]:
                 failures.append("noise on rest, %s at %.2f Omega: KE is %.3f of off > %.1f"
                                 % (mode, mult, ke[1] / ke_off[1], KE_BAND))
+        # full (#357 option A) at 4 Omega, where a74acc19's full went NaN: it must stay finite
+        # and keep the absolute AAM at round-off. Its kinetic energy against off and transport
+        # is printed, not checked (measured 4.6 and 3.4 at 4000 steps, a decaying grid-scale
+        # remainder; the KE criterion is open).
+        dfull = []
+        ke = run_sw_rest_noise("full", 4.0 * SW_OMEGA, args.nenergy, args.device, drift=dfull)
+        ke_off, ke_tr = kes[("off", 4.0)], kes[("transport", 4.0)]
+        print("(k) noise on rest, full      at 4.00 Omega: KE / KE0 = %.3e at %d steps and %.3e at %d; "
+              "ratio to off %.3f, to transport %.3f; max |dL| / |L| = %.3e"
+              % (ke[0], args.nenergy // 2, ke[1], args.nenergy, ke[1] / ke_off[1], ke[1] / ke_tr[1], dfull[0]))
+        if not all(math.isfinite(x) for x in ke):
+            failures.append("noise on rest, full at 4 Omega: not finite (KE / KE0 = %s)" % ke)
+        if not dfull[0] <= TOL:
+            failures.append("noise on rest, full at 4 Omega: absolute L drifts %.3e > %.0e" % (dfull[0], TOL))
 
     # (d) off by default, and no effect where it is not defined: a Cartesian block builds with it on
     cfg = config(True)

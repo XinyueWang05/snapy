@@ -963,7 +963,41 @@ void MeshBlockImpl::advance_local(Variables &vars, double dt, int stage) {
     apply_gravity_work_fixer(vars, reduce[0]);
   }
 
+  // #357 option A: the global uniform torque of this stage (a Mesh with
+  // several local blocks sums them first, MeshImpl::forward)
+  if (phydro->axial_skew_form() && !defer_axial_torque) {
+    std::vector<at::Tensor> reduce = {axial_torque_sums()};
+    if (_playout->has_process_group()) {
+      _playout->comm->allreduce(reduce, c10d::ReduceOp::SUM);
+    }
+    apply_axial_torque(vars, dt, stage, reduce[0]);
+  }
+
   apply_boundaries(vars, hydro_u, scalar_s);
+}
+
+torch::Tensor MeshBlockImpl::axial_torque_sums() const {
+  if (!phydro->axial_skew_form()) return torch::zeros({3}, torch::kFloat64);
+  return phydro->axial_torque_sums().to(torch::kCPU, torch::kFloat64).clone();
+}
+
+void MeshBlockImpl::apply_axial_torque(Variables &vars, double dt, int stage,
+                                       torch::Tensor const &global) {
+  if (!phydro->axial_skew_form()) return;
+  auto g = global.to(torch::kCPU, torch::kFloat64).contiguous();
+  double target = g[0].item<double>(), skew = g[1].item<double>();
+  double res = target - skew, inertia = g[2].item<double>();
+  double w2dt = pintg->stages[stage].wght2() * dt;
+  // run to date: global uniform torque, skew operator, mass-flux exchange
+  phydro->axial_torque_cum()[0] += w2dt * res;
+  phydro->axial_torque_cum()[1] += w2dt * skew;
+  phydro->axial_torque_cum()[2] += w2dt * target;
+  if (!(inertia > 0.) || !std::isfinite(res)) return;
+  auto rho = phydro->axial_torque_rho();
+  if (!rho.defined() || rho.numel() == 0) return;
+  auto hydro_u = vars.at("hydro_u");
+  double scale = w2dt * res / inertia;
+  pcoord->axial_torque_rows_(hydro_u[IVY], hydro_u[IVZ], rho.to(hydro_u), scale);
 }
 
 torch::Tensor MeshBlockImpl::gravity_work_fixer_sums(
@@ -1268,6 +1302,12 @@ void print_cycle_diagnostics(
   if (vic_max.defined()) print(" vicclamp=", vic_max[0].item<double>());
   if (root->phydro->gravity_work_fixer())  // global: every block holds it
     print(" fixgrav=", root->phydro->gravity_work_fix()[0].item<double>());
+  if (root->phydro->axial_skew_form()) {  // global: every block holds it
+    auto c = root->phydro->axial_torque_cum();
+    print(" aamglobal=", c[0].item<double>());
+    print(" aamcoriolis=", c[1].item<double>());
+    print(" aammassflux=", c[2].item<double>());
+  }
   SINFO() << std::endl;
 }
 

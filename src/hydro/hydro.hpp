@@ -96,15 +96,26 @@ struct HydroOptionsImpl {
   //!    of 14 it was larger than off, where the two errors of off cancel in
   //!    part. Shallow-water noise decays as with off (what is left after 4000
   //!    steps is within x1.4 of off up to 4 Omega).
-  //!  - full: also the axial component of the Coriolis force, from the face
-  //!    mass fluxes, so relative plus planetary AAM is exact. That force is
-  //!    then built from two different velocities and is not skew-symmetric:
-  //!    with rotation it does work and grid-scale noise gains energy. Linear
-  //!    f-plane growth is about 0.1 to 0.15 f^2 dx / c, whatever the wind.
-  //!    Shallow water at C16 over 4000 steps: noise on a state of rest keeps
-  //!    2.5 times the kinetic energy of off at Omega / 4 and grows 30-fold at
-  //!    Omega; a Williamson-2 flow gains the same amount, x10 at u0 = 3 m/s
-  //!    with or without noise, 5 % at 38.6 m/s. Use it without rotation.
+  //!  - full: relative plus planetary AAM is exact. With the traditional
+  //!    approximation (and shallow water) the horizontal Coriolis force is the
+  //!    skew-symmetric operator built from interpolated momentum
+  //!    (GnomonicEquiangle::axial_skew_coriolis_, #357 option A): it does no
+  //!    work, cell by cell sums of v . F vanish to round-off on six panels,
+  //!    seams included. Its AAM exchange closes against the interpolated
+  //!    momentum flux; the rest of the torque of the solver's mass fluxes
+  //!    (their dissipative part, about as large as transport's error) is
+  //!    carried by the GLOBAL UNIFORM TORQUE: one uniform angular
+  //!    acceleration about the omega1 axis per RK stage, the same everywhere,
+  //!    weighted by the density (MeshBlock::apply_axial_torque, summed over
+  //!    blocks and ranks), so the absolute AAM closes to round-off. It is not
+  //!    a physical force: the cycle diagnostics print its run-to-date AAM
+  //!    (aamglobal) next to the physical torques (aamcoriolis, the skew
+  //!    operator; aammassflux, the planetary exchange of the mass fluxes).
+  //!    Before this operator (#357 at a74acc19) full was unstable at fast
+  //!    rotation: C16 shallow-water noise grew 30-fold at Omega and went NaN
+  //!    at 4 Omega. Without the traditional approximation the axial component
+  //!    is still taken from the face mass fluxes (#314): that force is not
+  //!    skew-symmetric and with rotation grid-scale noise gains energy.
   ADD_ARG(std::string, conserve_axial_momentum) = "off";
 
   //! forcing options
@@ -196,6 +207,23 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! conserve-axial-momentum: full, and it applies: the Coriolis force takes
   //! its axial component from the face mass fluxes
   bool axial_coriolis_form() const;
+  //! full with the traditional approximation (or shallow water), #357 option
+  //! A: the Coriolis force is the skew-symmetric operator from interpolated
+  //! momentum (GnomonicEquiangle::axial_skew_coriolis_) plus one global
+  //! uniform angular acceleration that closes the AAM against the solver's
+  //! mass fluxes (MeshBlock::apply_axial_torque)
+  bool axial_skew_form() const;
+  //! option A, this stage: {torque of the solver's mass fluxes, torque of the
+  //! skew operator, sum V rho K.K} over the block's interior (host,
+  //! float64), and the interior density that weights the global uniform
+  //! torque
+  torch::Tensor axial_torque_sums() const { return _aam_tq; }
+  torch::Tensor axial_torque_rho() const { return _aam_tq_rho; }
+  //! option A, run to date (global, kg m^2 / s): AAM added by the global
+  //! uniform torque, by the skew Coriolis operator and by the solver's mass
+  //! fluxes (the planetary exchange it closes); printed with the cycle
+  //! diagnostics as aamglobal, aamcoriolis, aammassflux
+  torch::Tensor axial_torque_cum() const { return _aam_tq_cum; }
 
   //! dynamics/conserve-axial-momentum: the face mass fluxes the Coriolis
   //! call in progress closes the planetary AAM with (x1, x2, x3; undefined
@@ -426,6 +454,8 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! see axial_mass_fluxes()
   std::array<torch::Tensor, 3> _aam_mass_flux;
   int _aam_mass_ny = 0;
+  //! see axial_torque_sums()
+  torch::Tensor _aam_tq, _aam_tq_rho, _aam_tq_cum;
 
   torch::Tensor _flux1, _flux2, _flux3, _face_pressure1, _div, _forcing_dry;
   torch::Tensor _positivity_hits, _positivity_severe, _positivity_min;
