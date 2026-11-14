@@ -205,6 +205,10 @@ torch::Tensor CoriolisXYZImpl::forward(torch::Tensor du, torch::Tensor w,
       // internal comparison switch (#357 option A): variant C keeps the
       // cell-form force (pointwise skew) and lets the global uniform torque
       // carry the whole Coriolis + mass-flux AAM error; default S
+      static bool const torque_w = [] {
+        char const *v = std::getenv("SNAP_AAM_TORQUE_WEIGHT");
+        return v && std::string(v) == "W";
+      }();
       static bool const variant_c = [] {
         char const *v = std::getenv("SNAP_AAM_FULL_VARIANT");
         return v && std::string(v) == "C";
@@ -222,7 +226,11 @@ torch::Tensor CoriolisXYZImpl::forward(torch::Tensor du, torch::Tensor w,
         auto ktq = (vol * r * (k[VEL2] * in(force[VEL2]) +
                                k[VEL3] * in(force[VEL3])))
                        .sum();
-        auto inertia = (vol * in(w[IDN]) * r * r * kk).sum();
+        // variant W (internal, SNAP_AAM_TORQUE_WEIGHT=W): the global torque
+        // as a specific AAM change proportional to rho s^2, i.e. torque
+        // density R rho^2 s^2 / sum V rho^2 s^2 (default: rho s^2, a uniform
+        // angular acceleration)
+        auto inertia = (vol * in(w[IDN]) * (torque_w ? in(w[IDN]) : 1. + 0. * in(w[IDN])) * r * r * kk).sum();
         sums = torch::stack(std::vector<torch::Tensor>{ktq, inertia});
       } else {
       force[VEL2].zero_();
@@ -283,11 +291,15 @@ torch::Tensor CoriolisXYZImpl::forward(torch::Tensor du, torch::Tensor w,
       phydro->axial_torque_sums()[0].fill_(target);
       phydro->axial_torque_sums()[1].fill_(host[0].item<double>());
       phydro->axial_torque_sums()[2].fill_(host[1].item<double>());
-      phydro->axial_torque_rho().set_(w[IDN]
-                                          .slice(0, sk, ek)
-                                          .slice(1, sj, ej)
-                                          .slice(2, pcoord->il(), pcoord->iu() + 1)
-                                          .clone());
+      {
+        auto rho_in = w[IDN]
+                          .slice(0, sk, ek)
+                          .slice(1, sj, ej)
+                          .slice(2, pcoord->il(), pcoord->iu() + 1);
+        // variant W weights the global torque by rho^2 s^2 (see above)
+        phydro->axial_torque_rho().set_(
+            (variant_c && torque_w ? rho_in * rho_in : rho_in).clone());
+      }
     } else if (phydro->axial_coriolis_form()) {
       auto pcoord = phydro->pmb->pcoord;
       auto const &mf = phydro->axial_mass_fluxes();

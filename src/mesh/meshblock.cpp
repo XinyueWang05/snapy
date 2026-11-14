@@ -1,5 +1,6 @@
 // C/C++
 #include <cmath>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <iomanip>
@@ -987,6 +988,13 @@ void MeshBlockImpl::apply_axial_torque(Variables &vars, double dt, int stage,
   auto g = global.to(torch::kCPU, torch::kFloat64).contiguous();
   double target = g[0].item<double>(), skew = g[1].item<double>();
   double res = target - skew, inertia = g[2].item<double>();
+  // internal, local-only test knob (#357 option A scaled-torque test): scale
+  // the global uniform torque; default 1 (AAM closes only at 1)
+  static double const tq_scale = [] {
+    char const *v = std::getenv("SNAP_AAM_TORQUE_SCALE");
+    return v ? std::atof(v) : 1.;
+  }();
+  res *= tq_scale;
   double w2dt = pintg->stages[stage].wght2() * dt;
   // run to date: global uniform torque, skew operator, mass-flux exchange
   phydro->axial_torque_cum()[0] += w2dt * res;
