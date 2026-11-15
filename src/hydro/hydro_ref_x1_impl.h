@@ -295,8 +295,8 @@ inline DISPATCH_MACRO void hydro_ref_x1_column_cell(
   int o = surf ? surf[column] : 0;
   if (i >= o) {
     hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column,
-                           i - o, ncolumns, nc1, iu, grav, x1_grid, phys_in,
-                           phys_out, wall_clamp,
+                           i - o, ncolumns, nc1, iu, grav, x1_grid,
+                           phys_in || o > 0, phys_out, wall_clamp,
                            rows && surf ? rows + 7 * nc1 * o : rows, o);
     return;
   }
