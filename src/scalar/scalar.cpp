@@ -100,11 +100,12 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
     int ng = pmb->pcoord->options->nghost();
     auto const& m = pib->mirror_index(other.at("solid"), dim,
                                       dim == DIM1 ? ng : ng - 1, dim == DIM1);
-    auto copy = [&](int c) {
-      return face_r_of(pib->mirror(rho, m, c, dim), pib->mirror(u, m, c, dim),
-                       dim);
-    };
-    return m.copies == 1 ? copy(0) : pib->pick_lr(copy(0), copy(1), m, dim);
+    int nr = rho.size(0);
+    return pib->reconstruct(torch::cat({rho, u}), m, dim, -1,
+                            [&](auto const& v, auto const&) {
+                              return face_r_of(v.narrow(0, 0, nr),
+                                               v.narrow(0, nr, u.size(0)), dim);
+                            });
   };
 
   if (_flux1.defined()) {

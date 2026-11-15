@@ -578,12 +578,16 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   bool gw_cell = options->grav() && options->grav()->grav1() != 0. &&
                  options->grav()->gravity_work() == "cell";
 
-  auto sweep = [&](torch::Tensor const& w, int dim) {
+  // rows: w holds only these x1 rows (a thin solid line's second copy)
+  auto sweep = [&](torch::Tensor const& w, int dim, torch::Tensor const& rows) {
     auto recon = dim == DIM1 ? precon1 : precon23;
     if (!fp32()) return recon->forward(w, dim);
-    auto gauge = perturb.pressure0.mean(dim - 1, true);
+    auto at = [&](torch::Tensor const& t) {
+      return rows.defined() ? t.index_select(-1, rows) : t;
+    };
+    auto gauge = at(perturb.pressure0).mean(dim - 1, true);
     auto input = w.clone();
-    input[IPR] = (perturb.pressure0 - gauge) + perturb.pressure_delta;
+    input[IPR] = (at(perturb.pressure0) - gauge) + at(perturb.pressure_delta);
     auto lr = recon->forward(input.to(torch::kFloat32), dim, false)
                   .to(torch::kFloat64);
     for (int side : {ILT, IRT}) {
@@ -595,15 +599,17 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   };
   // x2/x3 solid cells within reach of a fluid face hold its mirror; a thin
   // run is mirrored once from each side (two copies, pick: the cell's own)
+  auto mirror23 = [&](int dim) {
+    return &pmb->pib->mirror_index(other.at("solid"), dim,
+                                   pmb->pcoord->options->nghost() - 1, false);
+  };
   auto reconstruct_sweep = [&](int dim) {
-    if (!has_solid || dim == DIM1) return sweep(w, dim);
-    auto const& m = pmb->pib->mirror_index(
-        other.at("solid"), dim, pmb->pcoord->options->nghost() - 1, false);
-    auto copy = [&](int c) {
-      return sweep(pmb->pib->mirror(w, m, c, dim, dim == DIM2 ? IVY : IVZ),
-                   dim);
-    };
-    return m.copies == 1 ? copy(0) : pmb->pib->pick_lr(copy(0), copy(1), m, dim);
+    if (!has_solid) return sweep(w, dim, {});
+    return pmb->pib->reconstruct(w, *mirror23(dim), dim,
+                                 dim == DIM2 ? IVY : IVZ,
+                                 [&](auto const& v, auto const& rows) {
+                                   return sweep(v, dim, rows);
+                                 });
   };
   //// ------------ (2) Calculate dimension 1 flux ------------ ////
   InternalBoundaryImpl::Mirror const* m1 = nullptr;  // x1 solid mirror
@@ -663,7 +669,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     if (has_solid) {
       m1 = &pmb->pib->mirror_index(other.at("solid"), DIM1,
                                    pmb->pcoord->options->nghost(), true);
-      wx1 = pmb->pib->mirror(wx1, *m1, 0, DIM1, IVX);
+      wx1 = pmb->pib->mirror(wx1, *m1, DIM1, IVX);
     }
     torch::Tensor wtmp;
     if (wb_x1) {
@@ -724,7 +730,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         }
         // key 4 rho', p' parity ghosts (wall4_weights); runs only with gravity
         fill4(wx1[c], c == IDN ? 2 : 3, true, c == IDN ? dref : pref);
-        if (m1) wx1[c].copy_(pmb->pib->mirror(wx1[c], *m1, 0, DIM1));
+        if (m1) wx1[c].copy_(pmb->pib->mirror(wx1[c], *m1, DIM1));
       }
 
       torch::Tensor velocity;
@@ -813,7 +819,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         wtmp[1 - o][IVX].select(-1, i).neg_();
       }
     } else {
-      wtmp = fp32() ? sweep(wx1, DIM1) : precon1->forward(wx1, DIM1);
+      wtmp = fp32() ? sweep(wx1, DIM1, {}) : precon1->forward(wx1, DIM1);
       if (grav1) {
         if (phys_x1inner) _revise_x1inner_lr(wtmp[ILT], wtmp[IRT]);
         if (phys_x1outer) _revise_x1outer_lr(wtmp[ILT], wtmp[IRT]);
@@ -1061,11 +1067,11 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   // row of them holds the mirror of the fluid face row above, as wall ghost
   // rows do (else the fill)
   auto solid_faces = [&](int dim) {
-    if (!has_solid) return torch::Tensor();
-    return other.at("solid") | other.at("solid").roll(1, dim - 1);
+    return has_solid ? mirror23(dim) : nullptr;
   };
-  auto x1_seam_rows = [&](torch::Tensor f, int tag, torch::Tensor const& s) {
-    if (s.defined()) f = torch::where(s & ~s.roll(-1, -1), f.roll(-1, -1), f);
+  using MirrorP = InternalBoundaryImpl::Mirror const*;
+  auto x1_seam_rows = [&](torch::Tensor f, int tag, MirrorP s) {
+    if (s) f = f.gather(-1, s->cov_idx.expand_as(f));
     auto [below, above] = x1_neighbors();
     if (below < 0 && above < 0) return f;
     auto g = f.clone();
@@ -1075,9 +1081,10 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   // the covariance increment of _flux_covariance into a face flux: the whole
   // flux on a curved grid, only the nonzero rows' x1 interior in Cartesian
   bool cov_rows = pmb->pcoord->face_centroid_shift_zero();
-  auto wall_cov = [&](torch::Tensor& dcov, torch::Tensor const& s) {
-    if (dcov.defined() && s.defined())
-      dcov.masked_fill_(cov_rows ? s.narrow(-1, 1, s.size(-1) - 2) : s, 0.);
+  auto wall_cov = [&](torch::Tensor& dcov, MirrorP s) {
+    auto k = s ? s->cov_keep : torch::Tensor();
+    if (dcov.defined() && s)
+      dcov.mul_(cov_rows ? k.narrow(-1, 1, k.size(-1) - 2) : k);
   };
   auto add_cov = [&](torch::Tensor& flx, torch::Tensor const& dcov) {
     if (!cov_rows) {
@@ -1104,7 +1111,8 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     if (!options->disable_flux_x2()) {
       // #289: built from the face states BEFORE the solver may project them
       // into the face-local frame, added to the flux after
-      torch::Tensor cwl, cwr, s2 = solid_faces(DIM2);
+      torch::Tensor cwl, cwr;
+      auto s2 = solid_faces(DIM2);
       if (flux_covariance()) {
         cwl = x1_seam_rows(wlr2[ILT], 0x7730, s2);
         cwr = x1_seam_rows(wlr2[IRT], 0x7732, s2);
@@ -1140,7 +1148,8 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // #289: the same term on the x3 faces -- the covariance is taken along
       // x1 there too, because x1 is the stratified direction whichever
       // horizontal face it crosses
-      torch::Tensor cwl, cwr, s3 = solid_faces(DIM3);
+      torch::Tensor cwl, cwr;
+      auto s3 = solid_faces(DIM3);
       if (flux_covariance()) {
         cwl = x1_seam_rows(wlr3[ILT], 0x7734, s3);
         cwr = x1_seam_rows(wlr3[IRT], 0x7736, s3);

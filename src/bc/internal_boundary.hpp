@@ -1,6 +1,7 @@
 #pragma once
 
 // C/C++
+#include <functional>
 #include <map>
 #include <tuple>
 
@@ -117,29 +118,36 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
    */
   torch::Tensor forward(torch::Tensor wlr, int dim, torch::Tensor solid) const;
 
-  //! Mirror ghosts of the solid cells along w-dimension `dim` (3 = x1): each
-  //! solid cell within `reach` of a fluid face takes the reflection of the
-  //! fluid across that face (gather index `idx`, odd reflection count `odd`).
-  //! x1 (bottom_only) mirrors the bottom-attached run only, from above, and
-  //! `surf` holds its depth per column; elsewhere solid runs thinner than
-  //! 2 reach get two copies (alternate runs seen from below) and `pick` holds
-  //! the copy each cell's stencil reads.
+  //! Mirror ghosts of the solid cells along w-dimension `dim` (3 = x1), built
+  //! once per solid mask: each solid cell within `reach` of a fluid face
+  //! takes the reflection of the fluid across that face (gather index `idx`,
+  //! normal-velocity `sign`). x1 (bottom_only) mirrors the bottom-attached
+  //! run only, from above, and `surf` holds its depth per column; elsewhere a
+  //! line with a run thinner than 2 reach gets a second copy (alternate runs
+  //! seen from below) on the x1 `rows` holding such lines, `pick` [ILT/IRT,
+  //! ..., rows] marking the face states read from it. x2/x3 also carry the
+  //! face covariance maps: `cov_keep` 0 beside a solid, `cov_idx` the x1
+  //! gather putting the fluid face row above into the top row of those faces.
   struct Mirror {
-    torch::Tensor idx, odd, pick, surf;  // idx/odd: [copies, nc3, nc2, nc1]
-    int copies = 1;
+    torch::Tensor idx, sign, rows, idx1, sign1, pick, surf, cov_keep, cov_idx;
   };
   Mirror const &mirror_index(torch::Tensor solid, int dim, int reach,
                              bool bottom_only) const;
-  //! v [..., nc3, nc2, nc1] gathered from copy `copy`; row `normal` of a
-  //! 4-d v (the normal velocity) changes sign under an odd reflection
-  torch::Tensor mirror(torch::Tensor v, Mirror const &m, int copy, int dim,
+  //! v [..., nc3, nc2, nc1] gathered from the mirror; row `normal` of a 4-d v
+  //! (the normal velocity) changes sign under an odd reflection
+  torch::Tensor mirror(torch::Tensor v, Mirror const &m, int dim,
                        int normal = -1) const;
-  //! face states (ILT, IRT stacked first) from two copies: each side from
-  //! the copy its source cell reads (ILT from cell i-1, IRT from cell i)
-  torch::Tensor pick_lr(torch::Tensor lr0, torch::Tensor lr1, Mirror const &m,
-                        int dim) const;
+  //! face states (ILT, IRT first) of `recon` on the mirrored v; on a thin
+  //! line's rows, the picked sides from the second copy. recon(v, rows):
+  //! rows is defined when v holds only those x1 rows
+  torch::Tensor reconstruct(
+      torch::Tensor v, Mirror const &m, int dim, int normal,
+      std::function<torch::Tensor(torch::Tensor const &,
+                                  torch::Tensor const &)> const &recon) const;
 
  private:
+  torch::Tensor gather(torch::Tensor v, torch::Tensor idx,
+                       torch::Tensor const &sign, int dim, int normal) const;
   mutable std::map<std::tuple<int, int, bool>, Mirror> mirrors_;
   mutable void const *mirror_src_ = nullptr;
   mutable int64_t mirror_ver_ = -1;

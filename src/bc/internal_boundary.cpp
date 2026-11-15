@@ -112,7 +112,8 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
   s = s.movedim(axis, -1).contiguous();
   int n = s.size(-1), lines = s.numel() / n;
   auto sp = s.data_ptr<bool>();
-  // two copies only along an axis with a run too thin to serve both sides
+  // two copies only on a line with a run too thin to serve both sides
+  std::vector<char> thin(lines, 0);
   bool two = false;
   for (int l = 0; !bottom_only && l < lines; ++l)
     for (int a = 0, b; a < n; a = b + 1) {
@@ -120,7 +121,8 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
       }
       for (b = a; b + 1 < n && sp[l * n + b + 1]; ++b) {
       }
-      if (a < n && a > 0 && b + 1 < n && b - a + 1 < 2 * reach) two = true;
+      if (a < n && a > 0 && b + 1 < n && b - a + 1 < 2 * reach)
+        two = thin[l] = 1;
     }
   int nc = two ? 2 : 1;
   auto idx = torch::arange(n, torch::kLong).repeat({nc, lines, 1});
@@ -130,7 +132,7 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
   auto ip = idx.data_ptr<int64_t>(), pp = pick.data_ptr<int64_t>();
   auto op = odd.data_ptr<bool>();
   for (int l = 0; l < lines; ++l) {
-    bool const *f = sp + l * n;
+    bool const *f = sp + l * n, tl = thin[l];
     std::vector<std::pair<int, int>> runs;
     for (int a = 0, b; a < n; a = b + 1) {
       for (; a < n && !f[a]; ++a) {
@@ -151,7 +153,7 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
       return std::make_pair(src, k % 2 == 1);
     };
     int nr = runs.size();
-    for (int c = 0; c < nc; ++c) {
+    for (int c = 0; c < (tl ? 2 : 1); ++c) {
       int64_t *ic = ip + (c * lines + l) * n;
       bool *oc = op + (c * lines + l) * n;
       auto put = [&](int j, int face, int lo, int hi) {
@@ -172,21 +174,21 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
           if (bottom_only) surf[l] = b + 1 - il;
           int glo = r ? runs[r - 1].second + 1 : 0;
           int ghi = r + 1 < nr ? runs[r + 1].first - 1 : n - 1;
-          bool below = !bottom_only && a > 0 && (!two || (r + c) % 2 == 0);
-          bool above = b + 1 < n && (!two || (r + c) % 2 == 1);
+          bool below = !bottom_only && a > 0 && (!tl || (r + c) % 2 == 0);
+          bool above = b + 1 < n && (!tl || (r + c) % 2 == 1);
           for (int k = 0; k < reach; ++k) {
             int jb = a + k, ja = b - k;
             if (below && jb < n && (jb <= b) == (pass == 1) &&
-                (two || !above || 2 * k < b - a + 1))
+                (tl || !above || 2 * k < b - a + 1))
               put(jb, a, glo, a - 1);
             if (above && ja >= 0 && (ja >= a || bottom_only) == (pass == 1) &&
-                (two || !below || 2 * k < b - a + 1))
+                (tl || !below || 2 * k < b - a + 1))
               put(ja, b + 1, b + 1, ghi);
           }
         }
     }
     // a cell reads the copy in which the run above it is seen from below
-    for (int j = 0, r = 0; two && j < n; ++j) {
+    for (int j = 0, r = 0; tl && j < n; ++j) {
       for (; r < nr && runs[r].second < j; ++r) {
       }
       pp[l * n + j] = r < nr ? r % 2 : nr % 2;
@@ -199,11 +201,31 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
     return t.view(sh).movedim(-1, axis + (lead ? 1 : 0)).contiguous().to(
         solid.device());
   };
+  // one gather per copy; the normal velocity times a sign (odd: -1)
   Mirror m;
-  m.copies = nc;
-  m.idx = back(idx, nc);
-  m.odd = back(odd, nc);
-  m.pick = two ? back(pick, 0) : torch::Tensor();
+  auto real = solid.is_mps() ? torch::kFloat32 : torch::kFloat64;
+  auto i2 = back(idx, nc), sg = 1. - 2. * back(odd, nc).to(real);
+  m.idx = i2[0], m.sign = sg[0];
+  if (two) {  // copy 1 only on the x1 rows (axis 2) holding a thin line
+    std::vector<int64_t> rows;
+    for (int i = 0, nc1 = solid.size(2); i < nc1; ++i)
+      for (int l = i; l < lines; l += nc1)
+        if (thin[l]) {
+          rows.push_back(i);
+          break;
+        }
+    m.rows = torch::tensor(rows, torch::kLong).to(solid.device());
+    m.idx1 = i2[1].index_select(-1, m.rows);
+    m.sign1 = sg[1].index_select(-1, m.rows);
+    auto pr = back(pick, 0).eq(1);  // ILT from cell i - 1, IRT from cell i
+    m.pick = torch::stack({pr.roll(1, axis), pr}).index_select(-1, m.rows);
+  }
+  if (!bottom_only) {  // x2/x3 face covariance: faces beside a solid
+    auto f = solid.to(torch::kBool) | solid.to(torch::kBool).roll(1, axis);
+    m.cov_keep = (~f).to(real);
+    m.cov_idx = torch::arange(f.size(-1), f.options().dtype(torch::kLong)) +
+                (f & ~f.roll(-1, -1)).to(torch::kLong);
+  }
   if (bottom_only) {
     // the surface needs its nghost mirror cells and its reference rows on
     // this block: keep x1 block seams nghost cells clear of the terrain
@@ -219,23 +241,32 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
 }
 
 torch::Tensor InternalBoundaryImpl::mirror(torch::Tensor v, Mirror const &m,
-                                           int copy, int dim,
+                                           int dim, int normal) const {
+  return gather(v, m.idx, m.sign, dim, normal);
+}
+
+torch::Tensor InternalBoundaryImpl::gather(torch::Tensor v,
+                                           torch::Tensor idx,
+                                           torch::Tensor const &sign, int dim,
                                            int normal) const {
-  auto idx = m.idx[copy], odd = m.odd[copy];
   int lead = v.dim() - 3;
-  for (int k = 0; k < lead; ++k) idx = idx.unsqueeze(0), odd = odd.unsqueeze(0);
+  for (int k = 0; k < lead; ++k) idx = idx.unsqueeze(0);
   auto out = v.gather(lead + dim - 1, idx.expand_as(v));
-  if (normal >= 0) out[normal] = torch::where(odd[0], -out[normal], out[normal]);
+  if (normal >= 0) out[normal].mul_(sign.to(v.scalar_type()));
   return out;
 }
 
-torch::Tensor InternalBoundaryImpl::pick_lr(torch::Tensor lr0,
-                                            torch::Tensor lr1, Mirror const &m,
-                                            int dim) const {
-  auto pr = m.pick.eq(1), pl = pr.roll(1, dim - 1);
-  lr0[ILT] = torch::where(pl, lr1[ILT], lr0[ILT]);
-  lr0[IRT] = torch::where(pr, lr1[IRT], lr0[IRT]);
-  return lr0;
+torch::Tensor InternalBoundaryImpl::reconstruct(
+    torch::Tensor v, Mirror const &m, int dim, int normal,
+    std::function<torch::Tensor(torch::Tensor const &,
+                                torch::Tensor const &)> const &recon) const {
+  auto lr = recon(mirror(v, m, dim, normal), torch::Tensor());
+  if (!m.rows.defined()) return lr;
+  auto sub = v.index_select(-1, m.rows);
+  auto lr1 = recon(gather(sub, m.idx1, m.sign1, dim, normal), m.rows);
+  auto pick = lr.dim() == 5 ? m.pick.unsqueeze(1) : m.pick;
+  return lr.index_copy_(
+      -1, m.rows, torch::where(pick, lr1, lr.index_select(-1, m.rows)));
 }
 
 std::shared_ptr<InternalBoundaryImpl> InternalBoundaryImpl::create(
