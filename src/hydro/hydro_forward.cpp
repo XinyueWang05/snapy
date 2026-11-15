@@ -578,7 +578,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   bool gw_cell = options->grav() && options->grav()->grav1() != 0. &&
                  options->grav()->gravity_work() == "cell";
 
-  auto reconstruct_sweep = [&](int dim) {
+  auto sweep = [&](torch::Tensor const& w, int dim) {
     auto recon = dim == DIM1 ? precon1 : precon23;
     if (!fp32()) return recon->forward(w, dim);
     auto gauge = perturb.pressure0.mean(dim - 1, true);
@@ -593,7 +593,20 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     }
     return lr;
   };
+  // x2/x3 solid cells within reach of a fluid face hold its mirror; a thin
+  // run is mirrored once from each side (two copies, pick: the cell's own)
+  auto reconstruct_sweep = [&](int dim) {
+    if (!has_solid || dim == DIM1) return sweep(w, dim);
+    auto const& m = pmb->pib->mirror_index(
+        other.at("solid"), dim, pmb->pcoord->options->nghost() - 1, false);
+    auto copy = [&](int c) {
+      return sweep(pmb->pib->mirror(w, m, c, dim, dim == DIM2 ? IVY : IVZ),
+                   dim);
+    };
+    return m.copies == 1 ? copy(0) : pmb->pib->pick_lr(copy(0), copy(1), m, dim);
+  };
   //// ------------ (2) Calculate dimension 1 flux ------------ ////
+  InternalBoundaryImpl::Mirror const* m1 = nullptr;  // x1 solid mirror
   if (u.size(DIM1) > 1) {
     // Hydrostatic wall revision is a PHYSICAL-boundary operation: it rebuilds
     // the x1 boundary in isentropic balance. On a domain decomposed in x1
@@ -645,6 +658,13 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // off-centre ones
       _x1_ghost_rows(wx1, pmb->pcoord->il(), false, 0x7724);
     }
+    // a bottom-attached solid is the wall below its column's fluid: its cells
+    // within nghost of the surface hold the mirror of the fluid above
+    if (has_solid) {
+      m1 = &pmb->pib->mirror_index(other.at("solid"), DIM1,
+                                   pmb->pcoord->options->nghost(), true);
+      wx1 = pmb->pib->mirror(wx1, *m1, 0, DIM1, IVX);
+    }
     torch::Tensor wtmp;
     if (wb_x1) {
       HydroPressureSplit split;
@@ -659,7 +679,8 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         delta[IDN].copy_(perturb.density_delta);
       }
       auto [psf_lo, pref, dsf, dref] =
-          _hydro_ref_x1(base, delta, split_flux ? &split : nullptr);
+          _hydro_ref_x1(base, delta, split_flux ? &split : nullptr,
+                        m1 ? m1->surf : torch::Tensor());
       if (split_flux) {
         pressure_base1 = split.face0;
         // The unclamped scan satisfies grad(p0)=g*rho0 analytically. Retain
@@ -703,6 +724,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         }
         // key 4 rho', p' parity ghosts (wall4_weights); runs only with gravity
         fill4(wx1[c], c == IDN ? 2 : 3, true, c == IDN ? dref : pref);
+        if (m1) wx1[c].copy_(pmb->pib->mirror(wx1[c], *m1, 0, DIM1));
       }
 
       torch::Tensor velocity;
@@ -791,7 +813,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         wtmp[1 - o][IVX].select(-1, i).neg_();
       }
     } else {
-      wtmp = fp32() ? reconstruct_sweep(DIM1) : precon1->forward(wx1, DIM1);
+      wtmp = fp32() ? sweep(wx1, DIM1) : precon1->forward(wx1, DIM1);
       if (grav1) {
         if (phys_x1inner) _revise_x1inner_lr(wtmp[ILT], wtmp[IRT]);
         if (phys_x1outer) _revise_x1outer_lr(wtmp[ILT], wtmp[IRT]);
@@ -1444,9 +1466,11 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // face), so the corrected PE is not defined there in any case
       auto [below, above] = x1_neighbors();
       if (below < 0 && above < 0) {
-        face_gravity_work +=
-            corrected_pe_work(drho, pmb->pcoord->x1f, pmb->pcoord->x1v, is, ie,
-                              grav1, measure, &_pe_work);
+        auto pe = corrected_pe_work(drho, pmb->pcoord->x1f, pmb->pcoord->x1v,
+                                    is, ie, grav1, measure, &_pe_work);
+        // a solid surface: the one-sided row of its column's first fluid cell
+        if (m1) corrected_pe_work_surface(pe, drho, _pe_work, m1->surf);
+        face_gravity_work += pe;
       } else {
         // x1 seam: the neighbour's drho one cell past it, so a seam cell
         // takes the centred slope of one block (#303)

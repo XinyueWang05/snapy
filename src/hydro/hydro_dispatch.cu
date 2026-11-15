@@ -41,7 +41,8 @@ __global__ void hydro_ref_x1_cuda_kernel(T const *w, T const *dx1f,
                                          T *pref, T *dsf, T *dref, int ncolumns,
                                          int nc1, int iu, T grav, int x1_grid,
                                          bool phys_in, bool phys_out,
-                                         bool wall_clamp, T const *rows) {
+                                         bool wall_clamp, T const *rows,
+                                         int const *surf) {
   int column = blockIdx.x;
 
   if (threadIdx.x == 0) {
@@ -51,9 +52,9 @@ __global__ void hydro_ref_x1_cuda_kernel(T const *w, T const *dx1f,
   __syncthreads();
 
   for (int i = threadIdx.x; i < nc1; i += blockDim.x) {
-    hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column, i,
-                           ncolumns, nc1, iu, grav, x1_grid, phys_in, phys_out,
-                           wall_clamp, rows);
+    hydro_ref_x1_column_cell(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column,
+                             i, ncolumns, nc1, iu, grav, x1_grid, phys_in,
+                             phys_out, wall_clamp, rows, surf);
   }
 }
 
@@ -63,7 +64,8 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
                        torch::Tensor const &dsf, torch::Tensor const &dref,
                        int iu, double grav, int x1_grid, bool phys_in,
                        bool phys_out, bool wall_clamp,
-                       torch::Tensor const &rows) {
+                       torch::Tensor const &rows, torch::Tensor const &surf) {
+  auto sp = surf.defined() ? surf.data_ptr<int>() : nullptr;
   TORCH_CHECK(x1_grid != kX1RefStretched || rows.defined(),
               "hydro_ref_x1: a stretched x1 needs its six-face rows");
   TORCH_CHECK(!rows.defined() || (rows.device() == w.device() &&
@@ -91,7 +93,7 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
     hydro_ref_x1_cuda_kernel<<<blocks, threads, 0, stream>>>(
         ptr(w), ptr(dx1f), ptr(anchor), ptr(psf_lo), ptr(psf_hi), ptr(pref),
         ptr(dsf), ptr(dref), ncolumns, nc1, iu, SRS(grav), x1_grid, phys_in,
-        phys_out, wall_clamp, ptr(rows));
+        phys_out, wall_clamp, ptr(rows), sp);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return;
   }
@@ -103,7 +105,7 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
         psf_lo.data_ptr<scalar_t>(), psf_hi.data_ptr<scalar_t>(),
         pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),
         dref.data_ptr<scalar_t>(), ncolumns, nc1, iu, scalar_t(grav), x1_grid,
-        phys_in, phys_out, wall_clamp, rows_ptr);
+        phys_in, phys_out, wall_clamp, rows_ptr, sp);
   });
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }

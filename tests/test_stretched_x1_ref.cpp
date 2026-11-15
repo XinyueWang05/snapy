@@ -388,7 +388,7 @@ std::vector<double> pref_error(std::vector<double> const& f, bool stretched,
                   : torch::Tensor();
   at::native::call_hydro_ref_x1(
       torch::kCPU, w, dx1f, anchor, lo, hi, pref, dsf, dref, n - 1, kG,
-      stretched ? kX1RefStretched : kX1RefUniform, phys, phys, true, rows);
+      stretched ? kX1RefStretched : kX1RefUniform, phys, phys, true, rows, torch::Tensor());
   std::vector<double> e(n);
   for (int i = 0; i < n; ++i) {
     double pbar = w[IPR][0][0][i].item<double>();

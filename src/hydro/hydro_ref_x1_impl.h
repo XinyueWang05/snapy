@@ -172,10 +172,14 @@ template <typename T>
 inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
     T const* w, T const* dx1f, T const* psf_lo, T const* psf_hi, T* pref,
     T* dsf, T* dref, int column, int i, int ncolumns, int nc1, int iu, T grav,
-    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp, T const* rows) {
+    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp, T const* rows,
+    int off = 0) {
+  // a column standing on a solid `off` cells deep is the wall column above
+  // it: cell i is cell i + off, its surface face is il, il is unchanged
   bool uniform = x1_grid == kX1RefUniform;
   int ncells = ncolumns * nc1;
-  int flat = column * nc1;
+  int flat = column * nc1 + off;
+  nc1 -= off, iu -= off, dx1f += off;
   int il = nc1 - 1 - iu;
   // the six-face stencil never crosses a physical wall
   // A one-sided row spans SIX faces, so on a block with fewer than five x1
@@ -279,18 +283,42 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
   dsf[flat + i] = lo * rf;
 }
 
+//! cell i of a column; under a solid surface `surf` cells deep the cells of
+//! the shifted wall column, and below its three ghosts the plain cell mean
+//! (never read). A stretched x1 then takes rows built for that offset.
+template <typename T>
+inline DISPATCH_MACRO void hydro_ref_x1_column_cell(
+    T const* w, T const* dx1f, T const* psf_lo, T const* psf_hi, T* pref,
+    T* dsf, T* dref, int column, int i, int ncolumns, int nc1, int iu, T grav,
+    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp, T const* rows,
+    int const* surf) {
+  int o = surf ? surf[column] : 0;
+  if (i >= o) {
+    hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column,
+                           i - o, ncolumns, nc1, iu, grav, x1_grid, phys_in,
+                           phys_out, wall_clamp,
+                           rows && surf ? rows + 7 * nc1 * o : rows, o);
+    return;
+  }
+  int c = column * nc1 + i, nw = ncolumns * nc1;
+  T rop = w[IDN * nw + c] / w[IPR * nw + c];
+  pref[c] = T(0.5) * (psf_lo[c] + psf_hi[c]);
+  dref[c] = pref[c] * rop;
+  dsf[c] = psf_lo[c] * rop;
+}
+
 template <typename T>
 inline DISPATCH_MACRO void hydro_ref_x1_impl(
     T const* w, T const* dx1f, T const* anchor, T* psf_lo, T* psf_hi, T* pref,
     T* dsf, T* dref, int column, int ncolumns, int nc1, int iu, T grav,
-    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp, T const* rows) {
+    int x1_grid, bool phys_in, bool phys_out, bool wall_clamp, T const* rows,
+    int const* surf = nullptr) {
   hydro_ref_x1_scan_impl(w, dx1f, anchor, psf_lo, psf_hi, column, ncolumns, nc1,
                          iu, grav);
-  for (int i = 0; i < nc1; ++i) {
-    hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column, i,
-                           ncolumns, nc1, iu, grav, x1_grid, phys_in, phys_out,
-                           wall_clamp, rows);
-  }
+  for (int i = 0; i < nc1; ++i)
+    hydro_ref_x1_column_cell(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column,
+                             i, ncolumns, nc1, iu, grav, x1_grid, phys_in,
+                             phys_out, wall_clamp, rows, surf);
 }
 
 }  // namespace snap

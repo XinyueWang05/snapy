@@ -159,7 +159,7 @@ void dispatch(Inputs const& in, RefOutput const& out, bool uniform,
   at::native::call_hydro_ref_x1(in.w.device().type(), in.w, in.dx1f, in.anchor,
                                 out.psf_lo, out.psf_hi, out.pref, out.dsf,
                                 out.dref, iu, 1.0, uniform, phys_in, phys_out,
-                                wall_clamp, torch::Tensor());
+                                wall_clamp, torch::Tensor(), torch::Tensor());
 }
 
 //! the cells a block owns: [il, iu]. tensor_reference has no clamped branch on
@@ -364,7 +364,7 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
       at::native::call_hydro_ref_x1(
           torch::kCPU, w, dx1f, torch::Tensor(), expected.psf_lo,
           expected.psf_hi, expected.pref, expected.dsf, expected.dref, iu, 1.0,
-          snap::kX1RefStretched, true, true, true, rows);
+          snap::kX1RefStretched, true, true, true, rows, torch::Tensor());
 
       auto wg = w.to(torch::kCUDA).contiguous();
       auto actual = allocate_output(wg);
@@ -372,7 +372,7 @@ TEST(HydroRefX1Dispatch, cuda_matches_cpu_on_the_stretched_rows) {
                                     torch::Tensor(), actual.psf_lo,
                                     actual.psf_hi, actual.pref, actual.dsf,
                                     actual.dref, iu, 1.0, snap::kX1RefStretched,
-                                    true, true, true, rows.to(torch::kCUDA));
+                                    true, true, true, rows.to(torch::kCUDA), torch::Tensor());
       torch::cuda::synchronize();
 
       auto mean2 = 0.5 * (expected.psf_lo + expected.psf_hi);
@@ -477,7 +477,7 @@ TEST(HydroRefX1Dispatch,
   auto a = allocate_output(big.w);
   at::native::call_hydro_ref_x1(
       torch::kCPU, big.w, big.dx1f, torch::Tensor(), a.psf_lo, a.psf_hi, a.pref,
-      a.dsf, a.dref, ng + 11, g, true, true, false, true, torch::Tensor());
+      a.dsf, a.dref, ng + 11, g, true, true, false, true, torch::Tensor(), torch::Tensor());
 
   // the bottom FOUR of those cells as their own block -- same wall, same
   // column, and the seam anchor the relay would have handed it (hydro.cpp's
@@ -487,7 +487,7 @@ TEST(HydroRefX1Dispatch,
   auto b = allocate_output(small.w);
   at::native::call_hydro_ref_x1(
       torch::kCPU, small.w, small.dx1f, anchor, b.psf_lo, b.psf_hi, b.pref,
-      b.dsf, b.dref, ng + 3, g, true, true, false, true, torch::Tensor());
+      b.dsf, b.dref, ng + 3, g, true, true, false, true, torch::Tensor(), torch::Tensor());
 
   auto want = a.pref.narrow(-1, ng, 4);
   auto got = b.pref.narrow(-1, ng, 4);
@@ -541,7 +541,7 @@ TEST(HydroRefX1Dispatch,
         at::native::call_hydro_ref_x1(
             torch::kCPU, in.w, in.dx1f, in.anchor, expected.psf_lo,
             expected.psf_hi, expected.pref, expected.dsf, expected.dref, kIu,
-            1., grid, true, true, true, rows);
+            1., grid, true, true, true, rows, torch::Tensor());
         snap::HydroReferenceX1 actual(in.w);
         op.evaluate(in.w, 1., in.anchor, actual);
         EXPECT_TRUE(torch::equal(actual.psf_lo, expected.psf_lo));

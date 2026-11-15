@@ -53,7 +53,8 @@ using hydro_ref_x1_fn =
              torch::Tensor const& psf_hi, torch::Tensor const& pref,
              torch::Tensor const& dsf, torch::Tensor const& dref, int iu,
              double grav, int x1_grid, bool phys_in, bool phys_out,
-             bool wall_clamp, torch::Tensor const& rows);
+             bool wall_clamp, torch::Tensor const& rows,
+             torch::Tensor const& surf);
 
 DECLARE_DISPATCH(hydro_ref_x1_fn, call_hydro_ref_x1);
 
