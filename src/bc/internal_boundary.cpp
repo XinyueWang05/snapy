@@ -112,16 +112,20 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
   s = s.movedim(axis, -1).contiguous();
   int n = s.size(-1), lines = s.numel() / n;
   auto sp = s.data_ptr<bool>();
-  // two copies only on a line with a run too thin to serve both sides
+  // the solid runs [a, b] of each line; two copies only on a line with an
+  // interior run too thin to serve both sides
+  std::vector<std::vector<std::pair<int, int>>> lruns(lines);
   std::vector<char> thin(lines, 0);
   bool two = false;
-  for (int l = 0; !bottom_only && l < lines; ++l)
+  for (int l = 0; l < lines; ++l)
     for (int a = 0, b; a < n; a = b + 1) {
       for (; a < n && !sp[l * n + a]; ++a) {
       }
+      if (a == n) break;
       for (b = a; b + 1 < n && sp[l * n + b + 1]; ++b) {
       }
-      if (a < n && a > 0 && b + 1 < n && b - a + 1 < 2 * reach)
+      lruns[l].push_back({a, b});
+      if (!bottom_only && a > 0 && b + 1 < n && b - a + 1 < 2 * reach)
         two = thin[l] = 1;
     }
   int nc = two ? 2 : 1;
@@ -132,16 +136,8 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
   auto ip = idx.data_ptr<int64_t>(), pp = pick.data_ptr<int64_t>();
   auto op = odd.data_ptr<bool>();
   for (int l = 0; l < lines; ++l) {
-    bool const *f = sp + l * n, tl = thin[l];
-    std::vector<std::pair<int, int>> runs;
-    for (int a = 0, b; a < n; a = b + 1) {
-      for (; a < n && !f[a]; ++a) {
-      }
-      if (a == n) break;
-      for (b = a; b + 1 < n && f[b + 1]; ++b) {
-      }
-      runs.push_back({a, b});
-    }
+    bool tl = thin[l];
+    auto const &runs = lruns[l];
     // the fluid source of cell j mirrored across face `face`, folded back
     // into the fluid gap [lo, hi]; returns (source, odd reflection count)
     auto reflect = [&](int j, int face, int lo, int hi) {

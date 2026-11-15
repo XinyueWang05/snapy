@@ -588,10 +588,9 @@ TEST(HydroRefX1Dispatch, solid_surface_tensor_fallback_matches_cpu) {
           torch::kCPU, in.w, in.dx1f, in.anchor, cpu.psf_lo, cpu.psf_hi,
           cpu.pref, cpu.dsf, cpu.dref, 12, 1.0, uniform, true, true, true,
           torch::Tensor(), surf);
-      snap::hydro_ref_x1_tensor(in.w, in.dx1f, in.anchor, ten.psf_lo,
-                                ten.psf_hi, ten.pref, ten.dsf, ten.dref, 12,
-                                1.0, uniform, true, true, true, torch::Tensor(),
-                                surf);
+      snap::hydro_ref_x1_mps(in.w, in.dx1f, in.anchor, ten.psf_lo, ten.psf_hi,
+                             ten.pref, ten.dsf, ten.dref, 12, 1.0, uniform, true,
+                             true, true, torch::Tensor(), surf);
       double worst = 0.;
       for (auto [a, b] : {std::pair{cpu.psf_lo, ten.psf_lo},
                           std::pair{cpu.psf_hi, ten.psf_hi},

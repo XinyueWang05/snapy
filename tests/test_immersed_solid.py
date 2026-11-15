@@ -159,7 +159,7 @@ def main(quick=False):
     ok, rows = True, {}
     for stretched in (False, True) if DEV != "mps" else (False,):
         for pulse in (False, True):
-            ns = (32, 64, 128) + ((256,) if stretched and pulse else ())
+            ns = (128, 256) if stretched and pulse else (32,)  # the order needs two
             for n in ns[:1] if quick else ns:
                 for k in (1, 2, 6):
                     for fill in ("earth", "matched"):

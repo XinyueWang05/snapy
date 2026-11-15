@@ -102,17 +102,16 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
   });
 }
 
-void hydro_ref_x1_tensor(torch::Tensor const& w, torch::Tensor const& dx1f,
-                         torch::Tensor const& anchor_in,
-                         torch::Tensor const& psf_lo,
-                         torch::Tensor const& psf_hi, torch::Tensor const& pref,
-                         torch::Tensor const& dsf, torch::Tensor const& dref,
-                         int iu, double grav, int x1_grid, bool phys_in,
-                         bool phys_out, bool wall_clamp,
-                         torch::Tensor const& rows, torch::Tensor const& surf) {
+void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
+                      torch::Tensor const& anchor_in,
+                      torch::Tensor const& psf_lo, torch::Tensor const& psf_hi,
+                      torch::Tensor const& pref, torch::Tensor const& dsf,
+                      torch::Tensor const& dref, int iu, double grav,
+                      int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
+                      torch::Tensor const& rows, torch::Tensor const& surf) {
   if (surf.defined()) {  // the columns `o` cells deep: their wall column
-    hydro_ref_x1_tensor(w, dx1f, anchor_in, psf_lo, psf_hi, pref, dsf, dref, iu,
-                        grav, x1_grid, phys_in, phys_out, wall_clamp, rows, {});
+    hydro_ref_x1_mps(w, dx1f, anchor_in, psf_lo, psf_hi, pref, dsf, dref, iu,
+                     grav, x1_grid, phys_in, phys_out, wall_clamp, rows, {});
     int nc1 = w.size(-1), ncol = surf.numel();
     auto s = surf.flatten().cpu();
     for (int o = 1; o <= s.max().item<int>(); ++o) {
@@ -129,9 +128,9 @@ void hydro_ref_x1_tensor(torch::Tensor const& w, torch::Tensor const& dx1f,
                     : anchor_in;
       std::vector<torch::Tensor> out = {psf_lo, psf_hi, pref, dsf, dref}, sub;
       for (auto& t : out) sub.push_back(torch::empty({1, k, n}, w.options()));
-      hydro_ref_x1_tensor(sw, dx1f.narrow(0, o, n).contiguous(), sa, sub[0],
-                          sub[1], sub[2], sub[3], sub[4], iu - o, grav, x1_grid,
-                          true, phys_out, wall_clamp, rows, {});
+      hydro_ref_x1_mps(sw, dx1f.narrow(0, o, n).contiguous(), sa, sub[0],
+                       sub[1], sub[2], sub[3], sub[4], iu - o, grav, x1_grid,
+                       true, phys_out, wall_clamp, rows, {});
       for (int m = 0; m < 5; ++m)
         out[m].view({ncol, nc1}).narrow(-1, o, n).index_copy_(0, cols,
                                                               sub[m][0]);
@@ -363,6 +362,6 @@ REGISTER_MPS_DISPATCH(call_hydro_pressure_scan_x1,
                       &snap::hydro_pressure_scan_x1_tensor);
 DEFINE_DISPATCH(call_hydro_ref_x1);
 REGISTER_ALL_CPU_DISPATCH(call_hydro_ref_x1, &snap::hydro_ref_x1_cpu);
-REGISTER_MPS_DISPATCH(call_hydro_ref_x1, &snap::hydro_ref_x1_tensor);
+REGISTER_MPS_DISPATCH(call_hydro_ref_x1, &snap::hydro_ref_x1_mps);
 
 }  // namespace at::native
