@@ -1,5 +1,9 @@
 #pragma once
 
+// C/C++
+#include <map>
+#include <tuple>
+
 // torch
 #include <torch/nn/cloneable.h>
 #include <torch/nn/module.h>
@@ -112,6 +116,33 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
    * \return revised primitive left/right states
    */
   torch::Tensor forward(torch::Tensor wlr, int dim, torch::Tensor solid) const;
+
+  //! Mirror ghosts of the solid cells along w-dimension `dim` (3 = x1): each
+  //! solid cell within `reach` of a fluid face takes the reflection of the
+  //! fluid across that face (gather index `idx`, odd reflection count `odd`).
+  //! x1 (bottom_only) mirrors the bottom-attached run only, from above, and
+  //! `surf` holds its depth per column; elsewhere solid runs thinner than
+  //! 2 reach get two copies (alternate runs seen from below) and `pick` holds
+  //! the copy each cell's stencil reads.
+  struct Mirror {
+    torch::Tensor idx, odd, pick, surf;  // idx/odd: [copies, nc3, nc2, nc1]
+    int copies = 1;
+  };
+  Mirror const &mirror_index(torch::Tensor solid, int dim, int reach,
+                             bool bottom_only) const;
+  //! v [..., nc3, nc2, nc1] gathered from copy `copy`; row `normal` of a
+  //! 4-d v (the normal velocity) changes sign under an odd reflection
+  torch::Tensor mirror(torch::Tensor v, Mirror const &m, int copy, int dim,
+                       int normal = -1) const;
+  //! face states (ILT, IRT stacked first) from two copies: each side from
+  //! the copy its source cell reads (ILT from cell i-1, IRT from cell i)
+  torch::Tensor pick_lr(torch::Tensor lr0, torch::Tensor lr1, Mirror const &m,
+                        int dim) const;
+
+ private:
+  mutable std::map<std::tuple<int, int, bool>, Mirror> mirrors_;
+  mutable void const *mirror_src_ = nullptr;
+  mutable int64_t mirror_ver_ = -1;
 };
 TORCH_MODULE(InternalBoundary);
 

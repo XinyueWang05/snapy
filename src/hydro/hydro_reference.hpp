@@ -101,7 +101,8 @@ class HydroReferenceX1Operator {
   //! each sweep, avoiding stale guards after heating, restart or regridding.
   void evaluate_split(torch::Tensor const& w0, torch::Tensor const& dw,
                       double grav, torch::Tensor const& anchor,
-                      HydroReferenceX1& out) const {
+                      HydroReferenceX1& out,
+                      torch::Tensor const& surf = {}) const {
     TORCH_CHECK(w0.dim() == 4 && w0.sizes() == dw.sizes() &&
                     w0.size(-1) == dx1f_.numel(),
                 "split hydro reference: incompatible state shapes");
@@ -124,29 +125,54 @@ class HydroReferenceX1Operator {
         anchor.defined() ? anchor.to(op).contiguous() : torch::Tensor(),
         out.psf_lo, out.psf_hi, out.pref, out.dsf, out.dref, iu_, grav, grid_,
         phys_in_, phys_out_, wall_clamp_,
-        rows_.defined() ? pair(rows_) : torch::Tensor());
+        rows_.defined() ? pair(rows_for(surf)) : torch::Tensor(),
+        surf_on(surf, w));
   }
 
   void evaluate(torch::Tensor const& w, double grav,
-                torch::Tensor const& anchor, HydroReferenceX1& out) const {
+                torch::Tensor const& anchor, HydroReferenceX1& out,
+                torch::Tensor const& surf = {}) const {
     TORCH_CHECK(w.dim() == 4 && w.size(-1) == dx1f_.numel(),
                 "hydro reference: state and grid shapes disagree");
     auto dx = dx1f_.to(w.options()).contiguous();
-    auto rows =
-        rows_.defined() ? rows_.to(w.options()).contiguous() : torch::Tensor();
+    auto rows = rows_.defined() ? rows_for(surf).to(w.options()).contiguous()
+                                : torch::Tensor();
     auto a = anchor.defined() ? anchor.to(w.options()).contiguous()
                               : torch::Tensor();
     at::native::call_hydro_ref_x1(w.device().type(), w.contiguous(), dx, a,
                                   out.psf_lo, out.psf_hi, out.pref, out.dsf,
                                   out.dref, iu_, grav, grid_, phys_in_,
-                                  phys_out_, wall_clamp_, rows);
+                                  phys_out_, wall_clamp_, rows,
+                                  surf_on(surf, w));
   }
 
  private:
+  //! a solid surface `o` cells deep: the rows of the wall column above it,
+  //! [offset, cell, 7] up to the deepest surface
+  torch::Tensor rows_for(torch::Tensor const& surf) const {
+    if (!surf.defined()) return rows_;
+    int deep = surf.max().item<int>();
+    if (rows_off_.size(0) <= deep) {
+      int nc1 = dx1f_.size(0);
+      rows_off_ = torch::zeros({deep + 1, nc1, 7}, torch::kFloat64);
+      rows_off_.select(-1, 0).fill_(-1.);
+      for (int o = 0; o <= deep; ++o)
+        rows_off_[o].narrow(0, 0, nc1 - o).copy_(hydro_ref_x1_stretched_rows(
+            dx1f_.narrow(0, o, nc1 - o), iu_ - o, phys_in_, phys_out_,
+            wall_clamp_));
+    }
+    return rows_off_.narrow(0, 0, deep + 1).contiguous();
+  }
+  static torch::Tensor surf_on(torch::Tensor const& surf,
+                               torch::Tensor const& w) {
+    return surf.defined() ? surf.to(w.device(), torch::kInt).contiguous()
+                          : surf;
+  }
   static int64_t version(torch::Tensor const& t) {
     return t.is_inference() ? 0 : t._version();
   }
   torch::Tensor dx1f_, rows_;
+  mutable torch::Tensor rows_off_ = torch::zeros({0});
   int64_t version_;
   c10::ScalarType dtype_;
   torch::Device device_;

@@ -603,7 +603,8 @@ void HydroImpl::_revise_x1outer_ghost(torch::Tensor const& w) {
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
-                         HydroPressureSplit* split) const {
+                         HydroPressureSplit* split,
+                         torch::Tensor const& surf) const {
   bool paired = split != nullptr;
   auto pcoord = pmb->pcoord;
   int is = pcoord->il();
@@ -654,7 +655,7 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
     x1_reference_->evaluate_split(
         w, dw, g,
         anchor.defined() ? anchor.narrow(-1, 0, 2).unsqueeze(-2) : anchor,
-        pairs);
+        pairs, surf);
     auto total = [](torch::Tensor const& p) {
       return p.select(-1, 0) + p.select(-1, 1);
     };
@@ -673,7 +674,7 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
                          : (w[IPR] - split->cell0).narrow(-1, iu, 1).clone();
   } else {
     reference = HydroReferenceX1(w);
-    x1_reference_->evaluate(w, g, anchor, reference);
+    x1_reference_->evaluate(w, g, anchor, reference, surf);
   }
   auto& psf_lo = reference.psf_lo;
   auto& psf_hi = reference.psf_hi;
@@ -864,6 +865,15 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
             0.5 * (dsf_lr[ILT].select(-1, i) + dsf_lr[IRT].select(-1, i));
         for (int s : {(int)ILT, (int)IRT}) dsf_lr[s].select(-1, i).copy_(mean);
       }
+    }
+    // a solid surface is a reflecting wall face of its own column
+    if (surf.defined()) {
+      auto at = (surf.to(torch::kLong) + pcoord->il()).unsqueeze(-1);
+      auto pair = dsf_lr.gather(-1, at.unsqueeze(0).expand({2, -1, -1, 1}));
+      auto mean = 0.5 * (pair[ILT] + pair[IRT]);
+      auto on = (surf > 0).unsqueeze(-1);
+      for (int s : {(int)ILT, (int)IRT})
+        dsf_lr[s].scatter_(-1, at, torch::where(on, mean, pair[s]));
     }
   }
 

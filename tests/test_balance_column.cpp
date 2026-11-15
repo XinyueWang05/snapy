@@ -101,7 +101,7 @@ Ref reference(torch::Tensor const& w, torch::Tensor const& dx1f, int iu,
       w.device().type(), w.contiguous(), dx1f.contiguous(), anchor, r.psf_lo,
       r.psf_hi, r.pref, r.dsf, r.dref, iu, kGrav,
       uniform ? snap::kX1RefUniform : snap::kX1RefStretched, phys_in, phys_out,
-      wall_clamp, rows);
+      wall_clamp, rows, torch::Tensor());
   return r;
 }
 

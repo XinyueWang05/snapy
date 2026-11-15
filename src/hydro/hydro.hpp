@@ -395,7 +395,8 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
   _hydro_ref_x1(torch::Tensor const& w,
                 torch::Tensor const& dw = torch::Tensor(),
-                HydroPressureSplit* split = nullptr) const;
+                HydroPressureSplit* split = nullptr,
+                torch::Tensor const& surf = torch::Tensor()) const;
   //! overwrite the m x1 ghost rows of f next to each x1 neighbour with the
   //! neighbour's own rows of the same cells (faces: the same faces past the
   //! seam face), so a split column reads the values of one block

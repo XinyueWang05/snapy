@@ -62,7 +62,7 @@ Out run(std::vector<double> const& h) {
   at::native::call_hydro_ref_x1(torch::kCPU, w, dx1f, torch::Tensor(), o.psf_lo,
                                 o.psf_hi, o.pref, o.dsf, o.dref, kIu, kGrav,
                                 snap::kX1RefStretched, /*phys_in=*/true,
-                                /*phys_out=*/true, /*wall_clamp=*/true, rows);
+                                /*phys_out=*/true, /*wall_clamp=*/true, rows, torch::Tensor());
   return o;
 }
 

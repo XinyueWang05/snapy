@@ -59,9 +59,10 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
                       torch::Tensor const& dsf, torch::Tensor const& dref,
                       int iu, double grav, int x1_grid, bool phys_in,
                       bool phys_out, bool wall_clamp,
-                      torch::Tensor const& rows) {
+                      torch::Tensor const& rows, torch::Tensor const& surf) {
   TORCH_CHECK(x1_grid != kX1RefStretched || rows.defined(),
               "hydro_ref_x1: a stretched x1 needs its six-face rows");
+  auto sp = surf.defined() ? surf.data_ptr<int>() : nullptr;
   int ncolumns = w.size(1) * w.size(2);
   int nc1 = w.size(3);
   // A trailing pair dimension selects finite-increment reference arithmetic.
@@ -77,7 +78,7 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
         hydro_ref_x1_impl(ptr(w), ptr(dx1f), ptr(anchor), ptr(psf_lo),
                           ptr(psf_hi), ptr(pref), ptr(dsf), ptr(dref), column,
                           ncolumns, nc1, iu, SRS(grav), x1_grid, phys_in,
-                          phys_out, wall_clamp, ptr(rows));
+                          phys_out, wall_clamp, ptr(rows), sp);
     });
     return;
   }
@@ -92,7 +93,7 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
                           pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),
                           dref.data_ptr<scalar_t>(), static_cast<int>(column),
                           ncolumns, nc1, iu, scalar_t(grav), x1_grid, phys_in,
-                          phys_out, wall_clamp, rows_ptr);
+                          phys_out, wall_clamp, rows_ptr, sp);
       }
     });
   });
@@ -104,7 +105,11 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
                       torch::Tensor const& pref, torch::Tensor const& dsf,
                       torch::Tensor const& dref, int iu, double grav,
                       int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
-                      torch::Tensor const& /*rows*/) {
+                      torch::Tensor const& /*rows*/,
+                      torch::Tensor const& surf) {
+  TORCH_CHECK(!surf.defined(),
+              "a solid surface under the x1 reference is not yet supported "
+              "on MPS; run it on CPU or CUDA");
   TORCH_CHECK(x1_grid != kX1RefStretched,
               "a stretched x1 (geometry/x1f or cells/x1rat) is not supported "
               "on MPS (#280); run it on CPU or CUDA");
