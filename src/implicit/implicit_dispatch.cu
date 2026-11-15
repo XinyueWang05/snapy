@@ -175,11 +175,17 @@ void vic_solve_cuda(at::TensorIterator &iter, double dt, double grav, int dir) {
             z0 = reinterpret_cast<Vector *>(data[13] + strides[13]);
             z1 = reinterpret_cast<Vector *>(data[14] + strides[14]);
           }
+          // the lower wall row: the column's first fluid cell (a plain if:
+          // a device lambda may not first-capture inside if constexpr)
+          int k0 = 0;
+          auto solid = reinterpret_cast<scalar_t *>(data[10] + strides[10]);
+          if (K == 2)
+            while (k0 + 1 < nlayer && solid[k0 * stride2] != 0) ++k0;
 
           // partial: delta holds the assembly's m_t right-hand-side term
           if (!ForwardSweep<K>(a, b, c, delta, du, dt, 0, nlayer - 1, dir, ny,
                                stride1, stride2, first_block, last_block,
-                               N == 3, z0, z1, 0, nlayer - 1))
+                               N == 3, z0, z1, k0, nlayer - 1))
             return;
           vic_backward_substitute(a, delta, 0, nlayer - 1, z0, z1);
         });

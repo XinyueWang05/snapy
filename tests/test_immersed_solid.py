@@ -9,6 +9,7 @@ fluid columns, gravity, explicit and scheme 9, equals the columns between reflec
 TRACER: a uniform tracer over a step stays uniform, its solid fill notwithstanding.
 X1 SPLIT: the pulsed solid column on two x1 blocks of one snapy.Mesh equals one block bit for
 bit over 20 steps (uniform, stretched); implicit-scheme 9 with a solid refuses nb1 = 2 at initialize.
+IMPL: the uniform pulse column under implicit schemes 1 and 9 at acoustic Courant 0.4 and 4.
 MPS: uniform COL arms in float32 to 1e-5. usage: python test_immersed_solid.py [--device mps]"""
 import math, os, sys, tempfile, time
 import torch, yaml
@@ -94,13 +95,13 @@ def fluid(f, pulse):
     return wb[[kIDN, kIPR], 0, 0]
 
 
-def run(n, k, stretched, pulse, fill):
+def run(n, k, stretched, pulse, fill, scheme=0, courant=.4):
     f = faces(n, k, stretched)
     rp = fluid(f[k:], pulse)
     out = {}
     sd, sp = (1.e3, 1.e9) if fill == "earth" else (float(rp[0, 0]), float(rp[1, 0]))
     for name, xf, kk in (("wall", f[k:], 0), ("solid", f, k)):
-        b = block(xf, {"solid-density": sd, "solid-pressure": sp} if kk else None)
+        b = block(xf, {"solid-density": sd, "solid-pressure": sp} if kk else None, 1, scheme)
         w = b.buffer("hydro.D").clone().zero_()
         for c, v in ((kIDN, rp[0]), (kIPR, rp[1])):
             w[c, 0, 0, NG + kk:NG + kk + n] = v
@@ -115,7 +116,7 @@ def run(n, k, stretched, pulse, fill):
         var, _ = b.initialize(init)
         h = xf[1:] - xf[:-1]
         if name == "wall":  # one dt and step count, from the wall column
-            dt = .4 * float(h.min()) / math.sqrt(GAM * 1.)
+            dt = courant * float(h.min()) / math.sqrt(GAM * 1.)
             nstep = math.ceil(.3 / dt) if pulse else 100
             dt = .3 / nstep if pulse else dt
         for _ in range(nstep):
@@ -232,6 +233,14 @@ def main():
                          else float("inf") if d[0] == 0 else math.nan)
                 print(f"ORDER stretched pulse k={k} fill={fill}: 128->256 {order:.2f}", flush=True)
                 ok &= math.isfinite(d[0]) and order >= 1.8
+    for scheme in (1, 9) if DEV != "mps" else ():  # implicit corrected-PE surface row
+        for courant in (.4, 4.):
+            for k in (1, 6):
+                for fill in ("earth", "matched"):
+                    d = run(32, k, False, True, fill, scheme, courant)["diff"]
+                    print(f"IMPL uniform pulse N= 32 k={k} fill={fill:7s} scheme={scheme} courant={courant}: "
+                          f"max|u_solid-u_wall|={d:.2e}", flush=True)
+                    ok &= d <= TOL
     for wid in (1, 2) if DEV != "mps" else ():
         for scheme in (0, 9):
             d = thin_x2(wid, scheme)
