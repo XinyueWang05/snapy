@@ -575,4 +575,34 @@ TEST(HydroRefX1Dispatch, shared_operator_invalidates_geometry_cache) {
   EXPECT_EQ(initialization.grid(), snap::kX1RefStretched);
 }
 
+// A column standing on a solid `surf` cells deep is its wall column: the
+// tensor fallback (MPS) reruns the tensor reference on that shorter column and
+// matches the CPU kernel's shifted frame, several depths in one block.
+TEST(HydroRefX1Dispatch, solid_surface_tensor_fallback_matches_cpu) {
+  for (bool uniform : {true, false})
+    for (bool with_anchor : {false, true}) {
+      auto in = make_inputs(torch::kFloat64, uniform, with_anchor, 16);
+      auto surf = torch::tensor({0, 1, 2, 3, 5, 2}, torch::kInt).view({2, 3});
+      auto cpu = allocate_output(in.w), ten = allocate_output(in.w);
+      at::native::call_hydro_ref_x1(
+          torch::kCPU, in.w, in.dx1f, in.anchor, cpu.psf_lo, cpu.psf_hi,
+          cpu.pref, cpu.dsf, cpu.dref, 12, 1.0, uniform, true, true, true,
+          torch::Tensor(), surf);
+      snap::hydro_ref_x1_tensor(in.w, in.dx1f, in.anchor, ten.psf_lo,
+                                ten.psf_hi, ten.pref, ten.dsf, ten.dref, 12,
+                                1.0, uniform, true, true, true, torch::Tensor(),
+                                surf);
+      double worst = 0.;
+      for (auto [a, b] : {std::pair{cpu.psf_lo, ten.psf_lo},
+                          std::pair{cpu.psf_hi, ten.psf_hi},
+                          std::pair{cpu.pref, ten.pref},
+                          std::pair{cpu.dsf, ten.dsf},
+                          std::pair{cpu.dref, ten.dref}})
+        worst = std::max(worst, ((a - b).abs() / b.abs()).max().item<double>());
+      std::printf("solid tensor fallback uniform=%d anchor=%d: max rel %.2e\n",
+                  uniform, with_anchor, worst);
+      EXPECT_LE(worst, 1.e-13);
+    }
+}
+
 }  // namespace

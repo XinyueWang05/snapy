@@ -35,6 +35,16 @@ torch::Tensor hydro_ref_x1_stretched_rows(torch::Tensor const& dx1f, int iu,
                                           bool phys_in, bool phys_out,
                                           bool wall_clamp);
 
+//! Tensor fallback of call_hydro_ref_x1 (MPS); also callable on CPU. A solid
+//! surface `surf` cells deep reruns it on those columns' wall column.
+void hydro_ref_x1_tensor(torch::Tensor const& w, torch::Tensor const& dx1f,
+                         torch::Tensor const& anchor, torch::Tensor const& psf_lo,
+                         torch::Tensor const& psf_hi, torch::Tensor const& pref,
+                         torch::Tensor const& dsf, torch::Tensor const& dref,
+                         int iu, double grav, int x1_grid, bool phys_in,
+                         bool phys_out, bool wall_clamp,
+                         torch::Tensor const& rows, torch::Tensor const& surf);
+
 //! Tensor fallback; also callable on CPU for backend parity tests.
 void hydro_pressure_scan_x1_tensor(torch::Tensor const& rho,
                                    torch::Tensor const& dx1f,

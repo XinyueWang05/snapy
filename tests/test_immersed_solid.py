@@ -11,7 +11,8 @@ Gate: the fluid of the solid column equals the wall column (uniform and stretche
 stretched pulse: falls at order >= 1.8 from 128 to 256 cells, set by the grid-continuing solid
 widths, mirrored widths match to round-off), and the dx-weighted fluid mass equals the wall
 column's to 1e-13.
-usage: python test_immersed_solid.py [--quick]"""
+On MPS (no float64; a stretched x1 is refused there, #280) the uniform arms run in float32 and
+match to 1e-5. usage: python test_immersed_solid.py [--quick] [--device mps]"""
 import math, os, sys, tempfile
 import torch, yaml
 import snapy
@@ -19,6 +20,8 @@ from snapy import MeshBlock, MeshBlockOptions, kIDN, kIPR, kIV1
 
 torch.set_default_dtype(torch.float64)
 NG, GAM = 3, 1.4
+DEV = sys.argv[sys.argv.index("--device") + 1] if "--device" in sys.argv else "cpu"
+DT, TOL = (torch.float32, 1.e-5) if DEV == "mps" else (torch.float64, 1.e-12)
 
 
 def faces(n, k, stretched):
@@ -53,8 +56,10 @@ def block(xf, internal=None):
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "c.yaml")
         yaml.safe_dump(c, open(p, "w"))
-        b = MeshBlock(MeshBlockOptions.from_yaml(p))
-    b.to(torch.device("cpu"), torch.float64)
+        o = MeshBlockOptions.from_yaml(p)
+        o.layout().device(DEV)
+        b = MeshBlock(o)
+    b.to(torch.device(DEV), DT)
     return b
 
 
@@ -107,7 +112,7 @@ def run(n, k, stretched, pulse, fill):
                 b.forward(var, dt, st)
         u = var["hydro_u"][:, 0, 0, NG + kk:NG + kk + n]
         wv = var["hydro_w"][:, 0, 0, NG + kk:NG + kk + n]
-        out[name] = (u.clone(), wv.clone(), float((u[kIDN] * h[kk:]).sum()))
+        out[name] = (u.clone(), wv.clone(), float((u[kIDN] * h[kk:].to(u)).sum()))
     (uw, ww, mw), (us, ws, ms) = out["wall"], out["solid"]
     return dict(diff=float((us - uw).abs().max()), wmax=float(ws[kIV1].abs().max()),
                 wmax_wall=float(ww[kIV1].abs().max()), mass=abs(ms - mw) / mw,
@@ -116,7 +121,7 @@ def run(n, k, stretched, pulse, fill):
 
 def main(quick=False):
     ok, rows = True, {}
-    for stretched in (False, True):
+    for stretched in (False, True) if DEV != "mps" else (False,):
         for pulse in (False, True):
             ns = (32, 64, 128) + ((256,) if stretched and pulse else ())
             for n in ns[:1] if quick else ns:
@@ -129,8 +134,9 @@ def main(quick=False):
                               f"max|w| solid={r['wmax']:.2e} wall={r['wmax_wall']:.2e} "
                               f"dmass={r['mass']:.1e} finite={r['finite']}", flush=True)
                         exact = not stretched or not pulse
-                        ok &= r["finite"] and r["mass"] <= 1.e-13 and (not exact or r["diff"] <= 1.e-12)
-    if not quick:
+                        ok &= (r["finite"] and r["mass"] <= TOL / 10
+                               and (not exact or r["diff"] <= TOL))
+    if not quick and DEV != "mps":
         for k in (1, 2, 6):
             for fill in ("earth", "matched"):
                 d = [rows[True, True, n, k, fill]["diff"] for n in (128, 256)]
