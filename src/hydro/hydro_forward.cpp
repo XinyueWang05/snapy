@@ -1066,9 +1066,6 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   // terrain: the faces beside a solid cell carry no covariance, and the top
   // row of them holds the mirror of the fluid face row above, as wall ghost
   // rows do (else the fill)
-  auto solid_faces = [&](int dim) {
-    return has_solid ? mirror23(dim) : nullptr;
-  };
   using MirrorP = InternalBoundaryImpl::Mirror const*;
   auto x1_seam_rows = [&](torch::Tensor f, int tag, MirrorP s) {
     if (s) f = f.gather(-1, s->cov_idx.expand_as(f));
@@ -1112,7 +1109,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // #289: built from the face states BEFORE the solver may project them
       // into the face-local frame, added to the flux after
       torch::Tensor cwl, cwr;
-      auto s2 = solid_faces(DIM2);
+      auto s2 = has_solid ? mirror23(DIM2) : nullptr;
       if (flux_covariance()) {
         cwl = x1_seam_rows(wlr2[ILT], 0x7730, s2);
         cwr = x1_seam_rows(wlr2[IRT], 0x7732, s2);
@@ -1149,7 +1146,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // x1 there too, because x1 is the stratified direction whichever
       // horizontal face it crosses
       torch::Tensor cwl, cwr;
-      auto s3 = solid_faces(DIM3);
+      auto s3 = has_solid ? mirror23(DIM3) : nullptr;
       if (flux_covariance()) {
         cwl = x1_seam_rows(wlr3[ILT], 0x7734, s3);
         cwr = x1_seam_rows(wlr3[IRT], 0x7736, s3);
