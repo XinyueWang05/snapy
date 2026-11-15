@@ -53,19 +53,14 @@ void hydro_pressure_scan_x1_tensor(torch::Tensor const& rho,
   }
 }
 
+template <bool solid>  // solid: each column from its surface `surf` cells deep
 void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
                       torch::Tensor const& anchor, torch::Tensor const& psf_lo,
                       torch::Tensor const& psf_hi, torch::Tensor const& pref,
                       torch::Tensor const& dsf, torch::Tensor const& dref,
                       int iu, double grav, int x1_grid, bool phys_in,
                       bool phys_out, bool wall_clamp,
-                      torch::Tensor const& rows, torch::Tensor const& surf) {
-  TORCH_CHECK(x1_grid != kX1RefStretched || rows.defined(),
-              "hydro_ref_x1: a stretched x1 needs its six-face rows");
-  if (surf.defined())  // in its own unit: this one compiles as without solids
-    return hydro_ref_x1_cpu_surface(w, dx1f, anchor, psf_lo, psf_hi, pref, dsf,
-                                    dref, iu, grav, x1_grid, phys_in, phys_out,
-                                    wall_clamp, rows, surf);
+                      torch::Tensor const& rows, int const* surf) {
   int ncolumns = w.size(1) * w.size(2);
   int nc1 = w.size(3);
   // A trailing pair dimension selects finite-increment reference arithmetic.
@@ -78,10 +73,10 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
     };
     at::parallel_for(0, ncolumns, 0, [&](int64_t begin, int64_t end) {
       for (int column = begin; column < end; ++column)
-        hydro_ref_x1_impl(ptr(w), ptr(dx1f), ptr(anchor), ptr(psf_lo),
-                          ptr(psf_hi), ptr(pref), ptr(dsf), ptr(dref), column,
-                          ncolumns, nc1, iu, SRS(grav), x1_grid, phys_in,
-                          phys_out, wall_clamp, ptr(rows));
+        hydro_ref_x1_impl<SRS, solid>(
+            ptr(w), ptr(dx1f), ptr(anchor), ptr(psf_lo), ptr(psf_hi),
+            ptr(pref), ptr(dsf), ptr(dref), column, ncolumns, nc1, iu,
+            SRS(grav), x1_grid, phys_in, phys_out, wall_clamp, ptr(rows), surf);
     });
     return;
   }
@@ -90,16 +85,31 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
     auto rows_ptr = rows.defined() ? rows.data_ptr<scalar_t>() : nullptr;
     at::parallel_for(0, ncolumns, 0, [&](int64_t begin, int64_t end) {
       for (int64_t column = begin; column < end; ++column) {
-        hydro_ref_x1_impl(w.data_ptr<scalar_t>(), dx1f.data_ptr<scalar_t>(),
-                          anchor_ptr, psf_lo.data_ptr<scalar_t>(),
-                          psf_hi.data_ptr<scalar_t>(),
-                          pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),
-                          dref.data_ptr<scalar_t>(), static_cast<int>(column),
-                          ncolumns, nc1, iu, scalar_t(grav), x1_grid, phys_in,
-                          phys_out, wall_clamp, rows_ptr);
+        hydro_ref_x1_impl<scalar_t, solid>(
+            w.data_ptr<scalar_t>(), dx1f.data_ptr<scalar_t>(), anchor_ptr,
+            psf_lo.data_ptr<scalar_t>(), psf_hi.data_ptr<scalar_t>(),
+            pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),
+            dref.data_ptr<scalar_t>(), static_cast<int>(column), ncolumns, nc1,
+            iu, scalar_t(grav), x1_grid, phys_in, phys_out, wall_clamp,
+            rows_ptr, surf);
       }
     });
   });
+}
+
+void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
+                      torch::Tensor const& anchor, torch::Tensor const& psf_lo,
+                      torch::Tensor const& psf_hi, torch::Tensor const& pref,
+                      torch::Tensor const& dsf, torch::Tensor const& dref,
+                      int iu, double grav, int x1_grid, bool phys_in,
+                      bool phys_out, bool wall_clamp,
+                      torch::Tensor const& rows, torch::Tensor const& surf) {
+  TORCH_CHECK(x1_grid != kX1RefStretched || rows.defined(),
+              "hydro_ref_x1: a stretched x1 needs its six-face rows");
+  (surf.defined() ? hydro_ref_x1_cpu<true> : hydro_ref_x1_cpu<false>)(
+      w, dx1f, anchor, psf_lo, psf_hi, pref, dsf, dref, iu, grav, x1_grid,
+      phys_in, phys_out, wall_clamp, rows,
+      surf.defined() ? surf.data_ptr<int>() : nullptr);
 }
 
 void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
@@ -118,30 +128,19 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
       auto cols = (s == o).nonzero().flatten().to(w.device());
       int k = cols.numel(), n = nc1 - o;
       if (!k) continue;
-      auto pick = [&](torch::Tensor const& t, int from, int len) {
-        return t.reshape({-1, ncol, nc1}).index_select(1, cols).narrow(-1, from,
-                                                                       len);
-      };
-      auto sw = pick(w, o, n).unsqueeze(1).contiguous();
+      auto sw = w.reshape({-1, 1, ncol, nc1}).index_select(2, cols);
       auto sa = anchor_in.defined()
                     ? anchor_in.reshape({1, ncol, 1}).index_select(1, cols)
                     : anchor_in;
       std::vector<torch::Tensor> out = {psf_lo, psf_hi, pref, dsf, dref}, sub;
       for (auto& t : out) sub.push_back(torch::empty({1, k, n}, w.options()));
-      hydro_ref_x1_mps(sw, dx1f.narrow(0, o, n).contiguous(), sa, sub[0],
-                       sub[1], sub[2], sub[3], sub[4], iu - o, grav, x1_grid,
-                       true, phys_out, wall_clamp, rows, {});
+      hydro_ref_x1_mps(sw.narrow(-1, o, n).contiguous(),
+                       dx1f.narrow(0, o, n).contiguous(), sa, sub[0], sub[1],
+                       sub[2], sub[3], sub[4], iu - o, grav, x1_grid, true,
+                       phys_out, wall_clamp, rows, {});
       for (int m = 0; m < 5; ++m)
         out[m].view({ncol, nc1}).narrow(-1, o, n).index_copy_(0, cols,
                                                               sub[m][0]);
-      // the cells below that column's ghosts: the plain mean, as the kernel
-      auto lo = pick(psf_lo, 0, o)[0], hi = pick(psf_hi, 0, o)[0];
-      auto rop = pick(w[IDN], 0, o)[0] / pick(w[IPR], 0, o)[0];
-      auto mean = 0.5 * (lo + hi);
-      std::vector<std::pair<torch::Tensor, torch::Tensor>> deep = {
-          {pref, mean}, {dref, mean * rop}, {dsf, lo * rop}};
-      for (auto& [t, v] : deep)
-        t.view({ncol, nc1}).narrow(-1, 0, o).index_copy_(0, cols, v);
     }
     return;
   }

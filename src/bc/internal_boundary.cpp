@@ -202,15 +202,10 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
   auto real = solid.is_mps() ? torch::kFloat32 : torch::kFloat64;
   auto i2 = back(idx, nc), sg = 1. - 2. * back(odd, nc).to(real);
   m.idx = i2[0], m.sign = sg[0];
-  if (two) {  // copy 1 only on the x1 rows (axis 2) holding a thin line
-    std::vector<int64_t> rows;
-    for (int i = 0, nc1 = solid.size(2); i < nc1; ++i)
-      for (int l = i; l < lines; l += nc1)
-        if (thin[l]) {
-          rows.push_back(i);
-          break;
-        }
-    m.rows = torch::tensor(rows, torch::kLong).to(solid.device());
+  if (two) {  // copy 1 only on the x1 rows (lines: [other, x1]) of a thin line
+    m.rows = torch::tensor(std::vector<int64_t>(thin.begin(), thin.end()))
+                 .view({shape[0], shape[1]}).any(0).nonzero().flatten()
+                 .to(solid.device());
     m.idx1 = i2[1].index_select(-1, m.rows);
     m.sign1 = sg[1].index_select(-1, m.rows);
     auto pr = back(pick, 0).eq(1);  // ILT from cell i - 1, IRT from cell i
@@ -237,29 +232,23 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
 }
 
 torch::Tensor InternalBoundaryImpl::mirror(torch::Tensor v, Mirror const &m,
-                                           int dim, int normal) const {
-  return gather(v, m.idx, m.sign, dim, normal);
-}
-
-torch::Tensor InternalBoundaryImpl::gather(torch::Tensor v,
-                                           torch::Tensor idx,
-                                           torch::Tensor const &sign, int dim,
-                                           int normal) const {
+                                           int dim, int normal,
+                                           int copy) const {
+  auto idx = copy ? m.idx1 : m.idx;
   int lead = v.dim() - 3;
   for (int k = 0; k < lead; ++k) idx = idx.unsqueeze(0);
   auto out = v.gather(lead + dim - 1, idx.expand_as(v));
+  auto sign = copy ? m.sign1 : m.sign;
   if (normal >= 0) out[normal].mul_(sign.to(v.scalar_type()));
   return out;
 }
 
 torch::Tensor InternalBoundaryImpl::reconstruct(
     torch::Tensor v, Mirror const &m, int dim, int normal,
-    std::function<torch::Tensor(torch::Tensor const &,
-                                torch::Tensor const &)> const &recon) const {
-  auto lr = recon(mirror(v, m, dim, normal), torch::Tensor());
+    std::function<torch::Tensor(torch::Tensor const &)> const &recon) const {
+  auto lr = recon(mirror(v, m, dim, normal));
   if (!m.rows.defined()) return lr;
-  auto sub = v.index_select(-1, m.rows);
-  auto lr1 = recon(gather(sub, m.idx1, m.sign1, dim, normal), m.rows);
+  auto lr1 = recon(mirror(v.index_select(-1, m.rows), m, dim, normal, 1));
   auto pick = lr.dim() == 5 ? m.pick.unsqueeze(1) : m.pick;
   return lr.index_copy_(
       -1, m.rows, torch::where(pick, lr1, lr.index_select(-1, m.rows)));

@@ -866,14 +866,13 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
         for (int s : {(int)ILT, (int)IRT}) dsf_lr[s].select(-1, i).copy_(mean);
       }
     }
-    // a solid surface is a reflecting wall face of its own column
-    if (surf.defined()) {
-      auto at = (surf.to(torch::kLong) + pcoord->il()).unsqueeze(-1);
-      auto pair = dsf_lr.gather(-1, at.unsqueeze(0).expand({2, -1, -1, 1}));
+    if (surf.defined()) {  // a solid surface: its column's reflecting wall
+      auto at =
+          (surf.to(torch::kLong) + is).unsqueeze(-1).expand({2, -1, -1, 1});
+      auto pair = dsf_lr.gather(-1, at);
       auto mean = 0.5 * (pair[ILT] + pair[IRT]);
       auto on = (surf > 0).unsqueeze(-1);
-      for (int s : {(int)ILT, (int)IRT})
-        dsf_lr[s].scatter_(-1, at, torch::where(on, mean, pair[s]));
+      dsf_lr.scatter_(-1, at, torch::where(on, mean, pair));
     }
   }
 

@@ -283,28 +283,21 @@ inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
   dsf[flat + i] = lo * rf;
 }
 
-//! cell i of a column; under a solid surface `surf` cells deep the cells of
-//! the shifted wall column, and below its three ghosts the plain cell mean
-//! (never read). A stretched x1 then takes rows built for that offset.
+//! cell i of a column under a solid surface `surf` cells deep: from the
+//! surface down to its ghosts, the cell of the shifted wall column (a
+//! stretched x1 takes the rows built for that offset); deeper cells are never
+//! read and keep the block's own
 template <typename T>
 inline DISPATCH_MACRO void hydro_ref_x1_column_cell(
     T const* w, T const* dx1f, T const* psf_lo, T const* psf_hi, T* pref,
     T* dsf, T* dref, int column, int i, int ncolumns, int nc1, int iu, T grav,
     int x1_grid, bool phys_in, bool phys_out, bool wall_clamp, T const* rows,
     int const* surf) {
-  int o = surf ? surf[column] : 0;
-  if (i >= o) {
-    hydro_ref_x1_cell_impl<T, true>(
-        w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column, i - o, ncolumns, nc1,
-        iu, grav, x1_grid, phys_in || o > 0, phys_out, wall_clamp,
-        rows && surf ? rows + 7 * nc1 * o : rows, o);
-    return;
-  }
-  int c = column * nc1 + i, nw = ncolumns * nc1;
-  T rop = w[IDN * nw + c] / w[IPR * nw + c];
-  pref[c] = T(0.5) * (psf_lo[c] + psf_hi[c]);
-  dref[c] = pref[c] * rop;
-  dsf[c] = psf_lo[c] * rop;
+  int o = i >= surf[column] ? surf[column] : 0;
+  hydro_ref_x1_cell_impl<T, true>(
+      w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column, i - o, ncolumns, nc1,
+      iu, grav, x1_grid, phys_in || o > 0, phys_out, wall_clamp,
+      rows ? rows + 7 * nc1 * o : rows, o);
 }
 
 template <typename T, bool solid = false>

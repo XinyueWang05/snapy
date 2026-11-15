@@ -86,26 +86,11 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
                  .to(u.options())
                  .unsqueeze(0);
   // r = q_face / rho_face; q / rho of cell averages is second order (S177)
-  auto face_r_of = [&](torch::Tensor const& rho, torch::Tensor const& u,
-                       int dim) {
+  auto face_r = [&](int dim) {
     auto recon = dim == DIM1 ? precon1 : precon;
     auto rf = recon->forward(rho, dim), r = u / rho;  // donor r if rf <= 0
     return torch::where(rf > 0., recon->forward(u, dim) / rf,
                         torch::stack({r.roll(1, dim), r}));
-  };
-  // the hydro's solid mirror (hydro_forward.cpp), both rows even
-  auto face_r = [&](int dim) {
-    if (!other.count("solid")) return face_r_of(rho, u, dim);
-    auto pib = pmb->pib;
-    int ng = pmb->pcoord->options->nghost();
-    auto const& m = pib->mirror_index(other.at("solid"), dim,
-                                      dim == DIM1 ? ng : ng - 1, dim == DIM1);
-    int nr = rho.size(0);
-    return pib->reconstruct(torch::cat({rho, u}), m, dim, -1,
-                            [&](auto const& v, auto const&) {
-                              return face_r_of(v.narrow(0, 0, nr),
-                                               v.narrow(0, nr, u.size(0)), dim);
-                            });
   };
 
   if (_flux1.defined()) {

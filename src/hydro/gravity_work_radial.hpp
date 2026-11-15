@@ -213,18 +213,13 @@ inline void corrected_pe_work_surface(torch::Tensor& work,
                                       torch::Tensor const& surf) {
   auto x = f.key.x1v.slice(0, f.key.is, f.key.ie).to(q.options());
   auto j = surf.to(q.device(), torch::kLong).unsqueeze(-1);
-  auto at = [&](int k) {
-    auto jj = (j + k).clamp_max(q.size(-1) - 1);
-    return std::make_pair(x.index_select(0, jj.flatten()).view_as(jj),
-                          q.gather(-1, jj));
-  };
-  auto [x0, q0] = at(0);
-  auto [x1, q1] = at(1);
-  auto [x2, q2] = at(2);
-  auto a = x1 - x0, b = x2 - x1;
+  auto jj = (j + torch::arange(3, j.options())).clamp_max(q.size(-1) - 1);
+  auto xs = x.index_select(0, jj.flatten()).view_as(jj), qs = q.gather(-1, jj);
+  auto x1 = xs.narrow(-1, 1, 1), q0 = qs.narrow(-1, 0, 1);
+  auto a = x1 - xs.narrow(-1, 0, 1), b = xs.narrow(-1, 2, 1) - x1;
   auto s = -(2. * a + b) / (a * (a + b)) * q0;
-  s += (a + b) / (a * b) * q1;
-  s += -(a / ((a + b) * b)) * q2;
+  s += (a + b) / (a * b) * qs.narrow(-1, 1, 1);
+  s += -(a / ((a + b) * b)) * qs.narrow(-1, 2, 1);
   auto row = f.gvar.to(q.options()).index_select(0, j.flatten()).view_as(j) * s;
   if (f.goff.defined())
     row += f.goff.to(q.options()).index_select(0, j.flatten()).view_as(j) * q0;

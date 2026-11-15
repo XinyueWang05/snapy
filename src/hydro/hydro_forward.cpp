@@ -578,16 +578,12 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   bool gw_cell = options->grav() && options->grav()->grav1() != 0. &&
                  options->grav()->gravity_work() == "cell";
 
-  // rows: w holds only these x1 rows (a thin solid line's second copy)
-  auto sweep = [&](torch::Tensor const& w, int dim, torch::Tensor const& rows) {
+  auto sweep = [&](torch::Tensor const& w, int dim) {
     auto recon = dim == DIM1 ? precon1 : precon23;
     if (!fp32()) return recon->forward(w, dim);
-    auto at = [&](torch::Tensor const& t) {
-      return rows.defined() ? t.index_select(-1, rows) : t;
-    };
-    auto gauge = at(perturb.pressure0).mean(dim - 1, true);
+    auto gauge = perturb.pressure0.mean(dim - 1, true);
     auto input = w.clone();
-    input[IPR] = (at(perturb.pressure0) - gauge) + at(perturb.pressure_delta);
+    input[IPR] = (perturb.pressure0 - gauge) + perturb.pressure_delta;
     auto lr = recon->forward(input.to(torch::kFloat32), dim, false)
                   .to(torch::kFloat64);
     for (int side : {ILT, IRT}) {
@@ -604,12 +600,11 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
                                    pmb->pcoord->options->nghost() - 1, false);
   };
   auto reconstruct_sweep = [&](int dim) {
-    if (!has_solid) return sweep(w, dim, {});
-    return pmb->pib->reconstruct(w, *mirror23(dim), dim,
-                                 dim == DIM2 ? IVY : IVZ,
-                                 [&](auto const& v, auto const& rows) {
-                                   return sweep(v, dim, rows);
-                                 });
+    if (!has_solid) return sweep(w, dim);
+    TORCH_CHECK(!fp32(), "immersed solids run in FP64");
+    int normal = dim == DIM2 ? IVY : IVZ;
+    return pmb->pib->reconstruct(w, *mirror23(dim), dim, normal,
+                                 [&](auto const& v) { return sweep(v, dim); });
   };
   //// ------------ (2) Calculate dimension 1 flux ------------ ////
   InternalBoundaryImpl::Mirror const* m1 = nullptr;  // x1 solid mirror
@@ -819,7 +814,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         wtmp[1 - o][IVX].select(-1, i).neg_();
       }
     } else {
-      wtmp = fp32() ? sweep(wx1, DIM1, {}) : precon1->forward(wx1, DIM1);
+      wtmp = fp32() ? sweep(wx1, DIM1) : precon1->forward(wx1, DIM1);
       if (grav1) {
         if (phys_x1inner) _revise_x1inner_lr(wtmp[ILT], wtmp[IRT]);
         if (phys_x1outer) _revise_x1outer_lr(wtmp[ILT], wtmp[IRT]);

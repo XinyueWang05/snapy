@@ -1,20 +1,12 @@
-"""A column standing on a bottom-attached solid is the shorter wall column above it.
+"""Immersed solids against walls (every row fails on main 0f95515a).
 
-Column T = 1 - z/2, p = T^2, rho = T (z above the surface), g = 1, gamma 1.4, weno5 + lmars,
-rk3, explicit, reflecting x1 walls, the default wb-wall-clamp. The wall column holds N cells
-on the faces above the surface; the solid column holds the same faces plus k solid cells
-below them (uniform: the same width; stretched: x1rat 1.05 at N = 32 and 1.05^(32/N) at N,
-one map refined, the solid widths continuing the grid downwards). The fluid starts discretely
-balanced (snapy.balance_column). Rest: 100 steps; pulse: an isentropic 1e-3 bump at z = .4,
-to t = .3. Solid fill: the earth defaults (rho 1e3, p 1e9) or the surface cell's own values.
-Gate: the fluid of the solid column equals the wall column (uniform and stretched rest: 1e-12;
-stretched pulse: falls at order >= 1.8 from 128 to 256 cells, set by the grid-continuing solid
-widths, mirrored widths match to round-off), and the dx-weighted fluid mass equals the wall
-column's to 1e-13.
-On MPS (no float64; a stretched x1 is refused there, #280) the uniform arms run in float32 and
-match to 1e-5. Thin x2 solids: a full-height solid (no fluid cell, earth fill) 1 or 2 cells wide between
-fluid columns A and B, gravity, explicit and implicit-scheme 9, equals A and B between reflecting x2 walls
-(1e-12). usage: python test_immersed_solid.py [--quick] [--device mps]"""
+COL: a column on a bottom-attached solid of k cells equals the shorter wall column above it
+(T = 1 - z/2, p = T^2, rho = T, g = 1, weno5 + lmars, rk3, balanced start; rest 100 steps,
+pulse to t = .3; uniform, and stretched with grid-continuing solid widths), fill earth
+(1e3, 1e9) or matched: fluid to 1e-12 (stretched pulse: order >= 1.8, 128 -> 256 cells),
+dx-weighted mass to 1e-13. THIN: a full-height x2 solid (no fluid cell) 1-2 cells wide between
+fluid columns, gravity, explicit and scheme 9, equals the columns between reflecting walls.
+MPS: uniform COL arms in float32 to 1e-5. usage: python test_immersed_solid.py [--device mps]"""
 import math, os, sys, tempfile
 import torch, yaml
 import snapy
@@ -155,12 +147,12 @@ def thin_x2(wid, scheme, steps=20):
     return max(float((s[:, :na] - out["A"]).abs().max()), float((s[:, na + wid:] - out["B"]).abs().max()))
 
 
-def main(quick=False):
+def main():
     ok, rows = True, {}
     for stretched in (False, True) if DEV != "mps" else (False,):
         for pulse in (False, True):
             ns = (128, 256) if stretched and pulse else (32,)  # the order needs two
-            for n in ns[:1] if quick else ns:
+            for n in ns:
                 for k in (1, 2, 6):
                     for fill in ("earth", "matched"):
                         r = run(n, k, stretched, pulse, fill)
@@ -172,7 +164,7 @@ def main(quick=False):
                         exact = not stretched or not pulse
                         ok &= (r["finite"] and r["mass"] <= TOL / 10
                                and (not exact or r["diff"] <= TOL))
-    if not quick and DEV != "mps":
+    if DEV != "mps":
         for k in (1, 2, 6):
             for fill in ("earth", "matched"):
                 d = [rows[True, True, n, k, fill]["diff"] for n in (128, 256)]
@@ -190,4 +182,4 @@ def main(quick=False):
 
 
 if __name__ == "__main__":
-    sys.exit(main("--quick" in sys.argv))
+    sys.exit(main())

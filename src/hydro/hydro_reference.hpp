@@ -125,8 +125,7 @@ class HydroReferenceX1Operator {
         anchor.defined() ? anchor.to(op).contiguous() : torch::Tensor(),
         out.psf_lo, out.psf_hi, out.pref, out.dsf, out.dref, iu_, grav, grid_,
         phys_in_, phys_out_, wall_clamp_,
-        rows_.defined() ? pair(rows_for(surf)) : torch::Tensor(),
-        surf_on(surf, w));
+        rows_.defined() ? pair(rows_for(surf)) : torch::Tensor(), surf);
   }
 
   void evaluate(torch::Tensor const& w, double grav,
@@ -142,13 +141,11 @@ class HydroReferenceX1Operator {
     at::native::call_hydro_ref_x1(w.device().type(), w.contiguous(), dx, a,
                                   out.psf_lo, out.psf_hi, out.pref, out.dsf,
                                   out.dref, iu_, grav, grid_, phys_in_,
-                                  phys_out_, wall_clamp_, rows,
-                                  surf_on(surf, w));
+                                  phys_out_, wall_clamp_, rows, surf);
   }
 
  private:
-  //! a solid surface `o` cells deep: the rows of the wall column above it,
-  //! [offset, cell, 7] up to the deepest surface
+  //! the rows of the wall column above a surface `o` cells deep, [o, cell, 7]
   torch::Tensor rows_for(torch::Tensor const& surf) const {
     if (!surf.defined()) return rows_;
     int deep = surf.max().item<int>();
@@ -162,11 +159,6 @@ class HydroReferenceX1Operator {
             wall_clamp_));
     }
     return rows_off_.narrow(0, 0, deep + 1).contiguous();
-  }
-  static torch::Tensor surf_on(torch::Tensor const& surf,
-                               torch::Tensor const& w) {
-    return surf.defined() ? surf.to(w.device(), torch::kInt).contiguous()
-                          : surf;
   }
   static int64_t version(torch::Tensor const& t) {
     return t.is_inference() ? 0 : t._version();
