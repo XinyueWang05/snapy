@@ -1057,7 +1057,15 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   // there a split column's face states must be the neighbour's own (its
   // interior row), so a seam cell takes the stencil of one block. Physical x1
   // walls and an unsplit column keep their rows and the same tensor.
-  auto x1_seam_rows = [&](torch::Tensor const& f, int tag) {
+  // terrain: the faces beside a solid cell carry no covariance, and the top
+  // row of them holds the mirror of the fluid face row above, as wall ghost
+  // rows do (else the fill)
+  auto solid_faces = [&](int dim) {
+    if (!has_solid) return torch::Tensor();
+    return other.at("solid") | other.at("solid").roll(1, dim - 1);
+  };
+  auto x1_seam_rows = [&](torch::Tensor f, int tag, torch::Tensor const& s) {
+    if (s.defined()) f = torch::where(s & ~s.roll(-1, -1), f.roll(-1, -1), f);
     auto [below, above] = x1_neighbors();
     if (below < 0 && above < 0) return f;
     auto g = f.clone();
@@ -1067,6 +1075,10 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   // the covariance increment of _flux_covariance into a face flux: the whole
   // flux on a curved grid, only the nonzero rows' x1 interior in Cartesian
   bool cov_rows = pmb->pcoord->face_centroid_shift_zero();
+  auto wall_cov = [&](torch::Tensor& dcov, torch::Tensor const& s) {
+    if (dcov.defined() && s.defined())
+      dcov.masked_fill_(cov_rows ? s.narrow(-1, 1, s.size(-1) - 2) : s, 0.);
+  };
   auto add_cov = [&](torch::Tensor& flx, torch::Tensor const& dcov) {
     if (!cov_rows) {
       flx += dcov;
@@ -1092,13 +1104,14 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     if (!options->disable_flux_x2()) {
       // #289: built from the face states BEFORE the solver may project them
       // into the face-local frame, added to the flux after
-      torch::Tensor cwl, cwr;
+      torch::Tensor cwl, cwr, s2 = solid_faces(DIM2);
       if (flux_covariance()) {
-        cwl = x1_seam_rows(wlr2[ILT], 0x7730);
-        cwr = x1_seam_rows(wlr2[IRT], 0x7732);
+        cwl = x1_seam_rows(wlr2[ILT], 0x7730, s2);
+        cwr = x1_seam_rows(wlr2[IRT], 0x7732, s2);
       }
       auto dcov = flux_covariance() ? _flux_covariance(cwl, cwr, DIM2)
                                     : torch::Tensor();
+      wall_cov(dcov, s2);
       // the passive scalars' rows are built from the same face states
       // (scalar_flux_covariance), taken before the solver may project them
       if (dcov.defined() && has_scalars) {
@@ -1127,13 +1140,14 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // #289: the same term on the x3 faces -- the covariance is taken along
       // x1 there too, because x1 is the stratified direction whichever
       // horizontal face it crosses
-      torch::Tensor cwl, cwr;
+      torch::Tensor cwl, cwr, s3 = solid_faces(DIM3);
       if (flux_covariance()) {
-        cwl = x1_seam_rows(wlr3[ILT], 0x7734);
-        cwr = x1_seam_rows(wlr3[IRT], 0x7736);
+        cwl = x1_seam_rows(wlr3[ILT], 0x7734, s3);
+        cwr = x1_seam_rows(wlr3[IRT], 0x7736, s3);
       }
       auto dcov = flux_covariance() ? _flux_covariance(cwl, cwr, DIM3)
                                     : torch::Tensor();
+      wall_cov(dcov, s3);
       if (dcov.defined() && has_scalars) {
         _cov_wl[1] = cwl.clone();
         _cov_wr[1] = cwr.clone();
