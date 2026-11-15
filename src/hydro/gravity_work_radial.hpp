@@ -204,9 +204,8 @@ inline torch::Tensor corrected_pe_work(torch::Tensor const& drho,
   return corrected_pe_factors(key)(drho);
 }
 
-//! a column standing on a solid: the work of its surface cell (interior index
-//! surf > 0) with the one-sided slope of a column-end cell, as on the wall
-//! column above it; work and q over the interior cells [is, ie)
+//! the surface cell (interior index surf > 0) of a column on a solid: the
+//! one-sided slope of a column-end cell, as on the wall column above it
 inline void corrected_pe_work_surface(torch::Tensor& work,
                                       torch::Tensor const& q,
                                       CorrectedPEFactors const& f,

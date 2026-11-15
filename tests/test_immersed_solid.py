@@ -6,6 +6,7 @@ pulse to t = .3; uniform, and stretched with grid-continuing solid widths), fill
 (1e3, 1e9) or matched: fluid to 1e-12 (stretched pulse: order >= 1.8, 128 -> 256 cells),
 dx-weighted mass to 1e-13. THIN: a full-height x2 solid (no fluid cell) 1-2 cells wide between
 fluid columns, gravity, explicit and scheme 9, equals the columns between reflecting walls.
+TRACER: a uniform tracer over a step stays uniform, its solid fill notwithstanding.
 MPS: uniform COL arms in float32 to 1e-5. usage: python test_immersed_solid.py [--device mps]"""
 import math, os, sys, tempfile
 import torch, yaml
@@ -27,7 +28,7 @@ def faces(n, k, stretched):
     return torch.cat([torch.zeros(1), torch.cumsum(h, 0)]) - h[:k].sum()
 
 
-def block(xf, internal=None, n2=1, scheme=0):
+def block(xf, internal=None, n2=1, scheme=0, tracer=False):
     weno = {"type": "weno5", "scale": False, "shock": False}
     eos = {"type": "ideal-gas", "gammad": GAM, "density-floor": 1.e-10, "pressure-floor": 1.e-10,
            "limiter": False}
@@ -49,6 +50,8 @@ def block(xf, internal=None, n2=1, scheme=0):
         c["geometry"]["x1f"] = [float(v) for v in xf]
     if internal:
         c["boundary-condition"]["internal"] = internal
+    if tracer:
+        c["scalar"] = {"nvar": 1, "names": ["q"], "reconstruct": {"type": "weno5", "shock": False}}
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "c.yaml")
         yaml.safe_dump(c, open(p, "w"))
@@ -147,6 +150,30 @@ def thin_x2(wid, scheme, steps=20):
     return max(float((s[:, :na] - out["A"]).abs().max()), float((s[:, na + wid:] - out["B"]).abs().max()))
 
 
+def tracer(steps=20):
+    """a uniform tracer (r 1e-3; 0.5 in the solid) over a step: two solid cells under half the
+    columns, gravity, earth fill, a pulse; max |r / 1e-3 - 1| over the fluid"""
+    n1, n2 = 8, 12
+    b = block(torch.arange(n1 + 1.) / n1, {"solid-density": 1.e3, "solid-pressure": 1.e9}, n2, 0, True)
+    w = b.buffer("hydro.D").clone().zero_()
+    z = (torch.arange(n1 + 2 * NG) - NG + .5) / n1
+    y = (torch.arange(n2 + 2 * NG) - NG + .5) / n2
+    d = 1.e-3 * torch.exp(-((y[:, None] - .7) / .2) ** 2 - ((z - .5) / .2) ** 2)
+    w[kIDN, 0], w[kIPR, 0] = torch.exp(-z) * (1 + d), torch.exp(-z) * (1 + d) ** GAM
+    solid = torch.zeros_like(w[kIDN], dtype=torch.bool)
+    solid[:, :NG + n2 // 2, :NG + 2] = True
+    w[kIDN][solid], w[kIPR][solid] = 1.e3, 1.e9
+    r = torch.full((1,) + tuple(solid.shape), 1.e-3)
+    r[0][solid] = .5
+    var, _ = b.initialize({"hydro_w": w.to(DT), "solid": solid, "scalar_r": r.to(DT)})
+    for _ in range(steps):
+        for st in range(3):
+            b.forward(var, .4 / 8 / math.sqrt(GAM), st)
+    q = var["scalar_s"][0] / var["hydro_u"][kIDN]
+    fluid = ~solid[:, NG:NG + n2, NG:NG + n1]
+    return float(((q[:, NG:NG + n2, NG:NG + n1] / 1.e-3 - 1).abs())[fluid].max())
+
+
 def main():
     ok, rows = True, {}
     for stretched in (False, True) if DEV != "mps" else (False,):
@@ -177,6 +204,9 @@ def main():
             d = thin_x2(wid, scheme)
             print(f"THIN x2 full-height solid width={wid} scheme={scheme}: max|u_solid-u_wall|={d:.2e}", flush=True)
             ok &= d <= TOL
+    d = tracer()
+    print(f"TRACER uniform over a step, fill 0.5: max|r/r0 - 1|={d:.2e}", flush=True)
+    ok &= d <= TOL
     print("GATE immersed solid column:", "PASS" if ok else "FAIL", flush=True)
     return 0 if ok else 1
 

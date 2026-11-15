@@ -93,17 +93,21 @@ torch::Tensor InternalBoundaryImpl::forward(torch::Tensor wlr, int dim,
 
   return wlr;
 }
-InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
-    torch::Tensor solid, int dim, int reach, bool bottom_only) const {
+InternalBoundaryImpl::Mirror const *InternalBoundaryImpl::mirror_index(
+    std::map<std::string, torch::Tensor> const &other, int dim) const {
+  if (!other.count("solid")) return nullptr;
+  auto solid = other.at("solid");
   if (mirror_src_ != solid.data_ptr() || mirror_ver_ != solid._version()) {
     mirrors_.clear();
     mirror_src_ = solid.data_ptr(), mirror_ver_ = solid._version();
   }
-  auto key = std::make_tuple(dim, reach, bottom_only);
-  if (mirrors_.count(key)) return mirrors_.at(key);
-  int axis = dim - 1, il = pmb ? pmb->pcoord->il() : reach;
-  bool phys_in = !pmb || pmb->options->is_physical_boundary(0, 0, -1);
-  bool phys_out = !pmb || pmb->options->is_physical_boundary(0, 0, 1);
+  if (mirrors_.count(dim)) return &mirrors_.at(dim);
+  // x1: the bottom-attached run, nghost deep; x2/x3: the stencil's reach
+  bool bottom_only = dim == 3;
+  int reach = pmb->pcoord->options->nghost() - !bottom_only;
+  int axis = dim - 1, il = pmb->pcoord->il();
+  bool phys_in = pmb->options->is_physical_boundary(0, 0, -1);
+  bool phys_out = pmb->options->is_physical_boundary(0, 0, 1);
   auto s = solid.to(torch::kCPU, torch::kBool).clone();
   // x2/x3: a solid end cell continues into the x1 ghosts beyond it
   if (!bottom_only && phys_in) s.narrow(2, 0, il) |= s.narrow(2, il, 1);
@@ -228,7 +232,7 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
                 reach, " cells above the highest terrain, or use one x1 block");
     m.surf = surf.view({shape[0], shape[1]}).to(solid.device());
   }
-  return mirrors_[key] = m;
+  return &(mirrors_[dim] = m);
 }
 
 torch::Tensor InternalBoundaryImpl::mirror(torch::Tensor v, Mirror const &m,

@@ -86,11 +86,22 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
                  .to(u.options())
                  .unsqueeze(0);
   // r = q_face / rho_face; q / rho of cell averages is second order (S177)
-  auto face_r = [&](int dim) {
+  auto face_r_of = [&](torch::Tensor const& rho, torch::Tensor const& u,
+                       int dim) {
     auto recon = dim == DIM1 ? precon1 : precon;
     auto rf = recon->forward(rho, dim), r = u / rho;  // donor r if rf <= 0
     return torch::where(rf > 0., recon->forward(u, dim) / rf,
                         torch::stack({r.roll(1, dim), r}));
+  };
+  // the hydro's solid mirror and covariance maps (hydro_forward.cpp)
+  auto face_r = [&](int dim) {
+    auto m = pmb->pib->mirror_index(other, dim);
+    if (!m) return face_r_of(rho, u, dim);
+    int nr = rho.size(0);  // both rows even
+    auto ru = torch::cat({rho, u});
+    return pmb->pib->reconstruct(ru, *m, dim, -1, [&](auto v) {
+      return face_r_of(v.narrow(0, 0, nr), v.narrow(0, nr, u.size(0)), dim);
+    });
   };
 
   if (_flux1.defined()) {
@@ -154,7 +165,10 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   bool cov = false;
   auto lateral = [&](torch::Tensor const& rlr, int dim,
                      torch::Tensor const& mass) {
-    auto dcov = pmb->phydro->scalar_flux_covariance(rlr[ILT], rlr[IRT], dim);
+    auto m = pmb->pib->mirror_index(other, dim);
+    auto cr = m ? rlr.gather(-1, m->cov_idx.expand_as(rlr)) : rlr;
+    auto dcov = pmb->phydro->scalar_flux_covariance(cr[ILT], cr[IRT], dim);
+    if (m && dcov.defined()) dcov *= m->cov_keep;
     if (!dcov.defined())
       return priemann->forward(rlr[ILT], rlr[IRT], dim, mass);
     cov = true;

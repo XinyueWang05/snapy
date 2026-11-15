@@ -3,7 +3,6 @@
 // C/C++
 #include <functional>
 #include <map>
-#include <tuple>
 
 // torch
 #include <torch/nn/cloneable.h>
@@ -118,17 +117,16 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
    */
   torch::Tensor forward(torch::Tensor wlr, int dim, torch::Tensor solid) const;
 
-  //! solid-cell mirror maps along w-dimension `dim` (3 = x1), built once per
-  //! mask: gather `idx`, normal-velocity `sign`; x1 (bottom_only) mirrors the
-  //! bottom run from above, `surf` its depth per column; an x2/x3 line with a
-  //! run thinner than 2 reach gets a second copy (idx1, sign1) on the x1
-  //! `rows`, `pick` marking the ILT/IRT states read from it; `cov_*` are the
-  //! face covariance maps (keep: 0 beside a solid; idx: top row from above)
+  //! solid mirror maps along w-dimension `dim`, built once per mask: gather
+  //! `idx`, normal `sign`; x1 (3): the bottom run from above, `surf` its depth;
+  //! x2/x3: thin runs' second copy (idx1, sign1) on x1 `rows`, `pick` the
+  //! ILT/IRT read from it; `cov_*` face covariance (keep 0 beside a solid)
   struct Mirror {
     torch::Tensor idx, sign, rows, idx1, sign1, pick, surf, cov_keep, cov_idx;
   };
-  Mirror const &mirror_index(torch::Tensor solid, int dim, int reach,
-                             bool bottom_only) const;
+  //! the maps of other["solid"] (nullptr without one)
+  Mirror const *mirror_index(std::map<std::string, torch::Tensor> const &other,
+                             int dim) const;
   //! v [..., nc3, nc2, nc1] mirrored (copy 1: on its rows); row `normal` odd
   torch::Tensor mirror(torch::Tensor v, Mirror const &m, int dim,
                        int normal = -1, int copy = 0) const;
@@ -138,7 +136,7 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
       std::function<torch::Tensor(torch::Tensor const &)> const &recon) const;
 
  private:
-  mutable std::map<std::tuple<int, int, bool>, Mirror> mirrors_;
+  mutable std::map<int, Mirror> mirrors_;
   mutable void const *mirror_src_ = nullptr;
   mutable int64_t mirror_ver_ = -1;
 };

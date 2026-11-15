@@ -593,17 +593,11 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     }
     return lr;
   };
-  // x2/x3 solid cells within reach of a fluid face hold its mirror; a thin
-  // run is mirrored once from each side (two copies, pick: the cell's own)
-  auto mirror23 = [&](int dim) {
-    return &pmb->pib->mirror_index(other.at("solid"), dim,
-                                   pmb->pcoord->options->nghost() - 1, false);
-  };
+  // x2/x3 solid cells in reach of a fluid face hold its mirror (thin: 2 copies)
   auto reconstruct_sweep = [&](int dim) {
-    if (!has_solid) return sweep(w, dim);
-    TORCH_CHECK(!fp32(), "immersed solids run in FP64");
-    int normal = dim == DIM2 ? IVY : IVZ;
-    return pmb->pib->reconstruct(w, *mirror23(dim), dim, normal,
+    auto m = pmb->pib->mirror_index(other, dim);
+    if (!m) return sweep(w, dim);
+    return pmb->pib->reconstruct(w, *m, dim, dim == DIM2 ? IVY : IVZ,
                                  [&](auto const& v) { return sweep(v, dim); });
   };
   //// ------------ (2) Calculate dimension 1 flux ------------ ////
@@ -661,11 +655,8 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     }
     // a bottom-attached solid is the wall below its column's fluid: its cells
     // within nghost of the surface hold the mirror of the fluid above
-    if (has_solid) {
-      m1 = &pmb->pib->mirror_index(other.at("solid"), DIM1,
-                                   pmb->pcoord->options->nghost(), true);
+    if ((m1 = pmb->pib->mirror_index(other, DIM1)))
       wx1 = pmb->pib->mirror(wx1, *m1, DIM1, IVX);
-    }
     torch::Tensor wtmp;
     if (wb_x1) {
       HydroPressureSplit split;
@@ -1058,11 +1049,9 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   // there a split column's face states must be the neighbour's own (its
   // interior row), so a seam cell takes the stencil of one block. Physical x1
   // walls and an unsplit column keep their rows and the same tensor.
-  // terrain: the faces beside a solid cell carry no covariance, and the top
-  // row of them holds the mirror of the fluid face row above, as wall ghost
-  // rows do (else the fill)
-  using MirrorP = InternalBoundaryImpl::Mirror const*;
-  auto x1_seam_rows = [&](torch::Tensor f, int tag, MirrorP s) {
+  // terrain: faces beside a solid carry no covariance; the top row of them
+  // holds the fluid face row above, as wall ghost rows do (else the fill)
+  auto x1_seam_rows = [&](torch::Tensor f, int tag, auto s) {
     if (s) f = f.gather(-1, s->cov_idx.expand_as(f));
     auto [below, above] = x1_neighbors();
     if (below < 0 && above < 0) return f;
@@ -1073,7 +1062,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   // the covariance increment of _flux_covariance into a face flux: the whole
   // flux on a curved grid, only the nonzero rows' x1 interior in Cartesian
   bool cov_rows = pmb->pcoord->face_centroid_shift_zero();
-  auto wall_cov = [&](torch::Tensor& dcov, MirrorP s) {
+  auto wall_cov = [&](torch::Tensor& dcov, auto s) {
     auto k = s ? s->cov_keep : torch::Tensor();
     if (dcov.defined() && s)
       dcov.mul_(cov_rows ? k.narrow(-1, 1, k.size(-1) - 2) : k);
@@ -1104,7 +1093,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // #289: built from the face states BEFORE the solver may project them
       // into the face-local frame, added to the flux after
       torch::Tensor cwl, cwr;
-      auto s2 = has_solid ? mirror23(DIM2) : nullptr;
+      auto s2 = pmb->pib->mirror_index(other, DIM2);
       if (flux_covariance()) {
         cwl = x1_seam_rows(wlr2[ILT], 0x7730, s2);
         cwr = x1_seam_rows(wlr2[IRT], 0x7732, s2);
@@ -1141,7 +1130,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // x1 there too, because x1 is the stratified direction whichever
       // horizontal face it crosses
       torch::Tensor cwl, cwr;
-      auto s3 = has_solid ? mirror23(DIM3) : nullptr;
+      auto s3 = pmb->pib->mirror_index(other, DIM3);
       if (flux_covariance()) {
         cwl = x1_seam_rows(wlr3[ILT], 0x7734, s3);
         cwr = x1_seam_rows(wlr3[IRT], 0x7736, s3);
