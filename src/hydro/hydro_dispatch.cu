@@ -35,7 +35,7 @@ void hydro_pressure_scan_x1_cuda(
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-template <typename T>
+template <typename T, bool solid>
 __global__ void hydro_ref_x1_cuda_kernel(T const *w, T const *dx1f,
                                          T const *anchor, T *psf_lo, T *psf_hi,
                                          T *pref, T *dsf, T *dref, int ncolumns,
@@ -52,9 +52,14 @@ __global__ void hydro_ref_x1_cuda_kernel(T const *w, T const *dx1f,
   __syncthreads();
 
   for (int i = threadIdx.x; i < nc1; i += blockDim.x) {
-    hydro_ref_x1_column_cell(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column,
+    if constexpr (solid)  // each column's own surface
+      hydro_ref_x1_column_cell(w, dx1f, psf_lo, psf_hi, pref, dsf, dref,
+                               column, i, ncolumns, nc1, iu, grav, x1_grid,
+                               phys_in, phys_out, wall_clamp, rows, surf);
+    else
+      hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column,
                              i, ncolumns, nc1, iu, grav, x1_grid, phys_in,
-                             phys_out, wall_clamp, rows, surf);
+                             phys_out, wall_clamp, rows);
   }
 }
 
@@ -90,7 +95,9 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
     auto ptr = [](torch::Tensor const& t) -> SRS* {
       return t.defined() ? reinterpret_cast<SRS*>(t.data_ptr<double>()) : nullptr;
     };
-    hydro_ref_x1_cuda_kernel<<<blocks, threads, 0, stream>>>(
+    auto kernel = sp ? hydro_ref_x1_cuda_kernel<SRS, true>
+                     : hydro_ref_x1_cuda_kernel<SRS, false>;
+    kernel<<<blocks, threads, 0, stream>>>(
         ptr(w), ptr(dx1f), ptr(anchor), ptr(psf_lo), ptr(psf_hi), ptr(pref),
         ptr(dsf), ptr(dref), ncolumns, nc1, iu, SRS(grav), x1_grid, phys_in,
         phys_out, wall_clamp, ptr(rows), sp);
@@ -100,7 +107,9 @@ void hydro_ref_x1_cuda(torch::Tensor const &w, torch::Tensor const &dx1f,
   AT_DISPATCH_FLOATING_TYPES(w.scalar_type(), "hydro_ref_x1_cuda", [&] {
     auto anchor_ptr = anchor.defined() ? anchor.data_ptr<scalar_t>() : nullptr;
     auto rows_ptr = rows.defined() ? rows.data_ptr<scalar_t>() : nullptr;
-    hydro_ref_x1_cuda_kernel<<<blocks, threads, 0, stream>>>(
+    auto kernel = sp ? hydro_ref_x1_cuda_kernel<scalar_t, true>
+                     : hydro_ref_x1_cuda_kernel<scalar_t, false>;
+    kernel<<<blocks, threads, 0, stream>>>(
         w.data_ptr<scalar_t>(), dx1f.data_ptr<scalar_t>(), anchor_ptr,
         psf_lo.data_ptr<scalar_t>(), psf_hi.data_ptr<scalar_t>(),
         pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),

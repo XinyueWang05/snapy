@@ -168,18 +168,18 @@ inline DISPATCH_MACRO int hydro_ref_x1_six_face_start(int i, int nc1, int iu,
   return start;
 }
 
-template <typename T>
+template <typename T, bool shift = false>
 inline DISPATCH_MACRO void hydro_ref_x1_cell_impl(
     T const* w, T const* dx1f, T const* psf_lo, T const* psf_hi, T* pref,
     T* dsf, T* dref, int column, int i, int ncolumns, int nc1, int iu, T grav,
     int x1_grid, bool phys_in, bool phys_out, bool wall_clamp, T const* rows,
     int off = 0) {
-  // a column standing on a solid `off` cells deep is the wall column above
-  // it: cell i is cell i + off, its surface face is il, il is unchanged
   bool uniform = x1_grid == kX1RefUniform;
   int ncells = ncolumns * nc1;
-  int flat = column * nc1 + off;
-  nc1 -= off, iu -= off, dx1f += off;
+  int flat = column * nc1;
+  // a column standing on a solid `off` cells deep is the wall column above
+  // it: cell i is cell i + off, its surface face is il, il is unchanged
+  if constexpr (shift) flat += off, nc1 -= off, iu -= off, dx1f += off;
   int il = nc1 - 1 - iu;
   // the six-face stencil never crosses a physical wall
   // A one-sided row spans SIX faces, so on a block with fewer than five x1
@@ -294,10 +294,10 @@ inline DISPATCH_MACRO void hydro_ref_x1_column_cell(
     int const* surf) {
   int o = surf ? surf[column] : 0;
   if (i >= o) {
-    hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column,
-                           i - o, ncolumns, nc1, iu, grav, x1_grid,
-                           phys_in || o > 0, phys_out, wall_clamp,
-                           rows && surf ? rows + 7 * nc1 * o : rows, o);
+    hydro_ref_x1_cell_impl<T, true>(
+        w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column, i - o, ncolumns, nc1,
+        iu, grav, x1_grid, phys_in || o > 0, phys_out, wall_clamp,
+        rows && surf ? rows + 7 * nc1 * o : rows, o);
     return;
   }
   int c = column * nc1 + i, nw = ncolumns * nc1;
@@ -307,7 +307,7 @@ inline DISPATCH_MACRO void hydro_ref_x1_column_cell(
   dsf[c] = psf_lo[c] * rop;
 }
 
-template <typename T>
+template <typename T, bool solid = false>
 inline DISPATCH_MACRO void hydro_ref_x1_impl(
     T const* w, T const* dx1f, T const* anchor, T* psf_lo, T* psf_hi, T* pref,
     T* dsf, T* dref, int column, int ncolumns, int nc1, int iu, T grav,
@@ -315,10 +315,16 @@ inline DISPATCH_MACRO void hydro_ref_x1_impl(
     int const* surf = nullptr) {
   hydro_ref_x1_scan_impl(w, dx1f, anchor, psf_lo, psf_hi, column, ncolumns, nc1,
                          iu, grav);
-  for (int i = 0; i < nc1; ++i)
-    hydro_ref_x1_column_cell(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column,
+  for (int i = 0; i < nc1; ++i) {
+    if constexpr (solid)  // each column's own surface
+      hydro_ref_x1_column_cell(w, dx1f, psf_lo, psf_hi, pref, dsf, dref,
+                               column, i, ncolumns, nc1, iu, grav, x1_grid,
+                               phys_in, phys_out, wall_clamp, rows, surf);
+    else
+      hydro_ref_x1_cell_impl(w, dx1f, psf_lo, psf_hi, pref, dsf, dref, column,
                              i, ncolumns, nc1, iu, grav, x1_grid, phys_in,
-                             phys_out, wall_clamp, rows, surf);
+                             phys_out, wall_clamp, rows);
+  }
 }
 
 }  // namespace snap

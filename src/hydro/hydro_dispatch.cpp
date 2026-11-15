@@ -62,7 +62,10 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
                       torch::Tensor const& rows, torch::Tensor const& surf) {
   TORCH_CHECK(x1_grid != kX1RefStretched || rows.defined(),
               "hydro_ref_x1: a stretched x1 needs its six-face rows");
-  auto sp = surf.defined() ? surf.data_ptr<int>() : nullptr;
+  if (surf.defined())  // in its own unit: this one compiles as without solids
+    return hydro_ref_x1_cpu_surface(w, dx1f, anchor, psf_lo, psf_hi, pref, dsf,
+                                    dref, iu, grav, x1_grid, phys_in, phys_out,
+                                    wall_clamp, rows, surf);
   int ncolumns = w.size(1) * w.size(2);
   int nc1 = w.size(3);
   // A trailing pair dimension selects finite-increment reference arithmetic.
@@ -78,7 +81,7 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
         hydro_ref_x1_impl(ptr(w), ptr(dx1f), ptr(anchor), ptr(psf_lo),
                           ptr(psf_hi), ptr(pref), ptr(dsf), ptr(dref), column,
                           ncolumns, nc1, iu, SRS(grav), x1_grid, phys_in,
-                          phys_out, wall_clamp, ptr(rows), sp);
+                          phys_out, wall_clamp, ptr(rows));
     });
     return;
   }
@@ -93,7 +96,7 @@ void hydro_ref_x1_cpu(torch::Tensor const& w, torch::Tensor const& dx1f,
                           pref.data_ptr<scalar_t>(), dsf.data_ptr<scalar_t>(),
                           dref.data_ptr<scalar_t>(), static_cast<int>(column),
                           ncolumns, nc1, iu, scalar_t(grav), x1_grid, phys_in,
-                          phys_out, wall_clamp, rows_ptr, sp);
+                          phys_out, wall_clamp, rows_ptr);
       }
     });
   });
