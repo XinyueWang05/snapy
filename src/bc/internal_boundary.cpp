@@ -103,9 +103,12 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
   if (mirrors_.count(key)) return mirrors_.at(key);
   int axis = dim - 1, il = pmb ? pmb->pcoord->il() : reach;
   bool phys_in = !pmb || pmb->options->is_physical_boundary(0, 0, -1);
+  bool phys_out = !pmb || pmb->options->is_physical_boundary(0, 0, 1);
   auto s = solid.to(torch::kCPU, torch::kBool).clone();
-  // x2/x3: a solid bottom cell continues into the x1 ghosts below it
+  // x2/x3: a solid end cell continues into the x1 ghosts beyond it
   if (!bottom_only && phys_in) s.narrow(2, 0, il) |= s.narrow(2, il, 1);
+  int top = s.size(2) - il;  // the first x1 ghost above
+  if (!bottom_only && phys_out) s.narrow(2, top, il) |= s.narrow(2, top - 1, 1);
   s = s.movedim(axis, -1).contiguous();
   int n = s.size(-1), lines = s.numel() / n;
   auto sp = s.data_ptr<bool>();
@@ -164,6 +167,8 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
         for (int r = 0; r < nr; ++r) {
           auto [a, b] = runs[r];
           if (bottom_only && !(a <= il && il <= b)) continue;
+          // no fluid cell above: no surface, the column stays as on main
+          if (bottom_only && phys_out && b >= n - 1 - il) continue;
           if (bottom_only) surf[l] = b + 1 - il;
           int glo = r ? runs[r - 1].second + 1 : 0;
           int ghi = r + 1 < nr ? runs[r + 1].first - 1 : n - 1;
@@ -203,7 +208,6 @@ InternalBoundaryImpl::Mirror const &InternalBoundaryImpl::mirror_index(
     // the surface needs its nghost mirror cells and its reference rows on
     // this block: keep x1 block seams nghost cells clear of the terrain
     int iu = n - 1 - il, sm = surf.max().item<int>();
-    bool phys_out = !pmb || pmb->options->is_physical_boundary(0, 0, 1);
     TORCH_CHECK((phys_in || (surf.eq(0) | surf.ge(reach)).all().item<bool>()) &&
                     (phys_out || sm <= iu - il + 1 - reach),
                 "a solid surface lies within ", reach,

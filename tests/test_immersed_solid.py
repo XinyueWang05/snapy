@@ -12,7 +12,9 @@ stretched pulse: falls at order >= 1.8 from 128 to 256 cells, set by the grid-co
 widths, mirrored widths match to round-off), and the dx-weighted fluid mass equals the wall
 column's to 1e-13.
 On MPS (no float64; a stretched x1 is refused there, #280) the uniform arms run in float32 and
-match to 1e-5. usage: python test_immersed_solid.py [--quick] [--device mps]"""
+match to 1e-5. Thin x2 solids: a full-height solid (no fluid cell, earth fill) 1 or 2 cells wide between
+fluid columns A and B, gravity, explicit and implicit-scheme 9, equals A and B between reflecting x2 walls
+(1e-12). usage: python test_immersed_solid.py [--quick] [--device mps]"""
 import math, os, sys, tempfile
 import torch, yaml
 import snapy
@@ -33,22 +35,22 @@ def faces(n, k, stretched):
     return torch.cat([torch.zeros(1), torch.cumsum(h, 0)]) - h[:k].sum()
 
 
-def block(xf, internal=None):
+def block(xf, internal=None, n2=1, scheme=0):
     weno = {"type": "weno5", "scale": False, "shock": False}
     eos = {"type": "ideal-gas", "gammad": GAM, "density-floor": 1.e-10, "pressure-floor": 1.e-10,
            "limiter": False}
     c = {"geometry": {"type": "cartesian",
-                      "bounds": {"x1min": float(xf[0]), "x1max": float(xf[-1]), "x2min": 0., "x2max": 1.,
+                      "bounds": {"x1min": float(xf[0]), "x1max": float(xf[-1]), "x2min": 0., "x2max": n2 / 8.,
                                  "x3min": 0., "x3max": 1.},
-                      "cells": {"nx1": len(xf) - 1, "nx2": 1, "nx3": 1, "nghost": NG},
+                      "cells": {"nx1": len(xf) - 1, "nx2": n2, "nx3": 1, "nghost": NG},
                       "x1f": [float(v) for v in xf]},
          "distribute": {"layout": "slab", "nb2": 1, "nb3": 1, "verbose": False},
          "dynamics": {"equation-of-state": eos, "reconstruct": {"vertical": weno, "horizontal": weno},
                       "riemann-solver": {"type": "lmars"}},
          "boundary-condition": {"external": {"x1-inner": "reflecting", "x1-outer": "reflecting",
-                                             "x2-inner": "periodic", "x2-outer": "periodic",
+                                             "x2-inner": "reflecting", "x2-outer": "reflecting",
                                              "x3-inner": "periodic", "x3-outer": "periodic"}},
-         "integration": {"type": "rk3", "cfl": 0.9, "implicit-scheme": 0, "nlim": -1, "tlim": 1.e9,
+         "integration": {"type": "rk3", "cfl": 0.9, "implicit-scheme": scheme, "nlim": -1, "tlim": 1.e9,
                          "ncycle_out": 0},
          "forcing": {"const-gravity": {"grav1": -1.}}}
     if internal:
@@ -119,6 +121,38 @@ def run(n, k, stretched, pulse, fill):
                 finite=bool(torch.isfinite(us).all()))
 
 
+def thin_x2(wid, scheme, steps=20):
+    """[A | full-height solid, wid cells | B] in x2 with gravity vs A and B between reflecting x2 walls:
+    a column with no fluid cell has no surface (earth fill). Returns max|diff| over the fluid of A and B."""
+    na, nb, n1 = 6, 5, 8
+    out = {}
+    for name, parts in (("solid", ((na, .3), (wid, None), (nb, .6))), ("A", ((na, .3),)), ("B", ((nb, .6),))):
+        n2 = sum(c for c, _ in parts)
+        b = block(torch.arange(n1 + 1.) / n1, {"solid-density": 1.e3, "solid-pressure": 1.e9}, n2, scheme)
+        w = b.buffer("hydro.D").clone().zero_()
+        z = (torch.arange(n1 + 2 * NG) - NG + .5) / n1
+        j, d = NG, torch.zeros(n2 + 2 * NG, n1 + 2 * NG)
+        solid = torch.zeros_like(w[kIDN], dtype=torch.bool)
+        for c, y0 in parts:
+            y = (torch.arange(c)[:, None] + .5) / c
+            if y0 is None:
+                solid[:, j:j + c, NG:NG + n1] = True
+            else:
+                d[j:j + c] = 1.e-3 * torch.exp(-((y - y0) / .2) ** 2 - ((z - .5) / .2) ** 2)
+            j += c
+        w[kIDN, 0] = torch.exp(-z) * (1 + d)
+        w[kIPR, 0] = torch.exp(-z) * (1 + d) ** GAM
+        w[kIDN][solid], w[kIPR][solid] = 1.e3, 1.e9
+        init = {"hydro_w": w.to(DT)} | ({"solid": solid} if name == "solid" else {})
+        var, _ = b.initialize(init)
+        for _ in range(steps):
+            for st in range(len(b.module("intg").stages)):
+                b.forward(var, .4 / 8 / math.sqrt(GAM), st)
+        out[name] = var["hydro_u"][:, 0, NG:NG + n2, NG:NG + n1]
+    s = out["solid"]
+    return max(float((s[:, :na] - out["A"]).abs().max()), float((s[:, na + wid:] - out["B"]).abs().max()))
+
+
 def main(quick=False):
     ok, rows = True, {}
     for stretched in (False, True) if DEV != "mps" else (False,):
@@ -144,6 +178,11 @@ def main(quick=False):
                          else float("inf") if d[0] == 0 else math.nan)
                 print(f"ORDER stretched pulse k={k} fill={fill}: 128->256 {order:.2f}", flush=True)
                 ok &= math.isfinite(d[0]) and order >= 1.8
+    for wid in (1, 2) if DEV != "mps" else ():
+        for scheme in (0, 9):
+            d = thin_x2(wid, scheme)
+            print(f"THIN x2 full-height solid width={wid} scheme={scheme}: max|u_solid-u_wall|={d:.2e}", flush=True)
+            ok &= d <= TOL
     print("GATE immersed solid column:", "PASS" if ok else "FAIL", flush=True)
     return 0 if ok else 1
 
