@@ -42,8 +42,7 @@ def block(xf, internal=None, n2=1, scheme=0):
     c = {"geometry": {"type": "cartesian",
                       "bounds": {"x1min": float(xf[0]), "x1max": float(xf[-1]), "x2min": 0., "x2max": n2 / 8.,
                                  "x3min": 0., "x3max": 1.},
-                      "cells": {"nx1": len(xf) - 1, "nx2": n2, "nx3": 1, "nghost": NG},
-                      "x1f": [float(v) for v in xf]},
+                      "cells": {"nx1": len(xf) - 1, "nx2": n2, "nx3": 1, "nghost": NG}},
          "distribute": {"layout": "slab", "nb2": 1, "nb3": 1, "verbose": False},
          "dynamics": {"equation-of-state": eos, "reconstruct": {"vertical": weno, "horizontal": weno},
                       "riemann-solver": {"type": "lmars"}},
@@ -53,6 +52,9 @@ def block(xf, internal=None, n2=1, scheme=0):
          "integration": {"type": "rk3", "cfl": 0.9, "implicit-scheme": scheme, "nlim": -1, "tlim": 1.e9,
                          "ncycle_out": 0},
          "forcing": {"const-gravity": {"grav1": -1.}}}
+    h = xf[1:] - xf[:-1]
+    if h.max() - h.min() > 1.e-12 * h.mean():  # stretched only: MPS refuses geometry/x1f
+        c["geometry"]["x1f"] = [float(v) for v in xf]
     if internal:
         c["boundary-condition"]["internal"] = internal
     with tempfile.TemporaryDirectory() as d:
