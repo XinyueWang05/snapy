@@ -14,7 +14,11 @@ SPHERE: the cubed-sphere deck of test_axial_momentum_flux_form.py (full, interp_
       closure off, Coriolis off, perturbed jet, balanced), a uniform 2-cell solid floor (default
       fill) vs the wall two cells up, the floor's initial fluid state and dt on both, NSTEP steps.
 
-usage: python test_solid_gates.py [cov] [conv4] [sphere]   (no argument: all rows)"""
+TERRAIN: the same deck at rest over terrain given on interior columns only, a mountain centred on a
+      panel edge and an equatorial ridge across the panel edges (a reconstruction of Zoey's arm);
+      earth == matched fill bitwise and finite, explicit and implicit-scheme 9.
+
+usage: python test_solid_gates.py [cov] [conv4] [sphere] [terrain] [cpu] [cuda]   (no argument: all rows, cpu)"""
 import math, os, subprocess, sys, tempfile
 import torch, yaml
 import snapy
@@ -195,6 +199,74 @@ def sphere():
     return g
 
 
+def terrain(scheme, device="cpu", nstep=10):
+    """the six-panel deck at rest over terrain given on interior columns only (ghost depths are the
+    API's): a 3-cell mountain centred on a panel edge and a 2-cell ridge along the equator across the
+    equatorial panel edges; earth vs matched fill, the earth run's dt on both. Max |earth - matched|
+    over the fluid per field and step (bitwise expected), and whether any state is non-finite."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import test_axial_momentum_flux_form as afm
+    cfg = yaml.safe_load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           "test_axial_momentum_flux_form.yaml")))
+    cfg["integration"]["implicit-scheme"] = scheme
+    mesh, blocks = afm.build(cfg, device)
+    c0 = blocks[0].module("coord")
+    lo0, la0 = c0.buffer("longitude")[..., 0], c0.buffer("latitude")[..., 0]
+    lon0 = float(lo0[NG + 4, -NG - 1] + lo0[NG + 4, -NG]) / 2  # on the panel's x2 edge
+    lat0 = float(la0[NG + 4, -NG - 1] + la0[NG + 4, -NG]) / 2
+    dlat = float((la0[NG + 1, NG + 4] - la0[NG, NG + 4]).abs())
+    w0 = [v["hydro_w"].clone() for v in afm.initial_state(cfg, blocks, None, False)]
+    masks = []
+    for b in blocks:
+        c = b.module("coord")
+        lon, lat = c.buffer("longitude")[..., 0], c.buffer("latitude")[..., 0]
+        dist = torch.arccos((torch.sin(lat) * math.sin(lat0) +
+                             torch.cos(lat) * math.cos(lat0) * torch.cos(lon - lon0)).clamp(-1, 1))
+        h = torch.round(3. * torch.exp(-(dist / (1.5 * dlat)) ** 2)).long()
+        h = torch.maximum(h, torch.where(lat.abs() < .6 * dlat, 2, 0))
+        s = torch.zeros(w0[0].shape[1:], dtype=torch.bool, device=w0[0].device)
+        at = torch.arange(s.size(-1), device=s.device)
+        s[NG:-NG, NG:-NG] = ((at >= NG) & (at < NG + h[NG:-NG, NG:-NG, None]))  # interior columns only
+        masks.append(s)
+    del mesh, blocks
+    out, dts, bad = {}, [], False
+    for fill in ("earth", "matched"):
+        c = yaml.safe_load(yaml.safe_dump(cfg))
+        sd, sp = (1.e3, 1.e9) if fill == "earth" else (float(w0[0][kIDN, NG, NG, NG]), float(w0[0][kIPR, NG, NG, NG]))
+        c["boundary-condition"]["internal"] = {"solid-density": sd, "solid-pressure": sp}
+        mesh, blocks = afm.build(c, device)
+        mv, _ = mesh.initialize([{"hydro_w": w.clone(), "solid": s.clone()} for w, s in zip(w0, masks)])
+        out[fill] = []
+        for cycle in range(1, nstep + 1):
+            mesh.set_cycle(cycle)
+            if fill == "earth":
+                dts.append(mesh.max_time_step(mv))
+            for stage in range(len(blocks[0].module("intg").stages)):
+                mesh.forward(mv, dts[cycle - 1], stage)
+            fl = [(v["hydro_w"][:5], ~v["solid"]) for v in mv]  # ghost columns: the API's depth
+            bad |= not all(bool(torch.isfinite(x[:, f]).all()) for x, f in fl)
+            out[fill].append([x[:, f].double().cpu() for x, f in fl])
+        del mesh, blocks, mv
+    d = max(float((a - b).abs().max()) for sa, sb in zip(out["earth"], out["matched"]) for a, b in zip(sa, sb))
+    return d, bad
+
+
+def row_terrain():
+    ok = True
+    dev = [a for a in sys.argv[1:] if a in ("cpu", "cuda")] or ["cpu"]
+    for device in dev:
+        for scheme in (0, 9):
+            tag = f"TERRAIN cubed-sphere mountain on a panel edge + equatorial ridge, scheme {scheme}, {device}"
+            try:
+                d, bad = terrain(scheme, device)
+                ok &= d == 0. and not bad
+                print(f"{tag}: max|earth - matched| {d:.2e} nonfinite {bad} " + ("PASS" if d == 0. and not bad else "FAIL"), flush=True)
+            except RuntimeError as e:
+                print(f"{tag}: RAISED {str(e).splitlines()[0][:300]} FAIL", flush=True)
+                ok = False
+    return ok
+
+
 def row_sphere():
     tag = f"SPHERE cubed-sphere 2-cell floor vs wall, full, closure off, Coriolis off, {NSTEP} steps"
     try:
@@ -205,12 +277,15 @@ def row_sphere():
 
 
 def main():
-    rows = [a for a in sys.argv[1:] if a in ("cov", "conv4", "sphere")] or ["cov", "conv4", "sphere"]
+    rows = [a for a in sys.argv[1:] if a in ("cov", "conv4", "sphere", "terrain")] or ["cov", "conv4", "sphere", "terrain"]
     if len(rows) > 1:  # each row in its own process: two decks of different type in one process interfere
-        rc = [subprocess.run([sys.executable, os.path.abspath(__file__), r]).returncode for r in rows]
+        rc = [subprocess.run([sys.executable, os.path.abspath(__file__), r]
+                             + [a for a in sys.argv[1:] if a in ("cpu", "cuda")]).returncode for r in rows]
         ok = all(r == 0 for r in rc)
     elif rows[0] == "cov":
         ok = row_column("COV x1-mass-covariance", {"x1-mass-covariance": True})
+    elif rows[0] == "terrain":
+        ok = row_terrain()
     elif rows[0] == "conv4":
         ok = row_column("CONV4 conversion-order 4", {"conversion-order": 4})
     else:

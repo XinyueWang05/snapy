@@ -684,23 +684,6 @@ def main(argv=None):
     if not leak <= FW_TOL:
         failures.append("solid floor on the sphere: the fill leaks, %.3e" % leak)
 
-    # (o) a solid surface depth that differs across a panel edge is refused at initialize
-    cfg = with_full(config("full"), False)
-    mesh, blocks = build(cfg, args.device)
-    mv = [{"hydro_w": w.clone()} for w in w0]
-    for ib, v in enumerate(mv):
-        v["solid"] = torch.zeros(v["hydro_w"].shape[1:], dtype=torch.bool, device=v["hydro_w"].device)
-        v["solid"][..., 3:5 + (ib == 0)] = True
-    try:
-        mesh.initialize(mv)
-        refused = "no error"
-    except RuntimeError as exc:
-        refused = "panel edge" in str(exc) and "refused"
-    print("(o) solid depth 3 on panel 0, 2 elsewhere: %s" % refused)
-    if refused == "no error" or not refused:
-        failures.append("a surface depth mismatch across a panel edge is not refused")
-    del mesh, blocks, mv
-
     # (d) off by default, and no effect where it is not defined: a Cartesian block builds with it on
     cfg = config("transport")
     cfg["geometry"] = {"type": "cartesian",

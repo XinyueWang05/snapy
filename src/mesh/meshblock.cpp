@@ -510,35 +510,29 @@ void MeshBlockImpl::build_hydro_reference(Variables &vars) {
 }
 
 void MeshBlockImpl::check_x1_wall_seams(Variables &vars) {
-  // a solid column's surface depth is exchanged once like a scalar: a ghost
-  // column (off the corners) must carry the depth of the neighbour column it
-  // stands for, or the x2/x3 faces there would take two different x1 walls
+  // each column's bottom solid run is exchanged once like a scalar; a ghost
+  // column takes its neighbour's run, so the caller gives the interior only
   if (!vars.count("solid") || options->coord()->nc1() <= 1) return;
   auto solid = vars.at("solid");
-  int il = pcoord->il(), nx1 = pcoord->iu() - il + 1;
-  auto run = solid.narrow(-1, il, nx1).to(torch::kLong).cumprod(-1).sum(-1);
-  auto own = run.masked_fill(run == nx1, 0);  // every block exchanges
+  int il = pcoord->il(), iu = pcoord->iu();
+  auto run = solid.narrow(-1, il, iu - il + 1).to(torch::kLong).cumprod(-1).sum(-1);
   Variables dv;
-  dv["x1_wall_depth"] = own.to(torch::kFloat64)
+  dv["x1_wall_depth"] = run.to(torch::kFloat64)
                             .unsqueeze(-1)
                             .expand({-1, -1, solid.size(-1)})
                             .unsqueeze(0)
                             .contiguous();
-  SyncOptions op;
-  op.interpolate(true).type(kScalar);
-  exchange(dv, op);
+  exchange(dv, SyncOptions().interpolate(true).type(kScalar));
   auto got = dv.at("x1_wall_depth")[0].select(-1, il).round().to(torch::kLong);
-  int nk = own.size(0), nj = own.size(1);
-  auto kk = torch::arange(nk, own.options()).unsqueeze(1).expand({nk, nj});
-  auto jj = torch::arange(nj, own.options()).unsqueeze(0).expand({nk, nj});
-  auto gk = (kk < pcoord->kl()) | (kk > pcoord->ku());
-  auto gj = (jj < pcoord->jl()) | (jj > pcoord->ju());
-  auto edge = (gk ^ gj).to(got.device());
-  TORCH_CHECK(!(edge & got.ne(own.to(got.device()))).any().item<bool>(),
-              "a solid column's surface depth differs from its neighbour's "
-              "across a panel edge or block seam: the x2/x3 faces there "
-              "would see two x1 walls (give the solid mask's ghost columns "
-              "the neighbour's depth)");
+  auto kk = torch::arange(run.size(0), run.options()).unsqueeze(1);
+  auto jj = torch::arange(run.size(1), run.options()).unsqueeze(0);
+  auto ghost = (kk < pcoord->kl()) | (kk > pcoord->ku()) | (jj < pcoord->jl()) |
+               (jj > pcoord->ju());
+  auto take = (ghost & got.ne(run)).unsqueeze(-1);
+  auto at = torch::arange(solid.size(-1), run.options());
+  auto bottom = (at >= il) & (at < (got + il).unsqueeze(-1));
+  auto inner = (at >= il) & (at <= iu);
+  solid.copy_(torch::where(take & inner, bottom, solid));
 }
 
 void MeshBlockImpl::finalize_initialization(Variables &vars) {
