@@ -544,6 +544,14 @@ void CoordinateImpl::print(std::ostream& stream) const {
 }
 
 torch::Tensor CoordinateImpl::x1_row_faces(std::string const& interp) const {
+  bool in = pmb && pmb->options->is_physical_boundary(0, 0, -1);
+  bool out = pmb && pmb->options->is_physical_boundary(0, 0, 1);
+  return x1_row_faces(interp, x1f, in, out);
+}
+
+torch::Tensor CoordinateImpl::x1_row_faces(std::string const& interp,
+                                           torch::Tensor const& x1f, bool in,
+                                           bool out) const {
   auto const& t = options->type();
   bool radial = (t == "spherical-polar" || t == "gnomonic-equiangle") &&
                 options->nx1() > 1;
@@ -552,10 +560,10 @@ torch::Tensor CoordinateImpl::x1_row_faces(std::string const& interp) const {
   // ghost widths mirrored in V at a wall, so mirrored ghosts keep its flux 0
   auto v = x1f.pow(3) / 3.;
   int ng = options->nghost(), n = v.size(0);
-  if (pmb && pmb->options->is_physical_boundary(0, 0, -1))
+  if (in)
     v.slice(0, 0, ng).copy_(2. * v[ng] -
                             v.slice(0, ng + 1, 2 * ng + 1).flip(0));
-  if (pmb && pmb->options->is_physical_boundary(0, 0, 1))
+  if (out)
     v.slice(0, n - ng).copy_(2. * v[n - 1 - ng] -
                              v.slice(0, n - 1 - 2 * ng, n - 1 - ng).flip(0));
   return v;

@@ -556,7 +556,7 @@ void HydroImpl::_revise_x1inner_lr(torch::Tensor const& wl,
 
 void HydroImpl::_revise_x1outer_lr(torch::Tensor const& wl,
                                    torch::Tensor const& wr) {
-  int ie = pmb->pcoord->iu();
+  int ie = wl.size(-1) - 1 - pmb->pcoord->il();  // a column frame's iu too
   wr[IPR].narrow(-1, ie + 1, 1) = wl[IPR].narrow(-1, ie + 1, 1);
   wr[IDN].narrow(-1, ie + 1, 1) = wl[IDN].narrow(-1, ie + 1, 1);
 }
@@ -601,13 +601,59 @@ void HydroImpl::_revise_x1outer_ghost(torch::Tensor const& w) {
   }
 }
 
+HydroImpl::X1Depth& HydroImpl::x1_depth(int o) const {
+  auto it = x1d_.find(o);
+  if (it != x1d_.end()) return it->second;
+  auto pc = pmb->pcoord;
+  auto& d = x1d_[o];
+  int ng = pc->il(), nf = pc->x1f.size(0), n = nf - 1 - o;
+  if (o == 0) {
+    d.x1f = pc->x1f, d.x1v = pc->x1v, d.dx1f = pc->dx1f, d.iu = pc->iu();
+    return d;
+  }
+  // the faces from the column's first fluid cell up; below it the nghost
+  // ghost faces of a wall there, mirrored as ghost rule (c) mirrors them
+  auto x = pc->x1f.narrow(0, o, n + 1).clone();
+  x.narrow(0, 0, ng).copy_(2. * x[ng] - x.narrow(0, ng + 1, ng).flip(0));
+  auto df = x.narrow(0, 1, n) - x.narrow(0, 0, n);
+  d.x1f = x;
+  d.dx1f = pc->dx1f.narrow(0, o, n).clone();
+  if (pc->options->stretched_x1()) d.dx1f.narrow(0, 0, ng).copy_(df.narrow(0, 0, ng));
+  // centres: the column's own above; the ghosts' by the grid's rule
+  d.x1v = pc->x1v.narrow(0, o, n).clone();
+  auto rm = x.narrow(0, 0, ng), rp = x.narrow(0, 1, ng);
+  d.x1v.narrow(0, 0, ng).copy_(
+      pc->options->type() == "spherical-polar"
+          ? 0.75 * (rp.pow(4) - rm.pow(4)) / (rp.pow(3) - rm.pow(3))
+          : 0.5 * (rm + rp));
+  d.iu = pc->iu() - o;
+  return d;
+}
+
+Reconstruct HydroImpl::x1_recon(int o, torch::Tensor const& w) {
+  if (o == 0) return precon1;
+  auto& d = x1_depth(o);
+  if (!d.recon1) {
+    // main's x1 reconstruction with the tables of this frame's wall faces
+    d.recon1 = Reconstruct(options->recon1(), this);
+    auto x1f = pmb->pcoord->x1_row_faces(
+        options->recon1()->interp()->type(), d.x1f, true,
+        pmb->options->is_physical_boundary(0, 0, 1));
+    if (x1f.defined()) d.recon1->set_x1_faces(x1f);
+  }
+  d.recon1->to(w.device(), w.scalar_type());
+  return d.recon1;
+}
+
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
-                         HydroPressureSplit* split) const {
+                         HydroPressureSplit* split, int o) const {
   bool paired = split != nullptr;
   auto pcoord = pmb->pcoord;
+  // o > 0: a column frame whose first fluid cell il is a wall (x1_depth)
+  auto& xd = x1_depth(o);
   int is = pcoord->il();
-  int iu = pcoord->iu();
+  int iu = xd.iu;
   double g = -options->grav()->grav1();  // downward magnitude (>0)
 
   // Global x1 reference across a vertical (nb1>1) decomposition: make the
@@ -640,13 +686,14 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
   }
 
   bool stretched = pcoord->options->stretched_x1();
-  bool phys_in = pmb->options->is_physical_boundary(0, 0, -1);
+  bool phys_in = o > 0 || pmb->options->is_physical_boundary(0, 0, -1);
   bool phys_out = pmb->options->is_physical_boundary(0, 0, 1);
   bool clamp = options->wb_wall_clamp();
-  if (!x1_reference_ || !x1_reference_->matches(pcoord->dx1f, iu, stretched,
+  auto& x1_reference_ = o ? xd.ref : this->x1_reference_;
+  if (!x1_reference_ || !x1_reference_->matches(xd.dx1f, iu, stretched,
                                                 phys_in, phys_out, clamp)) {
     x1_reference_ = std::make_shared<HydroReferenceX1Operator>(
-        pcoord->dx1f, iu, stretched, phys_in, phys_out, clamp);
+        xd.dx1f, iu, stretched, phys_in, phys_out, clamp);
   }
   HydroReferenceX1 reference;
   if (paired) {
@@ -788,6 +835,7 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
   auto dsf_lr = torch::stack({dsf, dsf});
   auto const& itype = options->recon1()->interp()->type();
   int nc1 = dref.size(-1);
+  auto& dsf_lin_ = o ? xd.dsf_lin : this->dsf_lin_;
   if ((itype == "weno5" || itype == "cp5") && nc1 >= 6) {
     if (!dsf_lin_ || dsf_lin_->cm.device() != w.device() ||
         dsf_lin_->cm.scalar_type() != w.scalar_type()) {
@@ -798,8 +846,9 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
         auto const& co = pcoord->options;
         bool plain =
             x1_centroid_exact_enabled() && co->type() == "spherical-polar";
-        auto x1f = !plain               ? pcoord->x1_row_faces(itype)
-                   : co->stretched_x1() ? pcoord->x1f
+        auto x1f = !plain ? pcoord->x1_row_faces(itype, xd.x1f, phys_in,
+                                                 phys_out)
+                   : co->stretched_x1() ? xd.x1f
                                         : torch::Tensor();
         if (x1f.defined()) dsf_lin_->set_x1_coeffs(x1f);
       }
@@ -827,6 +876,7 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
     auto const& bf = pmb->options->bfuncs();
     bool refl[2];
     for (int f : {0, 1}) refl[f] = is_x1_wall(f) && is_reflecting(bf[f]);
+    refl[0] = refl[0] || o > 0;  // a solid surface is a reflecting wall
     if (wb4_flag.defined()) {
       // conversion-order 4: a side whose cp5 row reads a ghost keeps wb_ref4's
       // face density (both sides on the two wall faces, the reading side on
@@ -859,7 +909,7 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
     } else {
       for (int f : {0, 1}) {
         if (!refl[f]) continue;
-        int i = f == 0 ? pcoord->il() : pcoord->iu() + 1;
+        int i = f == 0 ? is : iu + 1;
         auto mean =
             0.5 * (dsf_lr[ILT].select(-1, i) + dsf_lr[IRT].select(-1, i));
         for (int s : {(int)ILT, (int)IRT}) dsf_lr[s].select(-1, i).copy_(mean);

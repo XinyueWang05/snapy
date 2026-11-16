@@ -144,7 +144,7 @@ Faces face_errors(int nx1, Profile const& prof,
   // physical walls; wb-wall-clamp is on by default); dsf is (ILT, IRT)
   w = w.to(device);
   auto [psf_lo, pref, dsf, dref] =
-      ((*block->phydro).*RefPeek::ptr())(w, torch::Tensor(), nullptr);
+      ((*block->phydro).*RefPeek::ptr())(w, torch::Tensor(), nullptr, 0);
 
   // the solver's face densities (hydro_forward.cpp): reconstruct rho - dref
   // with even-parity wall ghosts, then add dsf back

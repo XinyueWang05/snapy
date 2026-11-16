@@ -190,6 +190,11 @@ class CoordinateImpl {
   //! faces for the per-face x1 rows: r^3/3 on a radial x1, whose cells hold
   //! r^2 dr averages (#280); undefined where the shipped rows are exact
   torch::Tensor x1_row_faces(std::string const& interp) const;
+  //! the same for the faces x1f of a column frame (x1f's ghost faces already
+  //! the wall's) with walls below (in) and above (out)
+  torch::Tensor x1_row_faces(std::string const& interp,
+                             torch::Tensor const& x1f, bool in,
+                             bool out) const;
 
   int il() const { return options->nx1() > 1 ? options->nghost() : 0; }
 

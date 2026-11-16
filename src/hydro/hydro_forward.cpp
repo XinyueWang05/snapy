@@ -98,6 +98,23 @@ torch::Tensor HydroImpl::_flux_covariance(torch::Tensor const& wl,
   auto un = wbar[dim == 2 ? IVY : IVZ];
 
   auto x1v = pcoord->x1v.to(p.device(), p.scalar_type());
+  // a solid surface: the faces' x1 wall (the higher of their two columns);
+  // a face column's centres below its surface are its wall's ghost centres
+  auto const* fg = _xw ? (dim == 2 ? &_xw->face2 : &_xw->face3) : nullptr;
+  auto d1p = [&](torch::Tensor const& q) {
+    if (!fg) return d1_pressure(q, x1v, pcoord->il(), pcoord->iu());
+    return pmb->pib->per_column(*fg, q, [&](torch::Tensor const& t, int o) {
+      auto& xd = x1_depth(o);
+      return d1_pressure(t, xd.x1v.to(t.options()), pcoord->il(), xd.iu);
+    });
+  };
+  if (fg)
+    x1v = pmb->pib->per_column(
+        *fg, x1v.expand({p.size(0), p.size(1), x1v.size(0)}),
+        [&](torch::Tensor const& t, int o) {
+          return x1_depth(o).x1v.to(t.options()).expand(
+              {1, t.size(-2), t.size(-1)});
+        });
   // face_moment2_x1() is grid-only; cache it per block, keyed on the x1f
   // tensor it is built from, its version, the device and the dtype
   auto const& x1f_ = pcoord->x1f;
@@ -129,7 +146,7 @@ torch::Tensor HydroImpl::_flux_covariance(torch::Tensor const& wl,
                            .unsqueeze(1)
                      : torch::Tensor();
   auto rho = wbar[IDN];
-  auto dx1 = (x1v.narrow(0, 2, n1 - 2) - x1v.narrow(0, 0, n1 - 2));
+  auto dx1 = (x1v.narrow(-1, 2, n1 - 2) - x1v.narrow(-1, 0, n1 - 2));
 
   // ---- every row (#289 all-rows, see the derivation, section 4B) -----------
   // Cell values are DENSITY-WEIGHTED: q = (rho q)/rho, u = m/rho
@@ -208,7 +225,7 @@ torch::Tensor HydroImpl::_flux_covariance(torch::Tensor const& wl,
   // the pressure part: p* - p = -delta d_1 p, with the difference step 5 of
   // forward() also uses for the geometric source
   dflx[ivn].narrow(-1, 1, n1 - 2) -=
-      cell(ds) * d1_pressure(p, x1v, pcoord->il(), pcoord->iu());
+      cell(ds) * d1p(p);
   if (dim == 2) {
     pcoord->flux2global2_(dflx);
   } else {
@@ -261,6 +278,13 @@ torch::Tensor HydroImpl::scalar_flux_covariance(torch::Tensor const& rl,
   }
   auto un = wbar[dim == 2 ? IVY : IVZ];
   auto x1v = pcoord->x1v.to(un.device(), un.scalar_type());
+  if (auto const* fg = _xw ? (dim == 2 ? &_xw->face2 : &_xw->face3) : nullptr)
+    x1v = pmb->pib->per_column(  // as in _flux_covariance
+        *fg, x1v.expand({un.size(0), un.size(1), x1v.size(0)}),
+        [&](torch::Tensor const& t, int o) {
+          return x1_depth(o).x1v.to(t.options()).expand(
+              {1, t.size(-2), t.size(-1)});
+        });
   auto s2 = pcoord->face_moment2_x1()
                 .to(un.device(), un.scalar_type())
                 .unsqueeze(0)
@@ -272,7 +296,7 @@ torch::Tensor HydroImpl::scalar_flux_covariance(torch::Tensor const& rl,
                            .unsqueeze(1)
                      : torch::Tensor();
   auto rho = wbar[IDN];
-  auto dx1 = (x1v.narrow(0, 2, n1 - 2) - x1v.narrow(0, 0, n1 - 2));
+  auto dx1 = (x1v.narrow(-1, 2, n1 - 2) - x1v.narrow(-1, 0, n1 - 2));
   auto cell = [&](torch::Tensor const& a) { return a.narrow(-1, 1, n1 - 2); };
   auto d1 = [&](torch::Tensor const& a) {
     return (a.narrow(-1, 2, n1 - 2) - a.narrow(-1, 0, n1 - 2)) / dx1;
@@ -372,6 +396,10 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   enum { DIM1 = 3, DIM2 = 2, DIM3 = 1 };
   auto wide = u.is_mps() ? torch::kFloat32 : torch::kFloat64;  // MPS: no f64
   bool has_solid = other.count("solid");
+  // the per-column x1 wall of a solid (InternalBoundaryImpl::X1Wall)
+  auto const* xw = has_solid && u.size(DIM1) > 1 ? pmb->pib->x1_wall(other)
+                                                 : nullptr;
+  _xw = xw && !xw->cell.uniform() ? xw : nullptr;
   auto start = std::chrono::high_resolution_clock::now();
   _check_stretched_x1(u);
 
@@ -578,7 +606,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   bool gw_cell = options->grav() && options->grav()->grav1() != 0. &&
                  options->grav()->gravity_work() == "cell";
 
-  auto reconstruct_sweep = [&](int dim) {
+  auto sweep = [&](torch::Tensor const& w, int dim) {
     auto recon = dim == DIM1 ? precon1 : precon23;
     if (!fp32()) return recon->forward(w, dim);
     auto gauge = perturb.pressure0.mean(dim - 1, true);
@@ -592,7 +620,14 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       lr[side][IDN].clamp_min_(peos->options->density_floor());
     }
     return lr;
+  };  // x2/x3 solid cells in reach of a fluid face hold its mirror (thin: 2 copies)
+  auto reconstruct_sweep = [&](int dim) {
+    auto m = dim == DIM1 ? nullptr : pmb->pib->mirror_index(other, dim);
+    if (!m) return sweep(w, dim);
+    return pmb->pib->reconstruct(w, *m, dim, dim == DIM2 ? IVY : IVZ,
+                                 [&](auto const& v) { return sweep(v, dim); });
   };
+
   //// ------------ (2) Calculate dimension 1 flux ------------ ////
   if (u.size(DIM1) > 1) {
     // Hydrostatic wall revision is a PHYSICAL-boundary operation: it rebuilds
@@ -645,6 +680,19 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // off-centre ones
       _x1_ghost_rows(wx1, pmb->pcoord->il(), false, 0x7724);
     }
+    // a solid column is the x1 wall at its first fluid cell (X1Wall): each
+    // depth's columns run main's wall path below in that column's frame
+    // (x1_depth: its ghost faces mirrored about the surface face), with the
+    // reflecting fill of a wall's ghosts; depth 0 is main's path unchanged
+    auto x1_lr = [&](torch::Tensor wx1, int o) -> torch::Tensor {
+    auto& xd = x1_depth(o);
+    bool phys_in_o = o > 0 || phys_x1inner;
+    if (o > 0) {  // bc_func.cpp reflecting_inner at this column's surface
+      int g = pmb->pcoord->il();
+      wx1 = wx1.clone();
+      wx1.narrow(-1, 0, g).copy_(wx1.narrow(-1, g, g).flip(-1));
+      wx1[IVX].narrow(-1, 0, g).neg_();
+    }
     torch::Tensor wtmp;
     if (wb_x1) {
       HydroPressureSplit split;
@@ -659,7 +707,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         delta[IDN].copy_(perturb.density_delta);
       }
       auto [psf_lo, pref, dsf, dref] =
-          _hydro_ref_x1(base, delta, split_flux ? &split : nullptr);
+          _hydro_ref_x1(base, delta, split_flux ? &split : nullptr, o);
       if (split_flux) {
         pressure_base1 = split.face0;
         // The unclamped scan satisfies grad(p0)=g*rho0 analytically. Retain
@@ -688,9 +736,9 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // p'(is+m-1), rho' likewise. Only apply this at physical x1 walls.
       int ng = pmb->pcoord->options->nghost();
       int is = pmb->pcoord->il();
-      int iu = pmb->pcoord->iu();
+      int iu = xd.iu;
       for (int c : {(int)IPR, (int)IDN}) {
-        if (phys_x1inner && !is_outflow(pmb->options->bfuncs()[0])) {
+        if (phys_in_o && (o > 0 || !is_outflow(pmb->options->bfuncs()[0]))) {
           wx1[c]
               .narrow(-1, is - ng, ng)
               .copy_(wx1[c].narrow(-1, is, ng).flip(-1));
@@ -708,13 +756,13 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       torch::Tensor velocity;
       if (x1_mass_covariance()) {
         velocity = wx1[IVX].clone();
-        auto x1v = pmb->pcoord->x1v.to(w.device(), w.scalar_type());
-        auto dx1f = pmb->pcoord->dx1f.to(w.device(), w.scalar_type());
+        auto x1v = xd.x1v.to(w.device(), w.scalar_type());
+        auto dx1f = xd.dx1f.to(w.device(), w.scalar_type());
         bool stretched = pmb->pcoord->options->stretched_x1();
         auto rho_1 = x1_cov_d1_centred(density, x1v, stretched);
         // next to a reflecting wall the even ghost density is not the
         // stratified column: one-sided second order in the first/last cell
-        if (phys_x1inner && !is_outflow(pmb->options->bfuncs()[0]))
+        if (phys_in_o && (o > 0 || !is_outflow(pmb->options->bfuncs()[0])))
           rho_1.select(-1, is).copy_(
               x1_cov_one_sided(density, x1v, is, 1, stretched));
         if (phys_x1outer && !is_outflow(pmb->options->bfuncs()[1]))
@@ -723,7 +771,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         auto w_1 = x1_cov_d1_centred(velocity, x1v, stretched);
         wx1[IVX] -= dx1f * dx1f / 12. * rho_1 * w_1 / density;
         // ghosts at reflecting walls: odd mirror of the corrected interior
-        if (phys_x1inner && !is_outflow(pmb->options->bfuncs()[0]))
+        if (phys_in_o && (o > 0 || !is_outflow(pmb->options->bfuncs()[0])))
           wx1[IVX]
               .narrow(-1, is - ng, ng)
               .copy_(-wx1[IVX].narrow(-1, is, ng).flip(-1));
@@ -739,7 +787,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
 
       // floor=false: reconstruction-stage floors would clamp legitimately
       // negative perturbations.
-      wtmp = precon1->forward(fp32() ? wx1.to(torch::kFloat32) : wx1, DIM1,
+      wtmp = x1_recon(o, w)->forward(fp32() ? wx1.to(torch::kFloat32) : wx1, DIM1,
                               /*floor=*/false);
 
       wx1[IPR].copy_(pressure);
@@ -791,15 +839,23 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         wtmp[1 - o][IVX].select(-1, i).neg_();
       }
     } else {
-      wtmp = fp32() ? reconstruct_sweep(DIM1) : precon1->forward(wx1, DIM1);
+      wtmp = fp32() ? reconstruct_sweep(DIM1) : x1_recon(o, w)->forward(wx1, DIM1);
       if (grav1) {
-        if (phys_x1inner) _revise_x1inner_lr(wtmp[ILT], wtmp[IRT]);
+        if (phys_in_o) _revise_x1inner_lr(wtmp[ILT], wtmp[IRT]);
         if (phys_x1outer) _revise_x1outer_lr(wtmp[ILT], wtmp[IRT]);
       }
     }
 
-    auto wlr1 =
-        has_solid ? pmb->pib->forward(wtmp, DIM1, other.at("solid")) : wtmp;
+    return wtmp;
+    };
+    auto wtmp = xw && !xw->cell.uniform()
+                    ? pmb->pib->per_column(xw->cell, wx1, x1_lr)
+                    : x1_lr(wx1, 0);
+
+    // the face mirror for solid cells off the bottom runs only: a surface
+    // face is a wall face, which has none
+    auto x1_rest = xw ? xw->rest : (has_solid ? other.at("solid") : torch::Tensor());
+    auto wlr1 = x1_rest.defined() ? pmb->pib->forward(wtmp, DIM1, x1_rest) : wtmp;
 
     // Compute hydrostatic pressure correction
     if (options->grav() && (options->grav()->grav1() != 0) &&
@@ -1035,16 +1091,29 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   // there a split column's face states must be the neighbour's own (its
   // interior row), so a seam cell takes the stencil of one block. Physical x1
   // walls and an unsplit column keep their rows and the same tensor.
+  bool cov_rows = pmb->pcoord->face_centroid_shift_zero();
+  // a solid surface: below a face column's surface its x1 rows are the
+  // wall's ghost rows, the fluid face rows above reflected
   auto x1_seam_rows = [&](torch::Tensor const& f, int tag) {
     auto [below, above] = x1_neighbors();
-    if (below < 0 && above < 0) return f;
+    if (below < 0 && above < 0) {
+      if (!_xw) return f;
+      return pmb->pib->x1_wall_fill(tag < 0x7734 ? _xw->face2 : _xw->face3, f,
+                                    IVX);
+    }
     auto g = f.clone();
     _x1_ghost_rows(g, 1, false, tag);
     return g;
   };
+  // terrain: a face beside a solid cell carries no covariance
+  auto wall_cov = [&](torch::Tensor& dcov, int dim) {
+    auto s = has_solid ? pmb->pib->mirror_index(other, dim) : nullptr;
+    if (!dcov.defined() || !s) return;
+    auto const& k = s->cov_keep;
+    dcov.mul_(cov_rows ? k.narrow(-1, 1, k.size(-1) - 2) : k);
+  };
   // the covariance increment of _flux_covariance into a face flux: the whole
   // flux on a curved grid, only the nonzero rows' x1 interior in Cartesian
-  bool cov_rows = pmb->pcoord->face_centroid_shift_zero();
   auto add_cov = [&](torch::Tensor& flx, torch::Tensor const& dcov) {
     if (!cov_rows) {
       flx += dcov;
@@ -1077,6 +1146,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       }
       auto dcov = flux_covariance() ? _flux_covariance(cwl, cwr, DIM2)
                                     : torch::Tensor();
+      wall_cov(dcov, DIM2);
       // the passive scalars' rows are built from the same face states
       // (scalar_flux_covariance), taken before the solver may project them
       if (dcov.defined() && has_scalars) {
@@ -1112,6 +1182,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       }
       auto dcov = flux_covariance() ? _flux_covariance(cwl, cwr, DIM3)
                                     : torch::Tensor();
+      wall_cov(dcov, DIM3);
       if (dcov.defined() && has_scalars) {
         _cov_wl[1] = cwl.clone();
         _cov_wr[1] = cwr.clone();
@@ -1252,7 +1323,15 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     auto x1v = pmb->pcoord->x1v.to(w.device(), w.scalar_type());
     auto wsrc = w.clone();
     wsrc[IPR].narrow(-1, 1, n1 - 2) -=
-        dsh * d1_pressure(w[IPR], x1v, pmb->pcoord->il(), pmb->pcoord->iu());
+        dsh * (_xw ? pmb->pib->per_column(
+                         _xw->cell, w[IPR],
+                         [&](torch::Tensor const& t, int o) {
+                           auto& xd = x1_depth(o);
+                           return d1_pressure(t, xd.x1v.to(t.options()),
+                                              pmb->pcoord->il(), xd.iu);
+                         })
+                   : d1_pressure(w[IPR], x1v, pmb->pcoord->il(),
+                                 pmb->pcoord->iu()));
     auto div =
         pmb->pcoord->forward(wsrc, _flux1, _flux2, _flux3, _face_pressure1);
     // a resolved direction whose faces are NOT corrected keeps the plain p
@@ -1443,7 +1522,17 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // column has no single-valued potential (-g1 x1 jumps at the periodic
       // face), so the corrected PE is not defined there in any case
       auto [below, above] = x1_neighbors();
-      if (below < 0 && above < 0) {
+      if (below < 0 && above < 0 && _xw) {
+        // a solid column: the slope of its wall column (one-sided at lo)
+        face_gravity_work += pmb->pib->per_column(
+            _xw->cell, drho,
+            [&](torch::Tensor const& t, int o) {
+              auto& xd = x1_depth(o);
+              return corrected_pe_work(t, xd.x1f, xd.x1v, is, xd.iu + 1, grav1,
+                                       measure, o ? &xd.pe : &_pe_work);
+            },
+            /*zero_pad=*/true);
+      } else if (below < 0 && above < 0) {
         face_gravity_work +=
             corrected_pe_work(drho, pmb->pcoord->x1f, pmb->pcoord->x1v, is, ie,
                               grav1, measure, &_pe_work);

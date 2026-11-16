@@ -74,6 +74,20 @@ void ScalarImpl::reset() {
       register_buffer("positivity_hits", torch::zeros({1}, torch::kInt64));
 }
 
+Reconstruct ScalarImpl::x1_recon(int o, torch::Tensor const& w) {
+  if (o == 0) return precon1;
+  auto& r = recon1_o_[o];
+  if (!r) {
+    r = Reconstruct(precon->options, this);
+    auto x1f = pcoord->x1_row_faces(r->options->interp()->type(),
+                                    pmb->phydro->x1_depth(o).x1f, true,
+                                    pmb->options->is_physical_boundary(0, 0, 1));
+    if (x1f.defined()) r->set_x1_faces(x1f);
+  }
+  r->to(w.device(), w.scalar_type());
+  return r;
+}
+
 torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
                                   Variables const& other) {
   enum { DIM1 = 3, DIM2 = 2, DIM3 = 1 };
@@ -93,8 +107,29 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
                         torch::stack({r.roll(1, dim), r}));
   };
 
+  // a solid column: its x1 wall at the first fluid cell, as the hydro's
+  // (HydroImpl::x1_depth): the reflecting fill and its frame's x1 tables
+  auto const* xw = pmb->phydro->_xw;
+  auto face_r1 = [&]() {
+    if (!xw) return face_r(DIM1);
+    int nr = rho.size(0), ng = pcoord->il();
+    return pmb->pib->per_column(
+        xw->cell, torch::cat({rho, u}), [&](torch::Tensor const& t, int o) {
+          auto c = t;
+          if (o > 0) {
+            c = t.clone();
+            c.narrow(-1, 0, ng).copy_(c.narrow(-1, ng, ng).flip(-1));
+          }
+          auto recon = x1_recon(o, t);
+          auto rh = c.narrow(0, 0, nr), q = c.narrow(0, nr, c.size(0) - nr);
+          auto rf = recon->forward(rh, DIM1), r = q / rh;
+          return torch::where(rf > 0., recon->forward(q, DIM1) / rf,
+                              torch::stack({r.roll(1, DIM1), r}));
+        });
+  };
+
   if (_flux1.defined()) {
-    auto rlr = face_r(DIM1);
+    auto rlr = face_r1();
     _flux1.set_data(
         priemann->forward(rlr[ILT], rlr[IRT], DIM1, pmb->phydro->flux1()[IDN]));
   }
@@ -154,7 +189,11 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
   bool cov = false;
   auto lateral = [&](torch::Tensor const& rlr, int dim,
                      torch::Tensor const& mass) {
-    auto dcov = pmb->phydro->scalar_flux_covariance(rlr[ILT], rlr[IRT], dim);
+    // below a face column's solid surface: the wall's ghost rows (hydro)
+    auto cr = xw ? pmb->pib->x1_wall_fill(
+                       dim == DIM2 ? xw->face2 : xw->face3, rlr)
+                 : rlr;
+    auto dcov = pmb->phydro->scalar_flux_covariance(cr[ILT], cr[IRT], dim);
     if (!dcov.defined())
       return priemann->forward(rlr[ILT], rlr[IRT], dim, mass);
     cov = true;

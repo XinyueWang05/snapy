@@ -6,9 +6,11 @@
 #include <torch/nn/modules/common.h>
 
 #include <array>
+#include <map>
 #include <vector>
 
 // snap
+#include <snap/bc/internal_boundary.hpp>
 #include <snap/eos/equation_of_state.hpp>
 #include <snap/forcing/forcing.hpp>
 #include <snap/implicit/implicit_hydro.hpp>
@@ -234,6 +236,8 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! closure: this block's {R, I} of the stage (CPU, double) and its density
   torch::Tensor& axial_closure_sums() const { return _aam_cl; }
   torch::Tensor& axial_closure_rho() const { return _aam_cl_rho; }
+  //! closure: 1 on fluid cells when the block has solids, else undefined
+  torch::Tensor& axial_closure_fluid() const { return _aam_cl_fluid; }
 
   //! dynamics/flux-covariance (#289): the face-flux covariance rows a passive
   //! scalar carries on this stage's x2 (dim 2) or x3 (dim 1) faces, the rows a
@@ -368,6 +372,26 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! FP64 totals from the stored representation (new tensor; `u` if no ref)
   torch::Tensor total_u(torch::Tensor const& u) const;
 
+  //! the x1 wall at depth o (InternalBoundaryImpl::X1Wall): a column frame
+  //! from its first fluid cell up, whose nghost ghost faces are mirrored
+  //! about that face as a wall's ghost faces are (coordinate.cpp, ghost rule
+  //! (c)), and main's wall-built tables for that frame. Depth 0 is the
+  //! block's own grid and members
+  struct X1Depth {
+    torch::Tensor x1f, x1v, dx1f;
+    int iu = 0;
+    std::shared_ptr<HydroReferenceX1Operator> ref;
+    std::shared_ptr<Center5InterpImpl> dsf_lin;
+    Reconstruct recon1 = nullptr;
+    CorrectedPEFactors pe;
+  };
+  mutable std::map<int, X1Depth> x1d_;
+  X1Depth& x1_depth(int o) const;
+  //! the x1 reconstruction of depth o's frame (0: precon1), on w's device
+  Reconstruct x1_recon(int o, torch::Tensor const& w);
+  //! this stage's non-uniform x1 wall, or nullptr (main's path)
+  mutable InternalBoundaryImpl::X1Wall const* _xw = nullptr;
+
  protected:
   void _revise_x1inner_ghost(torch::Tensor const& w);
   void _revise_x1outer_ghost(torch::Tensor const& w);
@@ -395,7 +419,7 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
   _hydro_ref_x1(torch::Tensor const& w,
                 torch::Tensor const& dw = torch::Tensor(),
-                HydroPressureSplit* split = nullptr) const;
+                HydroPressureSplit* split = nullptr, int o = 0) const;
   //! overwrite the m x1 ghost rows of f next to each x1 neighbour with the
   //! neighbour's own rows of the same cells (faces: the same faces past the
   //! seam face), so a split column reads the values of one block
@@ -463,7 +487,7 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   std::array<torch::Tensor, 3> _aam_mass_flux;
   int _aam_mass_ny = 0;
   //! see axial_closure_sums()
-  mutable torch::Tensor _aam_cl, _aam_cl_rho;
+  mutable torch::Tensor _aam_cl, _aam_cl_rho, _aam_cl_fluid;
 
   torch::Tensor _flux1, _flux2, _flux3, _face_pressure1, _div, _forcing_dry;
   torch::Tensor _positivity_hits, _positivity_severe, _positivity_min;

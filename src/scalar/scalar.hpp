@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+
 // torch
 #include <torch/nn/cloneable.h>
 #include <torch/nn/module.h>
@@ -104,6 +106,9 @@ class ScalarImpl : public torch::nn::Cloneable<ScalarImpl> {
   Coordinate pcoord = nullptr;
   Reconstruct precon = nullptr;
   Reconstruct precon1 = nullptr;
+  //! the x1 reconstruction of a solid column's frame at depth o (0: precon1)
+  Reconstruct x1_recon(int o, torch::Tensor const& w);
+  std::map<int, Reconstruct> recon1_o_;
   RiemannSolver priemann = nullptr;
   torch::Tensor _flux1, _flux2, _flux3, _div;
   //! cumulative count of (cell, tracer) entries with positivity theta < 1
