@@ -13,6 +13,8 @@ NARROW: an x2 deck 4 and 8 columns wide with a 2-cell step beside a reflecting x
 interior columns only: finite, and equal to the same deck with the mask mirrored into the ghosts by hand.
 EDGE: the six panels over TERRAIN's mountain and ridge: every first ghost column at a panel edge carries the
 neighbour's own depth, so both panels build one frame for an edge face (no phantom side wall).
+EDGEREST: the six panels at rest over the mountain and ridge (interp_order 4, scheme 9): the solid deck's max |v|
+over 500 steps stays within 1.3x the same deck without a solid (panel-edge ghost state not interpolated through solid).
 RESTART: an x2 deck over a 2-cell step, balanced with reference='auto', solid=True, restarted from its
 checkpoint: the mask comes back, so the restart resolves the same x1 wall reference, and it continues
 bitwise equal to the uninterrupted run.
@@ -423,6 +425,49 @@ def edge():
     return bad == 0
 
 
+def edge_rest(scheme=9, nstep=500):
+    """EDGEREST: max |v| over the fluid in nstep steps, solid deck vs the same deck without a solid"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    import test_axial_momentum_flux_form as afm
+    vm = {}
+    for solid in (True, False):
+        cfg = yaml.safe_load(open(os.path.join(here, "test_axial_momentum_flux_form.yaml")))
+        cfg["integration"]["implicit-scheme"] = scheme
+        cfg["geometry"]["cells"]["interp_order"] = 4
+        if solid:
+            cfg["boundary-condition"]["internal"] = EARTH
+        mesh, blocks = afm.build(cfg, "cpu")
+        la0, lo0 = (blocks[0].module("coord").buffer(n)[..., 0] for n in ("latitude", "longitude"))
+        lon0, lat0 = (float(x[NG + 4, -NG - 1] + x[NG + 4, -NG]) / 2 for x in (lo0, la0))
+        dlat = float((la0[NG + 1, NG + 4] - la0[NG, NG + 4]).abs())
+        w0 = [v["hydro_w"].clone() for v in afm.initial_state(cfg, blocks, None, False, solid=solid)]
+        init = []
+        for b, w in zip(blocks, w0):
+            lon, lat = (b.module("coord").buffer(n)[..., 0] for n in ("longitude", "latitude"))
+            d = torch.arccos((lat.sin() * math.sin(lat0) + lat.cos() * math.cos(lat0) * (lon - lon0).cos()).clamp(-1, 1))
+            h = torch.maximum(torch.round(3. * torch.exp(-(d / (1.5 * dlat)) ** 2)).long(),
+                              torch.where(lat.abs() < .6 * dlat, 2, 0))
+            s, at = torch.zeros(w.shape[1:], dtype=torch.bool), torch.arange(w.size(-1))
+            s[NG:-NG, NG:-NG] = (at >= NG) & (at < NG + h[NG:-NG, NG:-NG, None])
+            init.append({"hydro_w": w} | ({"solid": s} if solid else {}))
+        mv, _ = mesh.initialize(init)
+        m = 0.
+        for n in range(1, nstep + 1):
+            mesh.set_cycle(n)
+            dt = mesh.max_time_step(mv)
+            for st in range(len(blocks[0].module("intg").stages)):
+                mesh.forward(mv, dt, st)
+            for v in mv:
+                f = ~v["solid"] if solid else torch.ones_like(v["hydro_w"][0], dtype=torch.bool)
+                m = max(m, float((v["hydro_w"][kIV1:kIV1 + 3].abs().amax(0) * f)[NG:-NG, NG:-NG, NG:-NG].max()))
+        vm[solid] = m
+    r = vm[True] / vm[False]
+    print(f"EDGEREST six panels at rest over the mountain and ridge, scheme {scheme}, {nstep} steps: max|v| solid "
+          f"{vm[True]:.3e} no solid {vm[False]:.3e} ratio {r:.2f} {'PASS' if r <= 1.3 else 'FAIL'}", flush=True)
+    return r <= 1.3
+
+
 def narrow(nx, scheme=0, nstep=5):
     """NARROW: the step deck nx columns wide, interior mask vs mirrored ghosts: (finite, max|diff|)"""
     k = 2
@@ -536,6 +581,8 @@ def group(name):
         return all(v <= TOL for v in d)
     if name == "terrain":
         return all([terrain(scheme) for scheme in (0, 9)])
+    if name == "edgerest":
+        return edge_rest()
     if name == "edge":
         return edge()
     if name == "narrow":
@@ -562,7 +609,7 @@ def group(name):
 
 
 GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "terrain", "rest", "balance",
-          "restart", "narrow", "edge", "short", "split")
+          "restart", "narrow", "edge", "edgerest", "short", "split")
 
 
 def main():

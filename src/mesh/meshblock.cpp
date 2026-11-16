@@ -1230,9 +1230,35 @@ void MeshBlockImpl::exchange_ghost_zones(Variables &vars) {
   SyncOptions sync_opts;
   sync_opts.interpolate(true).type(kConserved);
 
+  // a solid on the cubed sphere: a panel-edge ghost whose along-edge stencil
+  // (+-2 columns) meets a solid cell at its level takes the neighbour's own
+  // cell (a copy through the edge mapping), not a cubic interpolation
+  // through solid cells
+  torch::Tensor edge_copy;
+  if (vars.count("solid") && options->layout()->type() == "cubed-sphere") {
+    edge_copy = hydro_u.clone();
+    Variables cv{{"hydro_u", edge_copy}};
+    exchange(cv, SyncOptions().interpolate(false).type(kConserved));
+  }
+
   Variables sync_vars;
   sync_vars["hydro_u"] = hydro_u;
   exchange(sync_vars, sync_opts);
+  if (edge_copy.defined()) {
+    auto s = vars.at("solid").to(hydro_u.device(), torch::kFloat32);
+    auto near = torch::max_pool3d(s.unsqueeze(0).unsqueeze(0), {5, 5, 1},
+                                  {1, 1, 1}, {2, 2, 0})
+                    .squeeze(0)
+                    .squeeze(0) > 0.5;
+    int ng = pcoord->options->nghost();
+    auto o = torch::TensorOptions().device(near.device()).dtype(torch::kLong);
+    auto kk = torch::arange(near.size(0), o).view({-1, 1, 1});
+    auto jj = torch::arange(near.size(1), o).view({1, -1, 1});
+    auto ghost = (kk < ng) | (kk >= near.size(0) - ng) | (jj < ng) |
+                 (jj >= near.size(1) - ng);
+    hydro_u.copy_(
+        torch::where((near & ghost).unsqueeze(0), edge_copy, hydro_u));
+  }
 
   if (pscalar->nvar() > 0) {
     sync_opts.type(kScalar);
