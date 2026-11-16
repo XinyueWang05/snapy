@@ -194,6 +194,8 @@ torch::Tensor CoriolisXYZImpl::forward(torch::Tensor du, torch::Tensor w,
         auto kj = std::vector<torch::indexing::TensorIndex>{in[0], in[1]};
         auto r = pg->x1v.index({in[2]}), kk = pg->aam_kk_c.index(kj);
         auto vol = pg->cell_volume().index(in), rho = w[IDN].index(in);
+        if (auto const& f = phydro->axial_closure_fluid(); f.defined())
+          vol = vol * f.index(in), rho = rho * f.index(in);  // solids out
         auto kf = r * (pg->aam_k_c[VEL2].index(kj) * force[VEL2].index(in) +
                        pg->aam_k_c[VEL3].index(kj) * force[VEL3].index(in));
         auto rate_c = pg->axial_coriolis_rate(

@@ -421,6 +421,7 @@ double MeshBlockImpl::initialize(Variables &vars, char const *restart_file) {
   Variables sync_vars;
   sync_vars["hydro_w"] = vars.at("hydro_w");
   exchange(sync_vars, sync_opts);
+  check_x1_wall_seams(vars);
 
   if (pscalar->nvar() > 0) {
     sync_opts.type(kScalar);
@@ -476,6 +477,7 @@ void MeshBlockImpl::initialize_under_mesh(Variables &vars) {
   Variables prim_vars;
   prim_vars["hydro_w"] = vars.at("hydro_w");
   exchange(prim_vars, prim_opts);
+  check_x1_wall_seams(vars);
 
   if (pscalar->nvar() > 0) {
     SyncOptions scalar_opts;
@@ -504,6 +506,38 @@ void MeshBlockImpl::build_hydro_reference(Variables &vars) {
     SINFO(MeshBlock) << "anomaly reference built, shape "
                      << phydro->u_ref().sizes() << std::endl;
   }
+}
+
+void MeshBlockImpl::check_x1_wall_seams(Variables &vars) {
+  // a solid column's surface depth is exchanged once like a scalar: a ghost
+  // column (off the corners) must carry the depth of the neighbour column it
+  // stands for, or the x2/x3 faces there would take two different x1 walls
+  if (!vars.count("solid") || options->coord()->nc1() <= 1) return;
+  auto solid = vars.at("solid");
+  int il = pcoord->il(), nx1 = pcoord->iu() - il + 1;
+  auto run = solid.narrow(-1, il, nx1).to(torch::kLong).cumprod(-1).sum(-1);
+  auto own = run.masked_fill(run == nx1, 0);  // every block exchanges
+  Variables dv;
+  dv["x1_wall_depth"] = own.to(torch::kFloat64)
+                            .unsqueeze(-1)
+                            .expand({-1, -1, solid.size(-1)})
+                            .unsqueeze(0)
+                            .contiguous();
+  SyncOptions op;
+  op.interpolate(true).type(kScalar);
+  exchange(dv, op);
+  auto got = dv.at("x1_wall_depth")[0].select(-1, il).round().to(torch::kLong);
+  int nk = own.size(0), nj = own.size(1);
+  auto kk = torch::arange(nk, own.options()).unsqueeze(1).expand({nk, nj});
+  auto jj = torch::arange(nj, own.options()).unsqueeze(0).expand({nk, nj});
+  auto gk = (kk < pcoord->kl()) | (kk > pcoord->ku());
+  auto gj = (jj < pcoord->jl()) | (jj > pcoord->ju());
+  auto edge = (gk ^ gj).to(got.device());
+  TORCH_CHECK(!(edge & got.ne(own.to(got.device()))).any().item<bool>(),
+              "a solid column's surface depth differs from its neighbour's "
+              "across a panel edge or block seam: the x2/x3 faces there "
+              "would see two x1 walls (give the solid mask's ghost columns "
+              "the neighbour's depth)");
 }
 
 void MeshBlockImpl::finalize_initialization(Variables &vars) {
@@ -546,6 +580,14 @@ void MeshBlockImpl::finalize_initialization(Variables &vars) {
     TORCH_CHECK(solid.sizes() == std::vector<int64_t>({nc3, nc2, nc1}),
                 "initialize: solid has incorrect shape.", " Expected [", nc3,
                 ", ", nc2, ", ", nc1, "] but got ", solid.sizes());
+    // refuse here what the first stage would refuse late: the implicit solve
+    // needs the whole x1 column; the x1 wall is built (and checked) now
+    TORCH_CHECK(
+        !phydro->picorr || (options->is_physical_boundary(0, 0, -1) &&
+                            options->is_physical_boundary(0, 0, 1)),
+        "[Hydro] implicit scheme requires nb1 = 1 (no x1 "
+        "decomposition): the vertical solve has no cross-rank coupling.");
+    if (nc1 > 1) pib->x1_wall(vars);
     vars["fill_solid_hydro_w"] =
         torch::where(solid.unsqueeze(0).expand_as(hydro_w), hydro_w, 0.);
     vars["fill_solid_hydro_w"].narrow(0, IVX, 3).zero_();
@@ -767,6 +809,9 @@ void MeshBlockImpl::advance_local(Variables &vars, double dt, int stage) {
 
   // -------- (3) launch all jobs --------
   // (3.A) hydro forward
+  if (phydro->options->conserve_axial_momentum_closure() && vars.count("solid"))
+    phydro->axial_closure_fluid() =
+        torch::logical_not(vars.at("solid")).to(hydro_u.dtype());
   fut_hydro_du = phydro->forward(dt, hydro_u, vars);
   if (options->verbose()) {
     auto end = std::chrono::high_resolution_clock::now();
@@ -1042,7 +1087,19 @@ torch::Tensor MeshBlockImpl::gravity_work_fixer_sums(
   auto mv = (m * pcoord->cell_volume()).index(in3);
   // the mass of the cells next to the x1 walls sets the wall faces' round-off
   auto mwall = torch::zeros_like(mv.select(-1, 0).sum());
-  if (phydro->is_x1_wall(0)) mwall += mv.select(-1, 0).sum();
+  auto const *xw =
+      vars.count("solid") && pcoord->options->nc1() > 1 ? pib->x1_wall(vars)
+                                                         : nullptr;
+  if (phydro->is_x1_wall(0) && xw && !xw->cell.uniform()) {
+    // a solid column's wall cell is its first fluid cell
+    auto j = xw->cell.depth.slice(0, pcoord->kl(), pcoord->ku() + 1)
+                 .slice(1, pcoord->jl(), pcoord->ju() + 1)
+                 .to(mv.device())
+                 .unsqueeze(-1);
+    mwall += mv.gather(-1, j).sum();
+  } else if (phydro->is_x1_wall(0)) {
+    mwall += mv.select(-1, 0).sum();
+  }
   if (phydro->is_x1_wall(1)) mwall += mv.select(-1, -1).sum();
   // the limiter patched a cell or found a NaN: the redo check discards the step
   // (the marks ride in the one device-to-host copy below)

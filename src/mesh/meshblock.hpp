@@ -182,6 +182,8 @@ class MeshBlockImpl : public torch::nn::Cloneable<MeshBlockImpl> {
   //! Mesh-owned initialization path that preserves multi-block exchange order.
   void initialize_under_mesh(Variables& vars);
   void finalize_initialization(Variables& vars);
+  //! refuse a solid surface depth that differs across a panel edge/seam
+  void check_x1_wall_seams(Variables& vars);
 
   //! compute the maximum allowable time step
   /*!
