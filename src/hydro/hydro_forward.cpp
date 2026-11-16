@@ -429,6 +429,28 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     if (wall4[0] || wall4[1])  // key 2 and wall-less blocks never enter
       wall4_fill(a, wall4_E_, c, i0, i1, wall4, pos, ref, rows, _conv4_trips);
   };
+  // key 4 at a solid column's surface (X1Wall): the frame of depth o is a
+  // wall column o cells shorter, with main's conversion and wall-ghost
+  // weights of that frame (x1_depth); depth 0 is the block's own
+  bool key4 = options->conversion_order() == 4 && u.size(DIM1) > 1;
+  auto key4_of = [&](int o) -> X1Depth& {
+    auto& xd = x1_depth(o);
+    if (o && (!xd.wall4_E.defined() || xd.wall4_E.device() != w.device() ||
+              xd.wall4_E.scalar_type() != w.scalar_type())) {
+      conv4_x1_weights(xd.x1f, u.size(DIM1) - o, w.options(), xd.conv4_k);
+      xd.wall4_E = wall4_weights(xd.x1f, i0, i1 - o, pmb->pcoord->options->nghost())
+                       .to(w.options());
+    }
+    return xd;
+  };
+  auto fill4_at = [&](int o, torch::Tensor a, int c, bool pos,
+                      torch::Tensor ref, torch::Tensor rows = {}) {
+    if (o == 0) return fill4(a, c, pos, ref, rows);
+    bool wl[2] = {key4, wall4[1]};  // a surface is a reflecting wall
+    if (wl[0] || wl[1])
+      wall4_fill(a, key4_of(o).wall4_E, c, i0, i1 - o, wl, pos, ref, rows,
+                 _conv4_trips);
+  };
   bool split_flux = options->perturbation_flux();
   IdealMoistPerturbations perturb;
   torch::Tensor raw_primitive;
@@ -482,13 +504,39 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     auto averages = has_reference() ? total_u(u) : u;
     // the wall cell's row reads one-sided ghosts, m odd parity (m(0) = 0); W(u)
     // has no wall condition (m/rho = v + O(h^2), not zero at the wall)
-    if (wall4[0] || wall4[1]) {
-      averages = averages.clone();  // all rows at once, then m on its slot
-      fill4(averages, 0, true, {}, wall4_pos_);
-      fill4(averages.narrow(0, IVX, 1), 1, false, {});
-      fill4(w0, 0, true, {}, wall4_pos_);
+    torch::Tensor up, lap_w0;
+    if (_xw) {
+      // a solid surface: each depth's columns, their wall ghosts and x1
+      // weights from their own frame, as a wall column o cells shorter
+      int nv = averages.size(0);
+      auto both = pmb->pib->per_column(
+          _xw->cell, torch::cat({averages, w0}),
+          [&](torch::Tensor const& t, int o) {
+            auto a = t.narrow(0, 0, nv).clone(), b = t.narrow(0, nv, nv).clone();
+            auto* kk = o ? key4_of(o).conv4_k : k;
+            int m = t.size(-1) - 2;
+            auto lapo = [&](torch::Tensor const& q) {
+              auto out = torch::zeros_like(q);
+              auto qm = q.narrow(-1, 0, m), q0 = q.narrow(-1, 1, m);
+              out.narrow(-1, 1, m) =
+                  kk[0] * (q.narrow(-1, 2, m) - q0) - kk[1] * (q0 - qm);
+              return out;
+            };
+            fill4_at(o, a, 0, true, {}, wall4_pos_);
+            fill4_at(o, a.narrow(0, IVX, 1), 1, false, {});
+            fill4_at(o, b, 0, true, {}, wall4_pos_);
+            return torch::cat({a - lapo(a), lapo(b)});
+          });
+      up = both.narrow(0, 0, nv), lap_w0 = both.narrow(0, nv, nv);
+    } else {
+      if (wall4[0] || wall4[1]) {
+        averages = averages.clone();  // all rows at once, then m on its slot
+        fill4(averages, 0, true, {}, wall4_pos_);
+        fill4(averages.narrow(0, IVX, 1), 1, false, {});
+        fill4(w0, 0, true, {}, wall4_pos_);
+      }
+      up = averages - lap(averages);
     }
-    auto up = averages - lap(averages);
     auto good = ok(up, false);
     auto tmp = torch::where(good, up, averages);
     auto keep = [](torch::Tensor const& a) {
@@ -506,7 +554,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
                         : peos->vapor_failures().zero_();
     }
     good &= ok(w, true);
-    w.add_(lap(w0));
+    w.add_(lap_w0.defined() ? lap_w0 : lap(w0));
     w.copy_(torch::where(good, w, w0));
     _conv4_trips += good.logical_not().sum();
     // every ghost from the converted owned cells: the block's exchange, the
@@ -687,6 +735,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     auto x1_lr = [&](torch::Tensor wx1, int o) -> torch::Tensor {
     auto& xd = x1_depth(o);
     bool phys_in_o = o > 0 || phys_x1inner;
+    bool wall4o[2] = {o ? key4 : wall4[0], wall4[1]};  // key 4 walls
     if (o > 0) {  // bc_func.cpp reflecting_inner at this column's surface
       int g = pmb->pcoord->il();
       wx1 = wx1.clone();
@@ -750,7 +799,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
               .copy_(wx1[c].narrow(-1, iu + 1 - ng, ng).flip(-1));
         }
         // key 4 rho', p' parity ghosts (wall4_weights); runs only with gravity
-        fill4(wx1[c], c == IDN ? 2 : 3, true, c == IDN ? dref : pref);
+        fill4_at(o, wx1[c], c == IDN ? 2 : 3, true, c == IDN ? dref : pref);
       }
 
       torch::Tensor velocity;
@@ -780,9 +829,9 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
               .narrow(-1, iu + 1, ng)
               .copy_(-wx1[IVX].narrow(-1, iu + 1 - ng, ng).flip(-1));
       }
-      if (wall4[0] || wall4[1]) {
+      if (wall4o[0] || wall4o[1]) {
         if (!velocity.defined()) velocity = wx1[IVX].clone();
-        fill4(wx1[IVX], 1, false, {});
+        fill4_at(o, wx1[IVX], 1, false, {});
       }
 
       // floor=false: reconstruction-stage floors would clamp legitimately
@@ -833,7 +882,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       wtmp[IRT][IDN].copy_(torch::where(dr > 0., dr, density));
       // key 4, after the floors: the wall face mirrors its owned side, v* = 0
       for (int s : {0, 1}) {
-        if (!wall4[s]) continue;
+        if (!wall4o[s]) continue;
         int i = s ? iu + 1 : is, o = s ? ILT : IRT;
         wtmp[1 - o].select(-1, i).copy_(wtmp[o].select(-1, i));
         wtmp[1 - o][IVX].select(-1, i).neg_();

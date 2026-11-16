@@ -7,7 +7,8 @@ pulse to t = .3; uniform, and stretched with grid-continuing solid widths), fill
 per-column lower index, its ghost faces mirrored as the wall's), dx-weighted mass to 1e-13.
 FILL: the pulsed column (uniform, stretched) with earth, matched, 1.1x and 2x earth fill: the
 fluid does not depend on the fill, to 1e-12.
-SHORT: a solid column with fewer than 3 fluid cells is refused at initialize, by name. THIN: a full-height x2 solid (no fluid cell) 1-2 cells wide between
+SHORT: a solid column with fewer than 3 fluid cells (4 with conversion-order 4) is refused at
+initialize, by name. THIN: a full-height x2 solid (no fluid cell) 1-2 cells wide between
 fluid columns, gravity, explicit and scheme 9, equals the columns between reflecting walls.
 TRACER: a uniform tracer over a step stays uniform, its solid fill notwithstanding.
 X1 SPLIT: a solid surface on two x1 blocks of one snapy.Mesh is refused at initialize (the
@@ -138,10 +139,10 @@ def run(n, k, stretched, pulse, fill, scheme=0, courant=.4, dyn=None, keep=False
                 finite=bool(torch.isfinite(us).all()))
 
 
-def short(n, k):
+def short(n, k, dyn=None):
     """a column of n fluid cells on k earth cells: initialize only"""
     f = faces(n, k, False)
-    b = block(f, {"solid-density": 1.e3, "solid-pressure": 1.e9})
+    b = block(f, {"solid-density": 1.e3, "solid-pressure": 1.e9}, dyn=dyn)
     w = b.buffer("hydro.D").clone().zero_()
     w[kIDN], w[kIPR] = 1., 1.
     solid = torch.zeros_like(w[kIDN], dtype=torch.bool)
@@ -257,6 +258,13 @@ def main():
             refused = "need at least 3" in str(e) and "refused"
         print(f"SHORT k=30 solid, {n} fluid cells: {refused}", flush=True)
         ok &= bool(refused) and refused != "no error"
+    try:  # key 4 needs 4 fluid cells, as a wall column does
+        short(3, 30, {"conversion-order": 4})
+        refused = "no error"
+    except RuntimeError as e:
+        refused = "needs at least 4" in str(e) and "refused"
+    print(f"SHORT conversion-order 4, k=30 solid, 3 fluid cells: {refused}", flush=True)
+    ok &= bool(refused) and refused != "no error"
     for scheme in (1, 9) if DEV != "mps" else ():  # implicit corrected-PE surface row
         for courant in (.4, 4.):
             for k in (1, 6):

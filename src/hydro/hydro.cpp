@@ -737,11 +737,12 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
   // follows the seam exchange, so a column split along x1 gets one block's
   // faces.
   torch::Tensor wb4_flag;
+  auto& wb_ref4_ = o ? xd.wb4 : this->wb_ref4_;
   if (options->conversion_order() == 4) {
     if (!wb_ref4_ || wb_ref4_->stale(w)) {
       bool clamp = options->wb_wall_clamp();
       wb_ref4_ = std::make_shared<WbRef4Stencils>(
-          wb_ref4_stencils(pcoord->x1f, is, iu, clamp && phys_in,
+          wb_ref4_stencils(xd.x1f, is, iu, clamp && phys_in,
                            clamp && phys_out, w.options()));
     }
     wb4_flag = wb_ref4_flag(*wb_ref4_, psf_lo, psf_hi);
@@ -884,14 +885,16 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
       // rows built once per layout. Both sides then hold dsf at the wall face,
       // where the mean below is that value (0.5 * (x + x) = x), so it is
       // skipped
-      std::array<int64_t, 3> at{pcoord->il(), pcoord->iu(),
-                                refl[0] + 2 * refl[1]};
+      auto& wb4_lr_side_ = o ? xd.wb4_side : this->wb4_lr_side_;
+      auto& wb4_lr_col_ = o ? xd.wb4_col : this->wb4_lr_col_;
+      auto& wb4_lr_at_ = o ? xd.wb4_at : this->wb4_lr_at_;
+      std::array<int64_t, 3> at{is, iu, refl[0] + 2 * refl[1]};
       if (at != wb4_lr_at_ || !wb4_lr_col_.defined() ||
           wb4_lr_col_.device() != dsf.device()) {
         std::vector<int64_t> side, col;
         for (int f : {0, 1}) {
           if (!refl[f]) continue;
-          int i = f == 0 ? pcoord->il() : pcoord->iu() + 1;
+          int i = f == 0 ? is : iu + 1;
           for (int k = 0; k < 3; ++k)
             for (int s : {(int)ILT, (int)IRT})
               if (k < 2 || s == (f ? IRT : ILT))

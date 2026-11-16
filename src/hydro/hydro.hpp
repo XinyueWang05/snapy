@@ -384,6 +384,11 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
     std::shared_ptr<Center5InterpImpl> dsf_lin;
     Reconstruct recon1 = nullptr;
     CorrectedPEFactors pe;
+    // conversion-order 4: wb_ref4's stencils and kept wall-face rows, and
+    // the conversion's x1 weights and wall ghost weights, of this frame
+    std::shared_ptr<WbRef4Stencils> wb4;
+    torch::Tensor wb4_side, wb4_col, conv4_k[2], wall4_E;
+    std::array<int64_t, 3> wb4_at{-1, -1, -1};
   };
   mutable std::map<int, X1Depth> x1d_;
   X1Depth& x1_depth(int o) const;

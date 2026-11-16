@@ -287,9 +287,6 @@ InternalBoundaryImpl::X1Wall const *InternalBoundaryImpl::x1_wall(
                 "(nb1 = 1)");
     // paths the per-column wall does not take yet, refused by name
     auto const &hy = pmb->phydro;
-    TORCH_CHECK(hy->options->conversion_order() != 4,
-                "a solid surface with dynamics/conversion-order 4 (key-4 "
-                "wall ghosts, wb_ref4) is not supported");
     TORCH_CHECK(!(x1_centroid_exact_enabled() &&
                   pc->options->type() == "spherical-polar"),
                 "a solid surface with SNAP_X1_CENTROID_EXACT (x1 plain-mean "
@@ -299,6 +296,12 @@ InternalBoundaryImpl::X1Wall const *InternalBoundaryImpl::x1_wall(
     TORCH_CHECK(!hy->options->perturbation_flux(),
                 "perturbation-flux does not support immersed solids");
     int dmax = w->cell.depths.back();
+    // key 4: the wall ghosts and wb_ref4's face density of a column's frame
+    // need 4 fluid cells, as on a wall column
+    TORCH_CHECK(hy->options->conversion_order() != 4 || nx1 - dmax >= 4,
+                "a solid column has ", nx1 - dmax, " fluid cells; dynamics/"
+                "conversion-order 4 (key-4 wall ghosts, wb_ref4 face density) "
+                "needs at least 4");
     TORCH_CHECK(nx1 - dmax >= 3, "a solid column has ", nx1 - dmax,
                 " fluid cells; the x1 wall's one-sided 3-point slopes "
                 "(d1_pressure, x1 mass covariance, corrected-PE work) need at "
