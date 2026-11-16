@@ -234,6 +234,8 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! closure: this block's {R, I} of the stage (CPU, double) and its density
   torch::Tensor& axial_closure_sums() const { return _aam_cl; }
   torch::Tensor& axial_closure_rho() const { return _aam_cl_rho; }
+  //! closure: 1 on fluid cells when the block has solids, else undefined
+  torch::Tensor& axial_closure_fluid() const { return _aam_cl_fluid; }
 
   //! dynamics/flux-covariance (#289): the face-flux covariance rows a passive
   //! scalar carries on this stage's x2 (dim 2) or x3 (dim 1) faces, the rows a
@@ -464,7 +466,7 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   std::array<torch::Tensor, 3> _aam_mass_flux;
   int _aam_mass_ny = 0;
   //! see axial_closure_sums()
-  mutable torch::Tensor _aam_cl, _aam_cl_rho;
+  mutable torch::Tensor _aam_cl, _aam_cl_rho, _aam_cl_fluid;
 
   torch::Tensor _flux1, _flux2, _flux3, _face_pressure1, _div, _forcing_dry;
   torch::Tensor _positivity_hits, _positivity_severe, _positivity_min;

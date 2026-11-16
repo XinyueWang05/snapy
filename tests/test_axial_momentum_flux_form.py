@@ -21,6 +21,7 @@ computed here from the coordinate buffers, independently of the option's own ari
       absolute AAM drift, max over the steps, must be GAIN times below off (transport is ~1.1);
   (l) with conserve-axial-momentum-closure on top of full the absolute AAM of (f)-(h) and of
       Williamson 2 at Omega and 4 Omega drifts at most TOL; with the key false the run is full's;
+  (m) with the closure over a uniform bottom-attached solid layer the fluid AAM drifts at most TOL;
   (d) the key is off by default, and a Cartesian block, where it does nothing, builds with it on;
       full is refused without geometry/cells/interp_order: 4;
   (e) an odd grid with a cell on the axis;
@@ -113,6 +114,8 @@ def aam(blocks, mesh_vars, omega=0.0):
             from snapy import kICY
             rho = u[kIDN] + u[kICY:].sum(0)  # total density: dry plus the species rows
             l = l + omega * vol * r * r * coord.buffer("aam_kk_c").double() * rho
+        if "solid" in mesh_vars[ib]:  # the fluid's AAM
+            l = l * ~mesh_vars[ib]["solid"]
         total += l[interior(block)].sum().item()
     return total
 
@@ -597,6 +600,22 @@ def main(argv=None):
     gc.collect()
     if not worst <= TOL:
         failures.append("conserve-axial-momentum-closure: the absolute AAM drifts %.3e > %.0e" % (worst, TOL))
+
+    # (m) the closure over a uniform bottom-attached solid layer (no side walls, no mountain torque):
+    #     solid cells stay out of R, I and the increment, so the fluid AAM drifts at most TOL
+    cfg = config("full")
+    cfg["forcing"]["coriolis"] = {"type": "xyz", "omega1": W_SB}
+    mesh, blocks = build(with_full(cfg, close), args.device)
+    mv = initial_state(cfg, blocks, jet, True, W_SB)
+    for v in mv:
+        v["solid"] = torch.zeros(v["hydro_w"].shape[1:], dtype=torch.bool, device=v["hydro_w"].device)
+        ng = cfg["geometry"]["cells"]["nghost"]
+        v["solid"][..., ng:ng + 2] = True
+    _, _, drift, _, _ = run(mesh, blocks, mv, args.nstep, W_SB)
+    print("(m) solid floor, closure %s: max |dL| / |L| (fluid) = %.3e" % (close, drift))
+    if close and not drift <= TOL:
+        failures.append("closure over a solid floor: the fluid AAM drifts %.3e > %.0e" % (drift, TOL))
+    del mesh, blocks
 
     # (d) off by default, and no effect where it is not defined: a Cartesian block builds with it on
     cfg = config("transport")

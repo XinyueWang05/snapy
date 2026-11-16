@@ -774,6 +774,9 @@ void MeshBlockImpl::advance_local(Variables &vars, double dt, int stage) {
 
   // -------- (3) launch all jobs --------
   // (3.A) hydro forward
+  if (phydro->options->conserve_axial_momentum_closure() && vars.count("solid"))
+    phydro->axial_closure_fluid() =
+        torch::logical_not(vars.at("solid")).to(hydro_u.dtype());
   fut_hydro_du = phydro->forward(dt, hydro_u, vars);
   if (options->verbose()) {
     auto end = std::chrono::high_resolution_clock::now();
