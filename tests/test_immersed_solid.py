@@ -9,6 +9,9 @@ TERRAIN: six cubed-sphere panels over terrain on interior columns across panel e
 REST: the six panels at rest over a 1-cell step: the first stage moves no fluid cell sideways (to TOL).
 BALANCE: the same step started from snapy.balance_column given the deck's reference (reference=, solid=)
 stays at the no-solid level for 20 steps (within 10x of the same deck without a solid).
+RESTART: an x2 deck over a 2-cell step, balanced with reference='auto', solid=True, restarted from its
+checkpoint: the mask comes back, so the restart resolves the same x1 wall reference, and it continues
+bitwise equal to the uninterrupted run.
 REFUSED at initialize: SHORT (< 3 fluid cells, < 4 with key 4), SPLIT (nb1 = 2). The sphere floor is
 test_axial_momentum_flux_form.py row (n).
 usage: python test_immersed_solid.py [group ...] [--device mps]   (each group in its own process;
@@ -376,6 +379,45 @@ def balance(scheme):
     return ok
 
 
+def restart(scheme, n1=5, n2=5):
+    """RESTART: max |u_restarted - u_uninterrupted| after n2 steps (0 = bitwise), the mask restored"""
+    k, nx = 2, 8
+    f = faces(32, k, False)
+    rp = fluid(f)  # the whole column, balanced for this solid deck (SOLID_REF)
+    dt = .3 / 40
+    with tempfile.TemporaryDirectory() as d:
+        cwd = os.getcwd()
+        os.chdir(d)
+        try:
+            def deck():
+                return block(f, EARTH, nx, scheme, extra={"outputs": [{"type": "restart", "dt": 1.e9}]})
+            b = deck()
+            w = b.buffer("hydro.D").clone().zero_()
+            for c, v in ((kIDN, rp[0]), (kIPR, rp[1])):
+                w[c, 0, :, NG:-NG] = v
+                w[c, 0, :, :NG], w[c, 0, :, -NG:] = v[0], v[-1]
+            solid = torch.zeros_like(w[kIDN], dtype=torch.bool)
+            solid[:, :NG + nx // 2, NG:NG + k] = True  # a step: half the columns stand on 2 earth cells
+            w[kIDN][solid], w[kIPR][solid] = EARTH["solid-density"], EARTH["solid-pressure"]
+            var, _ = b.initialize({"hydro_w": w.to(DEV), "solid": solid.to(DEV)})
+            run = lambda blk, v, n: [blk.forward(v, dt, st) for _ in range(n) for st in range(3)]
+            run(b, var, n1)
+            b.make_outputs(var, n1 * dt, True)
+            path = [x for x in os.listdir(".") if x.endswith(".final.restart")][0]
+            run(b, var, n2)
+            r = deck()
+            rv, _ = r.initialize_from_restart(path)
+            back = "solid" in rv and torch.equal(rv["solid"].cpu(), solid)
+            run(r, rv, n2)
+            gap = float((rv["hydro_u"] - var["hydro_u"]).abs().max())
+        finally:
+            os.chdir(cwd)
+    ok = back and gap == 0.
+    print(f"RESTART x2 step, scheme {scheme}: mask restored {back}, max|u_restart - u_run| after {n2} steps "
+          f"{gap:.2e} {'PASS' if ok else 'FAIL'}", flush=True)
+    return ok
+
+
 def tracer():
     """a uniform tracer (r 1e-3; 0.5 in the solid) over a two-cell step: max |r / 1e-3 - 1| over the fluid"""
     n2 = 12
@@ -420,6 +462,8 @@ def group(name):
         return all(v <= TOL for v in d)
     if name == "terrain":
         return all([terrain(scheme) for scheme in (0, 9)])
+    if name == "restart":
+        return all([restart(scheme) for scheme in (0, 9)])
     if name == "balance":
         return all([balance(scheme) for scheme in (0, 9)])
     if name == "rest":
@@ -440,7 +484,7 @@ def group(name):
 
 
 GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "terrain", "rest", "balance",
-          "short", "split")
+          "restart", "short", "split")
 
 
 def main():
