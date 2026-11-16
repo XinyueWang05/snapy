@@ -351,6 +351,8 @@ snapy_add_python_test(test_implicit_stratified_solid TIMEOUT 300 LABELS "python;
 snapy_add_python_test(test_immersed_solid TIMEOUT 1200 LABELS "python;hydro;gravity;solid")
 # modules not yet wired to a solid surface refuse it at setup (full support after 3.0)
 snapy_add_python_test(test_solid_refusals TIMEOUT 300 LABELS "python;hydro;solid")
+# immersed-solid gates: a floor equals the wall above it to round-off in every field
+snapy_add_python_test(test_solid_gates TIMEOUT 1800 LABELS "python;hydro;gravity;solid")
 snapy_add_python_test(test_gravity_work_fixer TIMEOUT 120 LABELS "python;hydro;gravity;energy")
 snapy_add_python_test(test_gravity_work_radial_exact TIMEOUT 300 LABELS "python;hydro;gravity")
 snapy_add_python_test(test_implicit_options_type TIMEOUT 60 LABELS "python;implicit")
