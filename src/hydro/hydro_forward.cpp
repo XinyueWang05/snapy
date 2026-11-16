@@ -1193,6 +1193,52 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       pmb->pcoord->flux2global3_(pw);
     dcov += pw;
   };
+  // #289 per side: a face between columns of different depth takes its p*
+  // shift in the deeper column's frame; each fluid cell beside it gets the
+  // shift in its own frame instead, as its step-5 source subtracts
+  torch::Tensor side_div;
+  auto side_shift = [&](torch::Tensor const& wl, torch::Tensor const& wr,
+                        torch::Tensor const& wlr, int dim) {
+    if (cov_rows || !_xw) return;  // Cartesian: p* == p; no surface
+    auto pc = pmb->pcoord;
+    int ax = dim - 1, n1 = w.size(-1), nc = w.size(ax + 1);
+    auto d1 = [&](InternalBoundaryImpl::X1Group const& g,
+                  torch::Tensor const& q) {
+      return pmb->pib->per_column(g, q, [&](torch::Tensor const& t, int o) {
+        auto& xd = x1_depth(o);
+        return d1_pressure(t, xd.x1v.to(t.options()), pc->il(), xd.iu);
+      });
+    };
+    auto pf = 0.5 * (wl[IPR] + wr[IPR]);  // the face p of _flux_covariance
+    auto df = d1(dim == DIM2 ? _xw->face2 : _xw->face3, pf);
+    // a cell's own frame reads the face p below the deeper surface too: the
+    // face states before the wall's ghost rows replace them
+    pf = 0.5 * (wlr[ILT][IPR] + wlr[IRT][IPR]);
+    auto ds = pc->face_centroid_shift_x1()
+                  .to(w.device(), w.scalar_type())
+                  .narrow(0, 1, n1 - 2);
+    auto s = other.at("solid").to(torch::kBool).narrow(-1, 1, n1 - 2);
+    auto open = ~(s | s.roll(1, ax));           // a wall face is wall_cov's
+    auto side = [&](torch::Tensor const& dc) {  // flux row: own minus face
+      auto f = torch::zeros_like(wl);
+      f[dim == DIM2 ? IVY : IVZ].narrow(-1, 1, n1 - 2) =
+          torch::where(open, ds * (df - dc), 0.);
+      if (dim == DIM2)
+        pc->flux2global2_(f);
+      else
+        pc->flux2global3_(f);
+      return f;
+    };
+    auto fr = side(d1(_xw->cell, pf));  // the cell after face j: column j
+    auto fl = side(d1(_xw->cell, pf.roll(-1, ax)).roll(1, ax));  // j - 1
+    auto a = (dim == DIM2 ? pc->face_area2() : pc->face_area3())
+                 .to(w.device(), w.scalar_type());
+    // cell j: its upper face j + 1 as the lower side, its face j as the upper
+    auto d =
+        (a.narrow(ax, 1, nc) * fl.roll(-1, ax + 1) - a.narrow(ax, 0, nc) * fr) /
+        pc->cell_volume().to(w.device(), w.scalar_type());
+    side_div = side_div.defined() ? side_div + d : d;
+  };
   // the covariance increment of _flux_covariance into a face flux: the whole
   // flux on a curved grid, only the nonzero rows' x1 interior in Cartesian
   auto add_cov = [&](torch::Tensor& flx, torch::Tensor const& dcov) {
@@ -1228,6 +1274,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       auto dcov = flux_covariance() ? _flux_covariance(cwl, cwr, DIM2)
                                     : torch::Tensor();
       wall_cov(dcov, DIM2);
+      if (dcov.defined()) side_shift(cwl, cwr, wlr2, DIM2);
       // the passive scalars' rows are built from the same face states
       // (scalar_flux_covariance), taken before the solver may project them
       if (dcov.defined() && has_scalars) {
@@ -1264,6 +1311,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       auto dcov = flux_covariance() ? _flux_covariance(cwl, cwr, DIM3)
                                     : torch::Tensor();
       wall_cov(dcov, DIM3);
+      if (dcov.defined()) side_shift(cwl, cwr, wlr3, DIM3);
       if (dcov.defined() && has_scalars) {
         _cov_wl[1] = cwl.clone();
         _cov_wr[1] = cwr.clone();
@@ -1409,6 +1457,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       if (any2 && !cov2) div[IVY].copy_(plain[IVY]);
       if (any3 && !cov3) div[IVZ].copy_(plain[IVZ]);
     }
+    if (side_div.defined()) div += side_div;
     _div.set_data(div);
   }
   // axial angular momentum in flux form (#314): the rotation component of the

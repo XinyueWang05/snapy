@@ -6,6 +6,7 @@ RT = 4096 eps of its scale (|f| for rho, p; |v| + c_s for v), final state to TOL
 FILL: earth, matched, 1.1x and 2x fills give the same fluid to TOL. THIN: a full-height x2 solid
 equals the columns beside it between walls. TRACER: a uniform tracer over a step stays uniform.
 TERRAIN: six cubed-sphere panels over terrain on interior columns across panel edges, earth == matched.
+REST: the six panels at rest over a 1-cell step: the first stage moves no fluid cell sideways (to TOL).
 REFUSED at initialize: SHORT (< 3 fluid cells, < 4 with key 4), SPLIT (nb1 = 2). The sphere floor is
 test_axial_momentum_flux_form.py row (n).
 usage: python test_immersed_solid.py [group ...] [--device mps]   (each group in its own process;
@@ -287,6 +288,37 @@ def terrain(scheme, nstep=10):
     return ok
 
 
+def rest_step(scheme):
+    """test_axial_momentum_flux_form's deck at rest, one earth cell under every column north of the
+    equator: max |d(rho v2, rho v3)| / rho over the fluid after the first stage (the side-wall p*)"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    import test_axial_momentum_flux_form as afm
+    cfg = yaml.safe_load(open(os.path.join(here, "test_axial_momentum_flux_form.yaml")))
+    cfg["integration"]["implicit-scheme"] = scheme
+    cfg["boundary-condition"]["internal"] = EARTH
+    mesh, blocks = afm.build(cfg, "cpu")
+    w0 = [v["hydro_w"].clone() for v in afm.initial_state(cfg, blocks, None, False)]
+    masks, at = [], torch.arange(w0[0].size(-1))
+    for b in blocks:
+        h = (b.module("coord").buffer("latitude")[..., 0] > 0).long()
+        s = torch.zeros(w0[0].shape[1:], dtype=torch.bool)
+        s[NG:-NG, NG:-NG] = (at >= NG) & (at < NG + h[NG:-NG, NG:-NG, None])
+        masks.append(s)
+    mv, _ = mesh.initialize([{"hydro_w": w.clone(), "solid": s} for w, s in zip(w0, masks)])
+    u0 = [v["hydro_u"].clone() for v in mv]
+    mesh.set_cycle(1)
+    mesh.forward(mv, mesh.max_time_step(mv), 0)
+    d = 0.
+    for v, a in zip(mv, u0):
+        f = (~v["solid"])[NG:-NG, NG:-NG, NG:-NG]
+        q = ((v["hydro_u"] - a)[kIV1 + 1:kIV1 + 3].abs().amax(0) / a[kIDN])[NG:-NG, NG:-NG, NG:-NG]
+        d = max(d, float(q[f].max()))
+    print(f"REST cubed sphere over a 1-cell step, scheme {scheme}: first stage max|d(rho v_h)|/rho {d:.2e} "
+          f"{'PASS' if d <= TOL else 'FAIL'}", flush=True)
+    return d <= TOL
+
+
 def tracer():
     """a uniform tracer (r 1e-3; 0.5 in the solid) over a two-cell step: max |r / 1e-3 - 1| over the fluid"""
     n2 = 12
@@ -331,6 +363,8 @@ def group(name):
         return all(v <= TOL for v in d)
     if name == "terrain":
         return all([terrain(scheme) for scheme in (0, 9)])
+    if name == "rest":
+        return all([rest_step(scheme) for scheme in (0, 9)])
     if name == "tracer":
         d = tracer()
         print(f"TRACER uniform over a step, fill 0.5: max|r/r0 - 1|={d:.2e} {'PASS' if d <= TOL else 'FAIL'}",
@@ -346,7 +380,8 @@ def group(name):
                 for g, kw in FLOOR if g == name])
 
 
-GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "terrain", "short", "split")
+GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "terrain", "rest", "short",
+          "split")
 
 
 def main():
