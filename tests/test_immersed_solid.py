@@ -5,6 +5,7 @@ weno5 + lmars, rk3 to t = .3; N 32 uniform, 128 stretched). Every field at every
 RT = 4096 eps of its scale (|f| for rho, p; |v| + c_s for v), final state to TOL = 1e-12, mass to TOL/10.
 FILL: earth, matched, 1.1x and 2x fills give the same fluid to TOL. THIN: a full-height x2 solid
 equals the columns beside it between walls. TRACER: a uniform tracer over a step stays uniform.
+TERRAIN: six cubed-sphere panels over terrain on interior columns across panel edges, earth == matched.
 REFUSED at initialize: SHORT (< 3 fluid cells, < 4 with key 4), SPLIT (nb1 = 2). The sphere floor is
 test_axial_momentum_flux_form.py row (n).
 usage: python test_immersed_solid.py [group ...] [--device mps]   (each group in its own process;
@@ -70,18 +71,20 @@ def block(xf, internal=None, n2=1, scheme=0, tracer=False, nb1=0, dyn=None, eos=
         c["geometry"]["x1f"] = [float(v) for v in xf]
     if internal:
         c["boundary-condition"]["internal"] = internal
-    for key, v in (extra or {}).items():
-        c[key] = c[key] | v if isinstance(c.get(key), dict) else v
     if tracer:
         c["scalar"] = {"nvar": 1, "names": ["q"], "reconstruct": {"type": "weno5", "shock": False}}
     if nb1:
         c["distribute"] |= {"layout": "cubed" if nb1 > 1 else "slab", "nb1": nb1, "blocks_per_process": nb1}
+    for key, v in (extra or {}).items():
+        c[key] = c[key] | v if isinstance(c.get(key), dict) else v
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "c.yaml")
         yaml.safe_dump(c, open(p, "w"))
         if nb1:
             o = MeshOptions.from_yaml(p)
-            o.blocks_per_process(nb1)
+            o.blocks_per_process(c["distribute"]["blocks_per_process"])
+            if c["distribute"]["layout"] == "cubed-sphere":
+                o.set_local_horizontal_cells(c["geometry"]["cells"]["nx2"], c["geometry"]["cells"]["nx3"])
             m = Mesh(o)
             for b in m.blocks:
                 b.to(torch.device(DEV), DT)
@@ -232,6 +235,47 @@ def thin_x2(wid, scheme):
     return max(float((s[:, :na] - out["A"]).abs().max()), float((s[:, na + wid:] - out["B"]).abs().max()))
 
 
+def terrain(scheme, nstep=10):
+    """six cubed-sphere panels (x1 10..11) over terrain on interior columns only: a 3-cell mountain on a
+    panel edge and a 2-cell equatorial ridge across the edges; earth == matched fill bitwise, finite"""
+    tag, rp = f"TERRAIN cubed sphere, mountain on a panel edge + ridge, scheme {scheme}", fluid(torch.arange(9.) / 8)
+    a = {f"x{k}{e}_pi": s * .25 for k in (2, 3) for e, s in (("min", -1), ("max", 1))}
+    sphere = {"geometry": {"type": "gnomonic-equiangle", "bounds": {"x1min": 10., "x1max": 11.} | a,
+                           "cells": {"nx1": 8, "nx2": 8, "nx3": 8, "nghost": NG}},
+              "distribute": {"layout": "cubed-sphere", "nb1": 1, "blocks_per_process": 6}}
+    out, dts, fin = [], [], True
+    try:
+        for fill in (EARTH, {"solid-density": float(rp[0, 0]), "solid-pressure": float(rp[1, 0])}):
+            m, mv, out = block(torch.arange(9.) / 8 + 10., fill, 8, scheme, nb1=6, extra=sphere), [], out + [[]]
+            ll = [[b.module("coord").buffer(n)[..., 0] for n in ("longitude", "latitude")] for b in m.blocks]
+            lon0, lat0 = (float(x[NG + 4, -NG - 1] + x[NG + 4, -NG]) / 2 for x in ll[0])  # panel 0's x2 edge
+            dlat = float((ll[0][1][NG + 1, NG + 4] - ll[0][1][NG, NG + 4]).abs())
+            for b, (lon, lat) in zip(m.blocks, ll):
+                cosd = lat.sin() * math.sin(lat0) + lat.cos() * math.cos(lat0) * (lon - lon0).cos()
+                h = torch.round(3 * torch.exp(-(torch.arccos(cosd.clamp(-1, 1)) / (1.5 * dlat)) ** 2))
+                h = torch.maximum(h, 2. * (lat.abs() < .6 * dlat))[NG:-NG, NG:-NG, None]
+                w, i = b.buffer("hydro.D").clone().zero_(), torch.arange(8 + 2 * NG)
+                for c, v in ((kIDN, rp[0]), (kIPR, rp[1])):
+                    w[c, ..., NG:NG + 8], w[c, ..., :NG], w[c, ..., NG + 8:] = v.to(w), v[0], v[-1]
+                solid = torch.zeros_like(w[kIDN], dtype=torch.bool)  # interior columns only
+                solid[NG:-NG, NG:-NG] = ((i >= NG) & (i < NG + h.cpu())).to(solid.device)
+                mv.append({"hydro_w": w, "solid": solid})
+            mv, _ = m.initialize(mv)
+            for cycle in range(1, nstep + 1):
+                m.set_cycle(cycle)
+                dts += [m.max_time_step(mv)] if len(dts) < cycle else []
+                for st in range(3):
+                    m.forward(mv, dts[cycle - 1], st)
+                fin &= all(bool(torch.isfinite(v["hydro_w"]).all()) for v in mv)
+                out[-1].append([v["hydro_w"][:5][:, ~v["solid"]].double().cpu() for v in mv])
+    except RuntimeError as e:
+        print(f"{tag}: RAISED {str(e).splitlines()[0][:200]} FAIL", flush=True)
+        return False
+    d = max(float((a - b).abs().max()) for x, y in zip(*out) for a, b in zip(x, y))
+    print(f"{tag}: max|earth - matched| {d:.2e} finite {fin} {'PASS' if d == 0 and fin else 'FAIL'}", flush=True)
+    return d == 0 and fin
+
+
 def tracer():
     """a uniform tracer (r 1e-3; 0.5 in the solid) over a two-cell step: max |r / 1e-3 - 1| over the fluid"""
     n2 = 12
@@ -274,6 +318,8 @@ def group(name):
             print(f"THIN x2 full-height solid width={wid} scheme={sc}: max|u_solid-u_wall|={v:.2e} "
                   f"{'PASS' if v <= TOL else 'FAIL'}", flush=True)
         return all(v <= TOL for v in d)
+    if name == "terrain":
+        return all([terrain(scheme) for scheme in (0, 9)])
     if name == "tracer":
         d = tracer()
         print(f"TRACER uniform over a step, fill 0.5: max|r/r0 - 1|={d:.2e} {'PASS' if d <= TOL else 'FAIL'}",
@@ -289,7 +335,7 @@ def group(name):
                 for g, kw in FLOOR if g == name])
 
 
-GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "short", "split")
+GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "terrain", "short", "split")
 
 
 def main():
