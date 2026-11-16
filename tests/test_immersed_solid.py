@@ -11,6 +11,8 @@ BALANCE: the same step started from snapy.balance_column given the deck's refere
 stays at the no-solid level for 20 steps (within 10x of the same deck without a solid).
 NARROW: an x2 deck 4 and 8 columns wide with a 2-cell step beside a reflecting x2 wall, the mask given on
 interior columns only: finite, and equal to the same deck with the mask mirrored into the ghosts by hand.
+EDGE: the six panels over TERRAIN's mountain and ridge: every first ghost column at a panel edge carries the
+neighbour's own depth, so both panels build one frame for an edge face (no phantom side wall).
 RESTART: an x2 deck over a 2-cell step, balanced with reference='auto', solid=True, restarted from its
 checkpoint: the mask comes back, so the restart resolves the same x1 wall reference, and it continues
 bitwise equal to the uninterrupted run.
@@ -381,6 +383,46 @@ def balance(scheme):
     return ok
 
 
+def edge():
+    """EDGE: first-layer panel-edge ghost columns whose depth differs from the nearest neighbour column's"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    import test_axial_momentum_flux_form as afm
+    cfg = yaml.safe_load(open(os.path.join(here, "test_axial_momentum_flux_form.yaml")))
+    cfg["boundary-condition"]["internal"] = EARTH
+    mesh, blocks = afm.build(cfg, "cpu")
+    la0, lo0 = (blocks[0].module("coord").buffer(n)[..., 0] for n in ("latitude", "longitude"))
+    lon0, lat0 = (float(x[NG + 4, -NG - 1] + x[NG + 4, -NG]) / 2 for x in (lo0, la0))
+    dlat = float((la0[NG + 1, NG + 4] - la0[NG, NG + 4]).abs())
+    w0 = [v["hydro_w"].clone() for v in afm.initial_state(cfg, blocks, None, False, solid=True)]
+    init, xyz = [], []
+    for b, w in zip(blocks, w0):
+        lon, lat = (b.module("coord").buffer(n)[..., 0] for n in ("longitude", "latitude"))
+        d = torch.arccos((lat.sin() * math.sin(lat0) + lat.cos() * math.cos(lat0) * (lon - lon0).cos()).clamp(-1, 1))
+        h = torch.maximum(torch.round(3. * torch.exp(-(d / (1.5 * dlat)) ** 2)).long(),
+                          torch.where(lat.abs() < .6 * dlat, 2, 0))
+        s, at = torch.zeros(w.shape[1:], dtype=torch.bool), torch.arange(w.size(-1))
+        s[NG:-NG, NG:-NG] = (at >= NG) & (at < NG + h[NG:-NG, NG:-NG, None])
+        init.append({"hydro_w": w, "solid": s})
+        xyz.append(torch.stack([lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin()], -1))
+    mv, _ = mesh.initialize(init)
+    n1 = cfg["geometry"]["cells"]["nx1"]
+    dep = [v["solid"][..., NG:NG + n1].long().cumprod(-1).sum(-1) for v in mv]
+    nx, ng = dep[0].size(0) - 2 * NG, NG
+    cols = [(i, k, j) for i in range(6) for k in range(ng, ng + nx) for j in range(ng, ng + nx)]
+    pts = torch.stack([xyz[i][k, j] for i, k, j in cols])
+    bad = 0
+    for i in range(6):
+        for m in range(ng, ng + nx):
+            for k, j in ((m, ng - 1), (m, ng + nx), (ng - 1, m), (ng + nx, m)):
+                order = torch.argsort((pts - xyz[i][k, j]).norm(dim=-1))
+                o = next(int(q) for q in order if cols[int(q)][0] != i)
+                bad += int(dep[i][k, j]) != int(dep[cols[o][0]][cols[o][1], cols[o][2]])
+    print(f"EDGE six panels over the mountain and ridge: first-layer edge ghost columns off the neighbour's depth "
+          f"{bad} {'PASS' if bad == 0 else 'FAIL'}", flush=True)
+    return bad == 0
+
+
 def narrow(nx, scheme=0, nstep=5):
     """NARROW: the step deck nx columns wide, interior mask vs mirrored ghosts: (finite, max|diff|)"""
     k = 2
@@ -494,6 +536,8 @@ def group(name):
         return all(v <= TOL for v in d)
     if name == "terrain":
         return all([terrain(scheme) for scheme in (0, 9)])
+    if name == "edge":
+        return edge()
     if name == "narrow":
         return all([narrow(nx) for nx in (4, 8)])
     if name == "restart":
@@ -518,7 +562,7 @@ def group(name):
 
 
 GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "terrain", "rest", "balance",
-          "restart", "narrow", "short", "split")
+          "restart", "narrow", "edge", "short", "split")
 
 
 def main():

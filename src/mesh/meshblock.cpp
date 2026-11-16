@@ -537,7 +537,9 @@ void MeshBlockImpl::check_x1_wall_seams(Variables &vars) {
                             .expand({-1, -1, solid.size(-1)})
                             .unsqueeze(0)
                             .contiguous();
-  exchange(dv, SyncOptions().interpolate(true).type(kScalar));
+  // a copy, not an interpolation: the ghost column takes the neighbour's own
+  // integer depth through the edge mapping, so both panels build one frame
+  exchange(dv, SyncOptions().interpolate(false).type(kScalar));
   auto got = dv.at("x1_wall_depth")[0].select(-1, il).round().to(torch::kLong);
   // a physical x2/x3 face: the ghost columns' run is the one its own fill
   // gives the state (reflecting mirrors the interior, outflow copies the edge)
