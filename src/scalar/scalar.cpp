@@ -76,7 +76,7 @@ void ScalarImpl::reset() {
 
 Reconstruct ScalarImpl::x1_recon(int o, torch::Tensor const& w) {
   if (o == 0) return precon1;
-  auto& r = recon1_o_[o];
+  auto& r = recon1_o_.emplace(o, nullptr).first->second;
   if (!r) {
     r = Reconstruct(precon->options, this);
     auto x1f = pcoord->x1_row_faces(r->options->interp()->type(),
