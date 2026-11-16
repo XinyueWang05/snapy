@@ -45,6 +45,16 @@ void hydro_pressure_scan_x1_tensor(torch::Tensor const& rho,
                                    torch::Tensor const& hi, int iu,
                                    double grav);
 
+//! The MPS port of the x1 reference (tensor ops); also callable on CPU for
+//! backend parity tests. The rows grid runs on equal widths only (upward).
+void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
+                      torch::Tensor const& anchor_in,
+                      torch::Tensor const& psf_lo, torch::Tensor const& psf_hi,
+                      torch::Tensor const& pref, torch::Tensor const& dsf,
+                      torch::Tensor const& dref, int iu, double grav,
+                      int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
+                      torch::Tensor const& rows);
+
 }  // namespace snap
 
 namespace at::native {

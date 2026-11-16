@@ -1,5 +1,7 @@
 // C/C++
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -573,6 +575,70 @@ TEST(HydroRefX1Dispatch, shared_operator_invalidates_geometry_cache) {
                                                 true, snap::kX1RefStretched);
   EXPECT_EQ(legacy.grid(), snap::kX1RefNonUniform);
   EXPECT_EQ(initialization.grid(), snap::kX1RefStretched);
+}
+
+// The MPS port runs the upward wall reference's rows on equal widths (#280
+// keeps a stretched x1 off MPS). On CPU, the port must match the kernel on
+// the grids of test_immersed_solid's COL k=1/6 and REST decks.
+TEST(HydroRefX1Dispatch, mps_port_matches_the_kernel_on_the_upward_rows) {
+  struct Grid {
+    char const* name;
+    int nc1, iu;
+  };
+  // nghost 3: COL k=1 (33 cells), COL k=6 (38), the REST sphere column (8)
+  for (auto g : {Grid{"COL k=1", 39, 35}, Grid{"COL k=6", 44, 40},
+                 Grid{"REST", 14, 10}}) {
+    for (auto dtype : {torch::kFloat32, torch::kFloat64}) {
+      auto f64 = torch::TensorOptions().dtype(torch::kFloat64);
+      auto opt = torch::TensorOptions().dtype(dtype);
+      int nc1 = g.nc1;
+      auto w = torch::zeros({snap::IPR + 1, 2, 3, nc1}, opt);
+      auto z = (torch::arange(nc1, f64) / double(nc1 - 1)).view({1, 1, nc1});
+      auto column = torch::arange(6, f64).view({2, 3, 1});
+      w[snap::IDN].copy_((1.0 + 0.5 * (1.0 - z) + 0.002 * column).to(dtype));
+      w[snap::IPR].copy_(
+          (100.0 * torch::exp(-2.0 * z) + 0.03 * column).to(dtype));
+      w = w.contiguous();
+      auto dx1f = torch::full({nc1}, 1.0 / double(nc1), opt);
+      auto rows = snap::hydro_ref_x1_stretched_rows(dx1f, g.iu, true, true,
+                                                    true, /*upward=*/true)
+                      .to(opt)
+                      .contiguous();
+      auto expected = allocate_output(w);
+      at::native::call_hydro_ref_x1(
+          torch::kCPU, w, dx1f, torch::Tensor(), expected.psf_lo,
+          expected.psf_hi, expected.pref, expected.dsf, expected.dref, g.iu,
+          1.0, snap::kX1RefStretched, true, true, true, rows);
+      auto actual = allocate_output(w);
+      snap::hydro_ref_x1_mps(w, dx1f, torch::Tensor(), actual.psf_lo,
+                             actual.psf_hi, actual.pref, actual.dsf,
+                             actual.dref, g.iu, 1.0, snap::kX1RefStretched,
+                             true, true, true, rows);
+      double tol = dtype == torch::kFloat32 ? 2.e-5 : 2.e-12;
+      auto rel = [](torch::Tensor const& a, torch::Tensor const& b) {
+        return ((a - b).abs() / b.abs().clamp_min(1.e-30)).max().item<double>();
+      };
+      double r = std::max(
+          {rel(actual.psf_lo, expected.psf_lo),
+           rel(actual.psf_hi, expected.psf_hi), rel(actual.pref, expected.pref),
+           rel(actual.dsf, expected.dsf), rel(actual.dref, expected.dref)});
+      std::printf("mps port vs kernel, upward rows, %s %s: max rel %.2e\n",
+                  g.name, dtype == torch::kFloat32 ? "f32" : "f64", r);
+      EXPECT_LE(r, tol) << g.name;
+      auto mean2 = 0.5 * (expected.psf_lo + expected.psf_hi);
+      EXPECT_GT((expected.pref != mean2).sum().item<int64_t>(), 0) << g.name;
+    }
+  }
+  // a stretched x1 stays refused on MPS
+  auto w = torch::ones({snap::IPR + 1, 1, 1, 24}, torch::kFloat64);
+  auto dx1f = stretched_dx1f(24, torch::kFloat64);
+  auto rows = snap::hydro_ref_x1_stretched_rows(dx1f, 20, true, true, true);
+  auto out = allocate_output(w);
+  EXPECT_THROW(
+      snap::hydro_ref_x1_mps(w, dx1f, torch::Tensor(), out.psf_lo, out.psf_hi,
+                             out.pref, out.dsf, out.dref, 20, 1.0,
+                             snap::kX1RefStretched, true, true, true, rows),
+      c10::Error);
 }
 
 }  // namespace

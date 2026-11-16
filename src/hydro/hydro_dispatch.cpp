@@ -104,10 +104,17 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
                       torch::Tensor const& pref, torch::Tensor const& dsf,
                       torch::Tensor const& dref, int iu, double grav,
                       int x1_grid, bool phys_in, bool phys_out, bool wall_clamp,
-                      torch::Tensor const& /*rows*/) {
-  TORCH_CHECK(x1_grid != kX1RefStretched,
-              "a stretched x1 (geometry/x1f or cells/x1rat) is not supported "
-              "on MPS (#280); run it on CPU or CUDA");
+                      torch::Tensor const& rows) {
+  // the rows path on equal widths (the upward wall reference) is gathered
+  // below; a stretched x1's wall continuation is not ported (#280)
+  bool rows_path = x1_grid == kX1RefStretched;
+  if (rows_path) {
+    auto d = dx1f.cpu().to(torch::kFloat64);
+    TORCH_CHECK(rows.defined() && (d.max() - d.min()).item<double>() <
+                                      1.e-10 * d.mean().item<double>(),
+                "a stretched x1 (geometry/x1f or cells/x1rat) is not "
+                "supported on MPS (#280); run it on CPU or CUDA");
+  }
   bool uniform = x1_grid == kX1RefUniform;
   int nc1 = w.size(-1);
   int il = nc1 - 1 - iu;
@@ -127,7 +134,25 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
   psf_lo.clamp_min_(std::numeric_limits<double>::min());
   psf_hi.clamp_min_(std::numeric_limits<double>::min());
 
-  if (uniform) {
+  if (rows_path) {
+    // hydro_ref_x1_cell_impl's rows branch: six faces from each row's start
+    // (saturated at the top face), kept within the cell's two faces
+    auto faces = torch::cat({psf_lo, psf_hi.narrow(-1, nc1 - 1, 1)}, -1);
+    auto r = rows.to(w.options());
+    auto start = r.select(1, 0).round().to(torch::kLong);
+    auto idx =
+        (start.clamp_min(0).unsqueeze(1) + torch::arange(6, start.options()))
+            .clamp_max(nc1);
+    auto sh = faces.sizes().vec();
+    sh.back() = nc1;
+    sh.push_back(6);
+    auto val =
+        (faces.index_select(-1, idx.flatten()).view(sh) * r.narrow(1, 1, 6))
+            .sum(-1);
+    auto ok = (start >= 0) & (val >= torch::minimum(psf_lo, psf_hi)) &
+              (val <= torch::maximum(psf_lo, psf_hi));
+    pref.copy_(torch::where(ok, val, 0.5 * (psf_lo + psf_hi)));
+  } else if (uniform) {
     pref.copy_(0.5 * (psf_lo + psf_hi));
     auto faces = torch::cat({psf_lo, psf_hi.narrow(-1, nc1 - 1, 1)}, -1);
     constexpr double w6[6] = {11. / 1440., -31. / 480., 401. / 720.,
@@ -268,8 +293,17 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
   rs.narrow(-1, 0, nlo).copy_(bin.narrow(-1, 0, nlo));
   rs.narrow(-1, nc1 - nhi, nhi).copy_(bin.narrow(-1, nc1 - nhi, nhi));
   auto rf = rs.clone();
-  rf.narrow(-1, 1, nc1 - 1)
-      .copy_(0.5 * (rs.narrow(-1, 0, nc1 - 1) + rs.narrow(-1, 1, nc1 - 1)));
+  if (rows_path) {  // the kernel's width-weighted face value
+    auto h = dx1f.to(rs.options());
+    auto hd = h.narrow(-1, 0, nc1 - 1), hu = h.narrow(-1, 1, nc1 - 1);
+    rf.narrow(-1, 1, nc1 - 1)
+        .copy_(
+            (hu * rs.narrow(-1, 0, nc1 - 1) + hd * rs.narrow(-1, 1, nc1 - 1)) /
+            (hd + hu));
+  } else {
+    rf.narrow(-1, 1, nc1 - 1)
+        .copy_(0.5 * (rs.narrow(-1, 0, nc1 - 1) + rs.narrow(-1, 1, nc1 - 1)));
+  }
   dref.copy_(pref * rs);
   dsf.copy_(psf_lo * rf);
 }
