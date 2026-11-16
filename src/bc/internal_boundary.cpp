@@ -147,7 +147,8 @@ InternalBoundaryImpl::Mirror const *InternalBoundaryImpl::mirror_index(
     m.span.push_back({a, b});
     m.lines.push_back(torch::tensor(ls, torch::kLong).to(dev));
     m.src.push_back(torch::tensor(src, torch::kLong).to(dev));
-    m.sign.push_back(torch::tensor(sg, torch::kFloat64).to(dev));
+    auto wide = dev.is_mps() ? torch::kFloat32 : torch::kFloat64;  // MPS
+    m.sign.push_back(torch::tensor(sg, torch::kFloat64).to(dev, wide));
   }
   // x2/x3 face covariance: no covariance on a face beside a solid
   auto f = solid.to(torch::kBool) | solid.to(torch::kBool).roll(1, axis);

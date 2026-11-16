@@ -140,8 +140,8 @@ def column(k, fill="earth", stretched=False, scheme=0, courant=.4, dyn=None):
         for _ in range(nstep):
             for st in range(3):
                 b.forward(var, .3 / nstep, st)
-            out[name].append(var["hydro_w"][:5, 0, 0, NG + kk:NG + kk + n].double().cpu())
-        out[name + "_u"] = var["hydro_u"][:, 0, 0, NG + kk:NG + kk + n].double().cpu()
+            out[name].append(var["hydro_w"][:5, 0, 0, NG + kk:NG + kk + n].cpu().double())
+        out[name + "_u"] = var["hydro_u"][:, 0, 0, NG + kk:NG + kk + n].cpu().double()
     g = {}
     for s, w in zip(out["solid"], out["wall"]):
         g = worst(g, gap(s, w))

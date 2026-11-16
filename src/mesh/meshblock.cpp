@@ -518,7 +518,8 @@ void MeshBlockImpl::check_x1_wall_seams(Variables &vars) {
   auto run =
       solid.narrow(-1, il, iu - il + 1).to(torch::kLong).cumprod(-1).sum(-1);
   Variables dv;
-  dv["x1_wall_depth"] = run.to(torch::kFloat64)
+  auto wide = solid.is_mps() ? torch::kFloat32 : torch::kFloat64;  // MPS
+  dv["x1_wall_depth"] = run.to(wide)
                             .unsqueeze(-1)
                             .expand({-1, -1, solid.size(-1)})
                             .unsqueeze(0)
