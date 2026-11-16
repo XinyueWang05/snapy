@@ -100,11 +100,21 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
                  .to(u.options())
                  .unsqueeze(0);
   // r = q_face / rho_face; q / rho of cell averages is second order (S177)
-  auto face_r = [&](int dim) {
+  auto face_r_of = [&](torch::Tensor const& rho, torch::Tensor const& u,
+                       int dim) {
     auto recon = dim == DIM1 ? precon1 : precon;
     auto rf = recon->forward(rho, dim), r = u / rho;  // donor r if rf <= 0
     return torch::where(rf > 0., recon->forward(u, dim) / rf,
                         torch::stack({r.roll(1, dim), r}));
+  };
+  // x2/x3: the hydro's solid mirror (hydro_forward.cpp), both rows even
+  auto face_r = [&](int dim) {
+    auto m = dim == DIM1 ? nullptr : pmb->pib->mirror_index(other, dim);
+    if (!m) return face_r_of(rho, u, dim);
+    int nr = rho.size(0);
+    return pmb->pib->reconstruct(torch::cat({rho, u}), *m, dim, -1, [&](auto v) {
+      return face_r_of(v.narrow(0, 0, nr), v.narrow(0, nr, u.size(0)), dim);
+    });
   };
 
   // a solid column: its x1 wall at the first fluid cell, as the hydro's
@@ -194,6 +204,9 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
                        dim == DIM2 ? xw->face2 : xw->face3, rlr)
                  : rlr;
     auto dcov = pmb->phydro->scalar_flux_covariance(cr[ILT], cr[IRT], dim);
+    // terrain: a face beside a solid cell carries no covariance
+    if (auto m = pmb->pib->mirror_index(other, dim); m && dcov.defined())
+      dcov *= m->cov_keep;
     if (!dcov.defined())
       return priemann->forward(rlr[ILT], rlr[IRT], dim, mass);
     cov = true;
