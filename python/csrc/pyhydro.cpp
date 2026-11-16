@@ -1,7 +1,9 @@
 // C/C++
+#include <optional>
 #include <sstream>
 
 // torch
+#include <pybind11/stl.h>
 #include <torch/extension.h>
 #include <torch/nn/modules/container/any.h>
 
@@ -54,12 +56,35 @@ void bind_hydro(py::module& m) {
            py::arg("options"), py::arg("block") = nullptr)
       .def("max_time_step", &snap::HydroImpl::max_time_step);
 
-  m.def("balance_column", &snap::balance_column, py::arg("w"), py::arg("dx1f"),
-        py::arg("grav"), py::arg("wall_clamp") = true, py::arg("rtol") = 1.e-10,
-        py::arg("max_iter") = 120, py::arg("geometry") = "",
-        py::arg("stretched") = false, py::arg("conversion_order") = 2,
-        py::arg("eos") = nullptr, py::arg("upward") = false,
-        R"(Project a ghost-free x1 column onto the well-balanced scheme's own
+  m.def(
+      "balance_column",
+      [](torch::Tensor const& w, torch::Tensor const& dx1f, double grav,
+         bool wall_clamp, double rtol, int max_iter,
+         std::string const& geometry, bool stretched, int conversion_order,
+         snap::EquationOfStateImpl* eos, std::optional<bool> upward,
+         std::optional<std::string> reference, std::optional<bool> solid) {
+        // the reference: upward= if given, else the deck's (reference=,
+        // solid=) resolved as the solver does, else main's (legacy default)
+        TORCH_CHECK(!(upward && reference),
+                    "balance_column: pass upward= or reference=, not both");
+        TORCH_CHECK(!reference || *reference != "auto" || solid,
+                    "balance_column: reference='auto' needs solid= (whether "
+                    "the deck has an immersed solid)");
+        bool up = upward      ? *upward
+                  : reference ? snap::upward_wall_reference(
+                                    *reference, solid.value_or(false))
+                              : false;
+        return snap::balance_column(w, dx1f, grav, wall_clamp, rtol, max_iter,
+                                    geometry, stretched, conversion_order, eos,
+                                    up);
+      },
+      py::arg("w"), py::arg("dx1f"), py::arg("grav"),
+      py::arg("wall_clamp") = true, py::arg("rtol") = 1.e-10,
+      py::arg("max_iter") = 120, py::arg("geometry") = "",
+      py::arg("stretched") = false, py::arg("conversion_order") = 2,
+      py::arg("eos") = nullptr, py::arg("upward") = py::none(),
+      py::arg("reference") = py::none(), py::arg("solid") = py::none(),
+      R"(Project a ghost-free x1 column onto the well-balanced scheme's own
 discrete hydrostatic balance, holding p/rho -- the temperature -- fixed per
 cell. Returns (w, residual, sweeps); the residual is max|p'-C|/(rho*g*dz), the
 acceleration the balanced column can still feel in units of g. `w` is
@@ -75,5 +100,10 @@ geometry='cartesian'; any other geometry is refused. On a stretched x1 grid
 key (#280) pass stretched=True (the coordinate's stretched_x1()), so the
 column is classified as the solver classifies its blocks. conversion_order=4
 balances the state the key-4 solver applies the reference to, W(u - L u) +
-L W(u); it needs `eos` (block.module("hydro.eos")) and returns passes.)");
+L W(u); it needs `eos` (block.module("hydro.eos")) and returns passes.
+The x1 wall reference: upward=True/False selects it explicitly; otherwise
+reference= (the deck's dynamics/wb-wall-reference: auto, upward or main) and
+solid= (whether the deck has an immersed solid) resolve it as the solver does;
+with neither it is main's. A solid deck must be balanced with reference='auto',
+solid=True.)");
 }

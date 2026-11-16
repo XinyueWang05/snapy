@@ -7,6 +7,8 @@ FILL: earth, matched, 1.1x and 2x fills give the same fluid to TOL. THIN: a full
 equals the columns beside it between walls. TRACER: a uniform tracer over a step stays uniform.
 TERRAIN: six cubed-sphere panels over terrain on interior columns across panel edges, earth == matched.
 REST: the six panels at rest over a 1-cell step: the first stage moves no fluid cell sideways (to TOL).
+BALANCE: the same step started from snapy.balance_column given the deck's reference (reference=, solid=)
+stays at the no-solid level for 20 steps (within 10x of the same deck without a solid).
 REFUSED at initialize: SHORT (< 3 fluid cells, < 4 with key 4), SPLIT (nb1 = 2). The sphere floor is
 test_axial_momentum_flux_form.py row (n).
 usage: python test_immersed_solid.py [group ...] [--device mps]   (each group in its own process;
@@ -28,6 +30,7 @@ Z = (torch.arange(8 + 2 * NG) - NG + .5) / 8  # x1 centres of the 8-cell x2 deck
 
 # a deck with a solid runs the upward x1 wall reference; its plain-wall twin asks for it explicitly
 WALL_UP = {"wb-wall-reference": "upward"}
+SOLID_REF = {"reference": "auto", "solid": True}  # balance_column for a solid deck
 
 
 def gap(solid, wall):
@@ -108,9 +111,9 @@ def fluid(f):
     col[kIPR, 0, 0] = (t(f[:-1]) ** 3 - t(f[1:]) ** 3) / (1.5 * h)
     stretched = bool((h.max() - h.min()) > 1e-12 * h.mean())
     try:
-        wb = snapy.balance_column(col, h, 1., rtol=1.e-13, max_iter=400, stretched=stretched)[0]
+        wb = snapy.balance_column(col, h, 1., rtol=1.e-13, max_iter=400, stretched=stretched, **SOLID_REF)[0]
     except RuntimeError:  # a fine stretched column stalls at round-off
-        wb = snapy.balance_column(col, h, 1., rtol=1.e-12, max_iter=400, stretched=stretched)[0]
+        wb = snapy.balance_column(col, h, 1., rtol=1.e-12, max_iter=400, stretched=stretched, **SOLID_REF)[0]
     z = .5 * (f[1:] + f[:-1])
     d = 1.e-3 * torch.exp(-((z - .4) / .1) ** 2)
     wb[kIDN, 0, 0] *= 1 + d
@@ -252,7 +255,7 @@ def terrain(scheme, nstep=10):
     la0, lo0 = (blocks[0].module("coord").buffer(n)[..., 0] for n in ("latitude", "longitude"))
     lon0, lat0 = (float(x[NG + 4, -NG - 1] + x[NG + 4, -NG]) / 2 for x in (lo0, la0))  # panel 0's x2 edge
     dlat = float((la0[NG + 1, NG + 4] - la0[NG, NG + 4]).abs())
-    w0 = [v["hydro_w"].clone() for v in afm.initial_state(cfg, blocks, None, False)]
+    w0 = [v["hydro_w"].clone() for v in afm.initial_state(cfg, blocks, None, False, solid=True)]
     masks = []
     for b in blocks:
         lon, lat = (b.module("coord").buffer(n)[..., 0] for n in ("longitude", "latitude"))
@@ -298,7 +301,7 @@ def rest_step(scheme):
     cfg["integration"]["implicit-scheme"] = scheme
     cfg["boundary-condition"]["internal"] = EARTH
     mesh, blocks = afm.build(cfg, "cpu")
-    w0 = [v["hydro_w"].clone() for v in afm.initial_state(cfg, blocks, None, False)]
+    w0 = [v["hydro_w"].clone() for v in afm.initial_state(cfg, blocks, None, False, solid=True)]
     masks, at = [], torch.arange(w0[0].size(-1))
     for b in blocks:
         h = (b.module("coord").buffer("latitude")[..., 0] > 0).long()
@@ -317,6 +320,60 @@ def rest_step(scheme):
     print(f"REST cubed sphere over a 1-cell step, scheme {scheme}: first stage max|d(rho v_h)|/rho {d:.2e} "
           f"{'PASS' if d <= TOL else 'FAIL'}", flush=True)
     return d <= TOL
+
+
+def rest_balanced(scheme, solid, kw, nstep=20):
+    """the six panels at rest, the start an isothermal column through snapy.balance_column(**kw), one earth
+    cell under every column north of the equator if `solid`: max |v| over the fluid in nstep steps"""
+    import snapy
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    import test_axial_momentum_flux_form as afm
+    cfg = yaml.safe_load(open(os.path.join(here, "test_axial_momentum_flux_form.yaml")))
+    cfg["integration"]["implicit-scheme"] = scheme
+    if solid:
+        cfg["boundary-condition"]["internal"] = EARTH
+    mesh, blocks = afm.build(cfg, "cpu")
+    g, n1 = -cfg["forcing"]["const-gravity"]["grav1"], cfg["geometry"]["cells"]["nx1"]
+    init = []
+    for b in blocks:
+        c = b.module("coord")
+        r, dr = c.buffer("x1v")[NG:NG + n1].cpu(), c.buffer("dx1f")[NG:NG + n1].cpu().contiguous()
+        col = torch.zeros(kIPR + 1, 1, 1, n1)
+        col[kIPR, 0, 0] = afm.P0 * torch.exp(-(r - r[0]) * afm.RHO0 * g / afm.P0)
+        col[kIDN, 0, 0] = col[kIPR, 0, 0] * afm.RHO0 / afm.P0
+        wb = snapy.balance_column(col, dr, g, rtol=1.e-13, **kw)[0]
+        w = b.buffer("hydro.D").clone().zero_()
+        for q in (kIDN, kIPR):
+            w[q][..., NG:NG + n1] = wb[q, 0, 0]
+            w[q][..., :NG], w[q][..., NG + n1:] = w[q][..., NG:NG + 1], w[q][..., NG + n1 - 1:NG + n1]
+        s = torch.zeros(w.shape[1:], dtype=torch.bool)
+        if solid:
+            h, at = (c.buffer("latitude")[..., 0] > 0).long(), torch.arange(w.size(-1))
+            s[NG:-NG, NG:-NG] = (at >= NG) & (at < NG + h[NG:-NG, NG:-NG, None])
+        init.append({"hydro_w": w} | ({"solid": s} if solid else {}))
+    mv, _ = mesh.initialize(init)
+    vmax = 0.
+    for n in range(1, nstep + 1):
+        mesh.set_cycle(n)
+        dt = mesh.max_time_step(mv)
+        for st in range(len(blocks[0].module("intg").stages)):
+            mesh.forward(mv, dt, st)
+        for v in mv:
+            f = (~v["solid"] if solid else torch.ones_like(v["hydro_w"][0], dtype=torch.bool))[NG:-NG, NG:-NG, NG:-NG]
+            vmax = max(vmax, float((v["hydro_w"][kIV1:kIV1 + 3, NG:-NG, NG:-NG, NG:-NG].abs() * f).max()))
+    return vmax
+
+
+def balance(scheme):
+    """BALANCE: the deck's reference given to balance_column holds the no-solid level; 10x covers the
+    2000-step ratio of the upward-balanced start (4.3e-11 / 1.7e-10 against 2.2e-11)"""
+    ref = rest_balanced(scheme, False, {})
+    d = rest_balanced(scheme, True, SOLID_REF)
+    ok = d <= 10. * ref
+    print(f"BALANCE cubed sphere over a 1-cell step, scheme {scheme}: 20-step max|v| {d:.2e} "
+          f"(no solid {ref:.2e}, ratio {d / ref:.2f}) {'PASS' if ok else 'FAIL'}", flush=True)
+    return ok
 
 
 def tracer():
@@ -363,6 +420,8 @@ def group(name):
         return all(v <= TOL for v in d)
     if name == "terrain":
         return all([terrain(scheme) for scheme in (0, 9)])
+    if name == "balance":
+        return all([balance(scheme) for scheme in (0, 9)])
     if name == "rest":
         return all([rest_step(scheme) for scheme in (0, 9)])
     if name == "tracer":
@@ -380,8 +439,8 @@ def group(name):
                 for g, kw in FLOOR if g == name])
 
 
-GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "terrain", "rest", "short",
-          "split")
+GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "terrain", "rest", "balance",
+          "short", "split")
 
 
 def main():

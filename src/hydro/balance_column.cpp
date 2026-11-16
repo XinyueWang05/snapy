@@ -14,6 +14,18 @@
 
 namespace snap {
 
+bool upward_wall_reference(std::string const& reference, bool solid) {
+  TORCH_CHECK(
+      reference == "auto" || reference == "upward" || reference == "main",
+      "dynamics/wb-wall-reference must be auto, upward or main, got '",
+      reference, "'");
+  TORCH_CHECK(!solid || reference != "main",
+              "dynamics/wb-wall-reference: main cannot run a deck with an "
+              "immersed solid (its floors and walls need one x1 reference); "
+              "use auto or upward");
+  return solid || reference == "upward";
+}
+
 std::tuple<torch::Tensor, double, int> balance_column(
     torch::Tensor const& w, torch::Tensor const& dx1f, double grav,
     bool wall_clamp, double rtol, int max_iter, std::string const& geometry,

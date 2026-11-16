@@ -134,7 +134,7 @@ def energy(blocks, mesh_vars):
     return total
 
 
-def initial_state(cfg, blocks, wind, balanced, omega=0.0, w_up=0.0, vapor=0.0):
+def initial_state(cfg, blocks, wind, balanced, omega=0.0, w_up=0.0, vapor=0.0, solid=False):
     """Isothermal column in the scheme's discrete balance, times the rigid-rotation factor
     exp((w^2 + 2 w omega) s^2 / (2 RT)) when `balanced` (the frame rotates at omega), plus an east
     wind u_east(lon, lat, r cos lat)."""
@@ -152,7 +152,9 @@ def initial_state(cfg, blocks, wind, balanced, omega=0.0, w_up=0.0, vapor=0.0):
         col = torch.zeros(kIPR + 1, 1, 1, nx1, dtype=torch.float64)
         col[kIDN, 0, 0] = p * RHO0 / P0
         col[kIPR, 0, 0] = p
-        wb, _, _ = snapy.balance_column(col, dr.contiguous(), g)
+        # a solid deck (row (n)'s floor and its wall twin) balances against its own reference
+        ref = {"reference": "auto", "solid": True} if solid else {}
+        wb, _, _ = snapy.balance_column(col, dr.contiguous(), g, **ref)
         w = dict(block.named_buffers())["hydro.D"].clone().zero_()
         for c in (kIDN, kIPR):
             w[c][..., ng:ng + nx1] = wb[c, 0, 0].to(w)
@@ -664,7 +666,7 @@ def main(argv=None):
         return out, drift
     cfg = config("full")
     mesh, blocks = build(with_full(cfg, False), "cpu")
-    w0 = [v["hydro_w"].cpu() for v in initial_state(cfg, blocks, jet, True)]
+    w0 = [v["hydro_w"].cpu() for v in initial_state(cfg, blocks, jet, True, solid=True)]
     del mesh, blocks
     names = (("rho", 0), ("w", 1), ("u2", 2), ("u3", 3), ("p", 4))
 

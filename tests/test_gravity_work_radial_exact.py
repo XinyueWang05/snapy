@@ -125,7 +125,8 @@ def build(case, seed=0.05, recon="weno5", balanced=False, device="cpu", ncycle_o
         I = slice(NG, NG + NZ)
         col = w[:kIPR + 1, ..., I].clone()
         dx1f = (x1f[1:] - x1f[:-1])[I].contiguous()
-        wb, _, _ = snapy.balance_column(col.contiguous(), dx1f, G, True, 3e-14, 400)
+        ref = {"reference": "auto", "solid": True} if solid else {}  # a solid deck: its reference
+        wb, _, _ = snapy.balance_column(col.contiguous(), dx1f, G, True, 3e-14, 400, **ref)
         w[:kIPR + 1, ..., I] = wb
         for c in (kIDN, kIPR):
             w[c][..., :NG] = w[c][..., NG:NG + 1]

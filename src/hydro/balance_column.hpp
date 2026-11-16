@@ -125,6 +125,11 @@ class EquationOfStateImpl;
 //! limiter-repair fallback is not modelled). The eos limiter flag is cleared
 //! for the call and restored on return and on error. `eos` must come from a
 //! block with nx2 = nx3 = 1.
+//! dynamics/wb-wall-reference resolved as the solver resolves it
+//! (MeshBlock::wall_reference): "upward", or "auto" with a solid in the deck;
+//! a solid with "main" is refused
+bool upward_wall_reference(std::string const& reference, bool solid);
+
 std::tuple<torch::Tensor, double, int> balance_column(
     torch::Tensor const& w, torch::Tensor const& dx1f, double grav,
     bool wall_clamp = true, double rtol = 1.e-10, int max_iter = 120,

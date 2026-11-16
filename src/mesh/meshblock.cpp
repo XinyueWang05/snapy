@@ -13,6 +13,7 @@
 // snap
 #include <snap/coord/coord_utils.hpp>
 #include <snap/coord/gnomonic_equiangle.hpp>
+#include <snap/hydro/balance_column.hpp>
 #include <snap/hydro/flux_positivity.hpp>
 #include <snap/hydro/gravity_work_radial.hpp>
 #include <snap/implicit/implicit_dispatch.hpp>
@@ -518,12 +519,7 @@ bool MeshBlockImpl::wall_reference(bool local_solid) const {
   if (_playout->has_process_group())
     _playout->comm->allreduce(any, c10d::ReduceOp::MAX);
   bool solid = any[0].item<double>() > 0.;
-  auto const& ref = phydro->options->wb_wall_reference();
-  TORCH_CHECK(!solid || ref != "main",
-              "dynamics/wb-wall-reference: main cannot run a deck with an "
-              "immersed solid (its floors and walls need one x1 reference); "
-              "use auto or upward");
-  return solid || ref == "upward";
+  return upward_wall_reference(phydro->options->wb_wall_reference(), solid);
 }
 
 void MeshBlockImpl::check_x1_wall_seams(Variables &vars) {

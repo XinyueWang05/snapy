@@ -107,7 +107,7 @@ def solid_run(scheme, work, fixer, placement='top', strided=False):
     col = torch.zeros(kIPR + 1, 1, 1, nz)
     col[kIDN, 0, 0] = p / (box.RD * T)
     col[kIPR, 0, 0] = p
-    (wb, _, _) = snapy.balance_column(col, torch.full((nz,), dz), box.GRAV)
+    (wb, _, _) = snapy.balance_column(col, torch.full((nz,), dz), box.GRAV, reference='auto', solid=True)
     start = {'top': nz - 4, 'middle': nz // 2 - 2, 'bottom': 0}[placement]
     cfg['boundary-condition']['internal'] = {'solid-density': float(wb[kIDN, 0, 0, start]), 'solid-pressure': float(wb[kIPR, 0, 0, start])}
     if strided:
