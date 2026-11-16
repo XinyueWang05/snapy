@@ -1469,12 +1469,10 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
       // column has no single-valued potential (-g1 x1 jumps at the periodic
       // face), so the corrected PE is not defined there in any case
       auto [below, above] = x1_neighbors();
+      torch::Tensor pe;
       if (below < 0 && above < 0) {
-        auto pe = corrected_pe_work(drho, pmb->pcoord->x1f, pmb->pcoord->x1v,
-                                    is, ie, grav1, measure, &_pe_work);
-        // a solid surface: the one-sided row of its column's first fluid cell
-        if (m1) corrected_pe_work_surface(pe, drho, _pe_work, m1->surf);
-        face_gravity_work += pe;
+        pe = corrected_pe_work(drho, pmb->pcoord->x1f, pmb->pcoord->x1v, is, ie,
+                               grav1, measure, &_pe_work);
       } else {
         // x1 seam: the neighbour's drho one cell past it, so a seam cell
         // takes the centred slope of one block (#303)
@@ -1483,10 +1481,14 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         auto full = torch::zeros(shape, drho.options());
         full.slice(-1, is, ie).copy_(drho);
         _x1_ghost_rows(full, 1, false, 0x7726);
-        face_gravity_work += corrected_pe_work_seam(
-            full, pmb->pcoord->x1f, pmb->pcoord->x1v, is, ie, grav1, measure,
-            below >= 0, above >= 0, &_pe_work);
+        pe = corrected_pe_work_seam(full, pmb->pcoord->x1f, pmb->pcoord->x1v,
+                                    is, ie, grav1, measure, below >= 0,
+                                    above >= 0, &_pe_work);
       }
+      // a solid surface: the one-sided row of its column's first fluid cell,
+      // on a block whose x1 end is a seam too
+      if (m1) corrected_pe_work_surface(pe, drho, _pe_work, m1->surf);
+      face_gravity_work += pe;
     }
 
     auto original_gravity_work = dt * w[IDN].slice(-1, is, ie) *

@@ -7,11 +7,13 @@ pulse to t = .3; uniform, and stretched with grid-continuing solid widths), fill
 dx-weighted mass to 1e-13. THIN: a full-height x2 solid (no fluid cell) 1-2 cells wide between
 fluid columns, gravity, explicit and scheme 9, equals the columns between reflecting walls.
 TRACER: a uniform tracer over a step stays uniform, its solid fill notwithstanding.
+X1 SPLIT: the pulsed solid column on two x1 blocks of one snapy.Mesh equals one block bit for
+bit over 20 steps (uniform, stretched); implicit-scheme 9 with a solid refuses nb1 = 2 at initialize.
 MPS: uniform COL arms in float32 to 1e-5. usage: python test_immersed_solid.py [--device mps]"""
-import math, os, sys, tempfile
+import math, os, sys, tempfile, time
 import torch, yaml
 import snapy
-from snapy import MeshBlock, MeshBlockOptions, kIDN, kIPR, kIV1
+from snapy import Mesh, MeshBlock, MeshBlockOptions, MeshOptions, kIDN, kIPR, kIV1
 
 torch.set_default_dtype(torch.float64)
 NG, GAM = 3, 1.4
@@ -28,7 +30,8 @@ def faces(n, k, stretched):
     return torch.cat([torch.zeros(1), torch.cumsum(h, 0)]) - h[:k].sum()
 
 
-def block(xf, internal=None, n2=1, scheme=0, tracer=False):
+def block(xf, internal=None, n2=1, scheme=0, tracer=False, nb1=0):
+    """a MeshBlock; nb1 > 0: a snapy.Mesh of nb1 x1 blocks in this process (keep one alive at a time)"""
     weno = {"type": "weno5", "scale": False, "shock": False}
     eos = {"type": "ideal-gas", "gammad": GAM, "density-floor": 1.e-10, "pressure-floor": 1.e-10,
            "limiter": False}
@@ -52,9 +55,18 @@ def block(xf, internal=None, n2=1, scheme=0, tracer=False):
         c["boundary-condition"]["internal"] = internal
     if tracer:
         c["scalar"] = {"nvar": 1, "names": ["q"], "reconstruct": {"type": "weno5", "shock": False}}
+    if nb1:
+        c["distribute"] |= {"layout": "cubed" if nb1 > 1 else "slab", "nb1": nb1, "blocks_per_process": nb1}
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "c.yaml")
         yaml.safe_dump(c, open(p, "w"))
+        if nb1:
+            o = MeshOptions.from_yaml(p)
+            o.blocks_per_process(nb1)
+            m = Mesh(o)
+            for b in m.blocks:
+                b.to(torch.device(DEV), DT)
+            return m
         o = MeshBlockOptions.from_yaml(p)
         o.layout().device(DEV)
         b = MeshBlock(o)
@@ -174,6 +186,27 @@ def tracer(steps=20):
     return float(((q[:, NG:NG + n2, NG:NG + n1] / 1.e-3 - 1).abs())[fluid].max())
 
 
+def x1_split(stretched, nb1, scheme=0, n=26, k=6, steps=20):
+    """the pulsed solid column (k earth cells) on nb1 x1 blocks of one snapy.Mesh: the cells over 20 steps"""
+    f = faces(n, k, stretched)
+    rp = fluid(f[k:], True)
+    m = block(f, {"solid-density": 1.e3, "solid-pressure": 1.e9}, scheme=scheme, nb1=nb1)
+    w = torch.zeros(m.blocks[0].buffer("hydro.D").size(0), 1, 1, n + k + 2 * NG)
+    for c, v, s in ((kIDN, rp[0], 1.e3), (kIPR, rp[1], 1.e9)):
+        w[c, 0, 0] = torch.cat([v[:1].expand(NG), torch.full((k,), s), v, v[-1:].expand(NG)])
+    solid = torch.zeros_like(w[kIDN], dtype=torch.bool)
+    solid[..., NG:NG + k] = True
+    i0 = [int(torch.argmin((f - b.buffer("coord.x1f")[NG]).abs())) for b in m.blocks]
+    sl = [slice(i, i + b.buffer("coord.x1f").numel() - 1) for i, b in zip(i0, m.blocks)]
+    var, _ = m.initialize([{"hydro_w": w[..., s].clone(), "solid": solid[..., s].clone()} for s in sl])
+    out = []
+    for _ in range(steps):
+        for st in range(3):
+            m.forward(var, .4 * float((f[1:] - f[:-1]).min()) / math.sqrt(GAM), st)
+        out.append(torch.cat([var[q]["hydro_u"][:, 0, 0, NG:-NG] for q in sorted(range(nb1), key=i0.__getitem__)], -1))
+    return torch.stack(out)
+
+
 def main():
     ok, rows = True, {}
     for stretched in (False, True) if DEV != "mps" else (False,):
@@ -207,6 +240,20 @@ def main():
     d = tracer()
     print(f"TRACER uniform over a step, fill 0.5: max|r/r0 - 1|={d:.2e}", flush=True)
     ok &= d <= TOL
+    for stretched in (False, True) if DEV != "mps" else ():  # the Mesh rows last: no MeshBlock after them
+        d = (x1_split(stretched, 2) - x1_split(stretched, 1)).abs().amax((1, 2)).tolist()
+        print(f"X1 SPLIT {'stretched' if stretched else 'uniform'} 2 blocks vs 1, steps 1/5/10/20: "
+              + " ".join(f"{d[i - 1]:.1e}" for i in (1, 5, 10, 20)), flush=True)
+        ok &= max(d) == 0.
+    if DEV != "mps":
+        t = time.perf_counter()
+        try:
+            x1_split(False, 2, scheme=9, steps=0)
+            refused = "no error"
+        except RuntimeError as e:
+            refused = "requires nb1 = 1" in str(e) and f"refused at initialize in {time.perf_counter() - t:.1f} s"
+        print(f"X1 SPLIT implicit-scheme 9 + solid, nb1 = 2: {refused}", flush=True)
+        ok &= bool(refused) and refused != "no error"
     print("GATE immersed solid column:", "PASS" if ok else "FAIL", flush=True)
     return 0 if ok else 1
 

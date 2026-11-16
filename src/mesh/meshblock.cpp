@@ -544,6 +544,15 @@ void MeshBlockImpl::finalize_initialization(Variables &vars) {
     TORCH_CHECK(solid.sizes() == std::vector<int64_t>({nc3, nc2, nc1}),
                 "initialize: solid has incorrect shape.", " Expected [", nc3,
                 ", ", nc2, ", ", nc1, "] but got ", solid.sizes());
+    // refuse here what the first stage would refuse late: the implicit solve
+    // needs the whole x1 column, the x1 mirror (built now) a seam clear of
+    // the surface
+    TORCH_CHECK(
+        !phydro->picorr || (options->is_physical_boundary(0, 0, -1) &&
+                            options->is_physical_boundary(0, 0, 1)),
+        "[Hydro] implicit scheme requires nb1 = 1 (no x1 "
+        "decomposition): the vertical solve has no cross-rank coupling.");
+    if (nc1 > 1) pib->mirror_index(vars, 3);  // hydro_forward's x1 mirror
     vars["fill_solid_hydro_w"] =
         torch::where(solid.unsqueeze(0).expand_as(hydro_w), hydro_w, 0.);
     vars["fill_solid_hydro_w"].narrow(0, IVX, 3).zero_();
