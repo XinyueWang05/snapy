@@ -510,13 +510,13 @@ void MeshBlockImpl::build_hydro_reference(Variables &vars) {
 }
 
 void MeshBlockImpl::check_x1_wall_seams(Variables &vars) {
-  // each column's bottom solid run is exchanged once like a scalar; a ghost
-  // column takes its neighbour's run, so the caller gives the interior only
+  // ghost columns take the neighbour's bottom solid run
   // only bottom-attached runs move; other solid runs keep caller ghosts (main)
   if (!vars.count("solid") || options->coord()->nc1() <= 1) return;
   auto solid = vars.at("solid");
   int il = pcoord->il(), iu = pcoord->iu();
-  auto run = solid.narrow(-1, il, iu - il + 1).to(torch::kLong).cumprod(-1).sum(-1);
+  auto run =
+      solid.narrow(-1, il, iu - il + 1).to(torch::kLong).cumprod(-1).sum(-1);
   Variables dv;
   dv["x1_wall_depth"] = run.to(torch::kFloat64)
                             .unsqueeze(-1)
@@ -576,15 +576,13 @@ void MeshBlockImpl::finalize_initialization(Variables &vars) {
     TORCH_CHECK(solid.sizes() == std::vector<int64_t>({nc3, nc2, nc1}),
                 "initialize: solid has incorrect shape.", " Expected [", nc3,
                 ", ", nc2, ", ", nc1, "] but got ", solid.sizes());
-    // refuse here what the first stage would refuse late: the implicit solve
-    // needs the whole x1 column; the x1 wall is built (and checked) now
+    // implicit needs the whole x1 column; build the x1 wall now
     TORCH_CHECK(
         !phydro->picorr || (options->is_physical_boundary(0, 0, -1) &&
                             options->is_physical_boundary(0, 0, 1)),
         "[Hydro] implicit scheme requires nb1 = 1 (no x1 "
         "decomposition): the vertical solve has no cross-rank coupling.");
-    // modules not yet wired to each column's surface refuse a solid at setup
-    // (full support after 3.0) instead of reading the solid cells
+    // not yet wired to the surface: refuse a solid (after 3.0)
     bool any_solid = solid.any().item<bool>();
     TORCH_CHECK(!any_solid || !phydro->pdiffusion,
                 "[Diffusion] forcing/diffusion (explicit, cubed-sphere and "
@@ -598,16 +596,16 @@ void MeshBlockImpl::finalize_initialization(Variables &vars) {
                 "the solid and is lost. Remove sedimentation or the solid.");
     for (auto const &f : phydro->forcings) {
       auto const &t = f.type_info();
-      TORCH_CHECK(!any_solid || !(t == typeid(BotHeatImpl) ||
-                                  t == typeid(BotSpongeLyrImpl) ||
-                                  t == typeid(RelaxBotTempImpl) ||
-                                  t == typeid(RelaxBotCompImpl) ||
-                                  t == typeid(RelaxBotVeloImpl)),
-                  "[Forcing] the bottom forcings (bot-heat, bot-sponge-lyr, "
-                  "relax-bot-temp, relax-bot-comp, relax-bot-velo) do not "
-                  "support immersed solids yet (full support after 3.0): they "
-                  "act from the domain floor, not each column's surface. "
-                  "Remove them or the solid.");
+      TORCH_CHECK(
+          !any_solid ||
+              !(t == typeid(BotHeatImpl) || t == typeid(BotSpongeLyrImpl) ||
+                t == typeid(RelaxBotTempImpl) ||
+                t == typeid(RelaxBotCompImpl) || t == typeid(RelaxBotVeloImpl)),
+          "[Forcing] the bottom forcings (bot-heat, bot-sponge-lyr, "
+          "relax-bot-temp, relax-bot-comp, relax-bot-velo) do not "
+          "support immersed solids yet (full support after 3.0): they "
+          "act from the domain floor, not each column's surface. "
+          "Remove them or the solid.");
     }
     auto const &eos = phydro->peos->options;
     TORCH_CHECK(!any_solid || !eos->limiter() || !eos->thermo() ||
@@ -1119,9 +1117,9 @@ torch::Tensor MeshBlockImpl::gravity_work_fixer_sums(
   auto mv = (m * pcoord->cell_volume()).index(in3);
   // the mass of the cells next to the x1 walls sets the wall faces' round-off
   auto mwall = torch::zeros_like(mv.select(-1, 0).sum());
-  auto const *xw =
-      vars.count("solid") && pcoord->options->nc1() > 1 ? pib->x1_wall(vars)
-                                                         : nullptr;
+  auto const *xw = vars.count("solid") && pcoord->options->nc1() > 1
+                       ? pib->x1_wall(vars)
+                       : nullptr;
   if (phydro->is_x1_wall(0) && xw && !xw->cell.uniform()) {
     // a solid column's wall cell is its first fluid cell
     auto j = xw->cell.depth.slice(0, pcoord->kl(), pcoord->ku() + 1)
@@ -1328,10 +1326,10 @@ void print_cycle_diagnostics(
   }
 
   torch::Tensor conserved, ke_sum, pe_sum, meters, theta_min, vic_max;
-  // an immersed solid: no PE (its cells and the surface slope are not the
-  // E + P the dynamics conserves; full support after 3.0)
-  bool solid = std::any_of(blocks.begin(), blocks.end(),
-                           [](auto const &b) { return b.second->count("solid"); });
+  // no PE with a solid (after 3.0)
+  bool solid = std::any_of(blocks.begin(), blocks.end(), [](auto const &b) {
+    return b.second->count("solid");
+  });
   auto add = [](torch::Tensor &total, torch::Tensor value) {
     if (total.defined())
       total += value;

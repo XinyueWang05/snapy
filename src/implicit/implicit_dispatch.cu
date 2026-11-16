@@ -175,8 +175,7 @@ void vic_solve_cuda(at::TensorIterator &iter, double dt, double grav, int dir) {
             z0 = reinterpret_cast<Vector *>(data[13] + strides[13]);
             z1 = reinterpret_cast<Vector *>(data[14] + strides[14]);
           }
-          // the lower wall row: the column's first fluid cell (a plain if:
-          // a device lambda may not first-capture inside if constexpr)
+          // lower wall row at the first fluid cell (plain if for nvcc)
           int k0 = 0;
           auto solid = reinterpret_cast<scalar_t *>(data[10] + strides[10]);
           if (K == 2)

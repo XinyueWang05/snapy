@@ -118,10 +118,7 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
    */
   torch::Tensor forward(torch::Tensor wlr, int dim, torch::Tensor solid) const;
 
-  //! x2/x3 solid walls along w-dimension `dim`, built once per mask: each
-  //! fluid run [a, b) of a line with a solid end (`span`, its `lines`) is a
-  //! wall frame, gathered by `src` with the normal times `sign`; `cov_keep`:
-  //! the face covariance (0 beside a solid)
+  //! x2/x3 solid walls: one wall frame per fluid run with a solid end
   struct Mirror {
     std::vector<std::array<int, 2>> span;
     std::vector<torch::Tensor> lines, src, sign;
@@ -135,17 +132,14 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
       torch::Tensor v, Mirror const &m, int dim, int normal,
       std::function<torch::Tensor(torch::Tensor const &)> const &recon) const;
 
-  //! x1: a column's bottom-attached solid run is the x1 wall at its first
-  //! fluid cell, lo = il + depth (no solid: depth 0 everywhere, main's path).
-  //! A group holds the distinct depths and each depth's flat columns
+  //! x1 wall at each column's first fluid cell, grouped by depth
   struct X1Group {
     torch::Tensor depth;              // [nc3, nc2] int64, CPU
     std::vector<int> depths;          // distinct, ascending
     std::vector<torch::Tensor> cols;  // flat column indices per depth
     bool uniform() const { return depths.size() == 1 && depths[0] == 0; }
   };
-  //! the columns (cell), the x2 and x3 faces (the higher of their two cells),
-  //! and the solid cells above the bottom runs (`rest`, undefined if none)
+  //! per-column (cell) and per-face (x2, x3) groups; rest: other solids
   struct X1Wall {
     X1Group cell, face2, face3;
     torch::Tensor rest;
@@ -153,17 +147,12 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
   //! the x1 wall of other["solid"], built once per mask (nullptr without one)
   X1Wall const *x1_wall(
       std::map<std::string, torch::Tensor> const &other) const;
-  //! t [..., nc3, nc2, n] column by column: each depth o's columns, their
-  //! x1 axis narrowed by o (index il is then the first fluid cell), go
-  //! through fn(t_o, o), which returns [..., 1, ncol, m - o]; the o rows below
-  //! hold row o of the result (or zero). Uniform: fn(t, 0)
+  //! fn on each depth's columns, x1 narrowed so il is the surface
   torch::Tensor per_column(
       X1Group const &g, torch::Tensor const &t,
       std::function<torch::Tensor(torch::Tensor const &, int)> const &fn,
       bool zero_pad = false) const;
-  //! v [..., nc3, nc2, nc1]: the nghost cells below each column's first
-  //! fluid cell hold the cells above it reflected (row `normal` odd), as a
-  //! reflecting wall's ghosts do; depth 0 columns are left as they are
+  //! reflecting-wall ghosts below each column's surface
   torch::Tensor x1_wall_fill(X1Group const &g, torch::Tensor const &v,
                              int normal = -1) const;
 

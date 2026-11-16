@@ -408,8 +408,7 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
     rx_t0 = _rx_t0;
     rx_t1 = _rx_t1;
     if (!no_solid) rx_fluid = (mask.index(in3) == 0).to(w.options());
-    if (!no_solid &&
-        (!_rs_src.is_same(solid) || _rs_ver != solid._version())) {
+    if (!no_solid && (!_rs_src.is_same(solid) || _rs_ver != solid._version())) {
       _rs_src = solid, _rs_ver = solid._version();
       // each column's first fluid cell: the x1 wall's depth (X1Wall)
       auto const* xw = phydro->pmb->pib->x1_wall({{"solid", solid}});
@@ -618,14 +617,15 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
                                 pcoord->x1v, is, ie, grav1, measure, &_rx_work)
             // a solid column: its wall frame's slope (x1_depth)
             : phydro->pmb->pib->per_column(
-          phydro->pmb->pib->x1_wall({{"solid", solid}})->cell,
-          moved.slice(-1, is, ie),
-          [&](torch::Tensor const& t, int o) {
-            auto& xd = phydro->x1_depth(o);
-            return corrected_pe_work(t, xd.x1f, xd.x1v, is, xd.iu + 1, grav1,
-                                     measure, o ? &xd.pe : &_rx_work);
-          },
-          /*zero_pad=*/true);
+                  phydro->pmb->pib->x1_wall({{"solid", solid}})->cell,
+                  moved.slice(-1, is, ie),
+                  [&](torch::Tensor const& t, int o) {
+                    auto& xd = phydro->x1_depth(o);
+                    return corrected_pe_work(t, xd.x1f, xd.x1v, is, xd.iu + 1,
+                                             grav1, measure,
+                                             o ? &xd.pe : &_rx_work);
+                  },
+                  /*zero_pad=*/true);
     if (rx_mass0.defined()) {
       int nx2 = pcoord->options->nx2(), nx3 = pcoord->options->nx3();
       auto raw = _delta.view({nx3, nx2, nx1, options->size()}).select(-1, 0);

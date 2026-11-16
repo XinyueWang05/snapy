@@ -108,7 +108,8 @@ InternalBoundaryImpl::Mirror const *InternalBoundaryImpl::mirror_index(
   if (mirrors_.count(dim)) return &mirrors_.at(dim);
   // x2/x3 only: x1 is the per-column wall (x1_wall)
   TORCH_CHECK(dim != 3, "mirror_index: x1 goes through x1_wall");
-  int ng = pmb->pcoord->options->nghost(), axis = dim - 1, il = pmb->pcoord->il();
+  int ng = pmb->pcoord->options->nghost(), axis = dim - 1,
+      il = pmb->pcoord->il();
   auto s = solid.to(torch::kCPU, torch::kBool).clone();
   // a solid end cell continues into the x1 ghosts beyond it
   if (pmb->options->is_physical_boundary(0, 0, -1))
@@ -119,8 +120,7 @@ InternalBoundaryImpl::Mirror const *InternalBoundaryImpl::mirror_index(
   auto sl = s.movedim(axis, -1).contiguous();
   int n = sl.size(-1), lines = sl.numel() / n;
   auto sp = sl.data_ptr<bool>();
-  // each fluid run [a, b) of a line with a solid end is a wall frame, as the
-  // x1 surface is (per_column): lines grouped by their run
+  // each fluid run [a, b) with a solid end is a wall frame
   Mirror m;
   std::map<std::pair<int, int>, std::vector<int64_t>> runs;
   for (int l = 0; l < lines; ++l)
@@ -134,8 +134,7 @@ InternalBoundaryImpl::Mirror const *InternalBoundaryImpl::mirror_index(
   auto dev = solid.device();
   for (auto const &[ab, ls] : runs) {
     auto [a, b] = ab;
-    // frame cell p is cell a - ng + p, reflected into [a, b) at each solid
-    // end as a reflecting wall's ghosts are (odd count: the normal flips)
+    // frame cell p is cell a - ng + p, folded into [a, b) at solid ends
     int len = b - a + 2 * ng;
     std::vector<int64_t> src(len);
     std::vector<double> sg(len, 1.);
@@ -201,14 +200,12 @@ InternalBoundaryImpl::X1Wall const *InternalBoundaryImpl::x1_wall(
     std::map<std::string, torch::Tensor> const &other) const {
   if (!other.count("solid")) return nullptr;
   auto solid = other.at("solid");
-  if (x1wall_ && x1wall_src_.is_same(solid) &&
-      x1wall_ver_ == solid._version())
+  if (x1wall_ && x1wall_src_.is_same(solid) && x1wall_ver_ == solid._version())
     return x1wall_.get();
   auto pc = pmb->pcoord;
   int il = pc->il(), iu = pc->iu(), nx1 = iu - il + 1;
   auto s = solid.to(torch::kCPU, torch::kBool);
-  // the bottom-attached run of each column: solid from il up; a column with
-  // no fluid cell has no surface and stays as on main (depth 0)
+  // depth: the solid run from il up; no fluid cell: depth 0
   auto run = s.narrow(-1, il, nx1).to(torch::kLong).cumprod(-1).sum(-1);
   auto depth = run.masked_fill(run == nx1, 0);
   auto w = std::make_shared<X1Wall>();
@@ -221,8 +218,7 @@ InternalBoundaryImpl::X1Wall const *InternalBoundaryImpl::x1_wall(
   auto rest = s & ~bottom;
   if (rest.any().item<bool>()) w->rest = rest.to(dev);
   if (!w->cell.uniform()) {
-    // the wall's own requirements, column by column: the whole x1 column on
-    // this block, and the three fluid cells of the one-sided slopes
+    // a surface needs its whole x1 column and 3 fluid cells
     TORCH_CHECK(pmb->options->is_physical_boundary(0, 0, -1) &&
                     pmb->options->is_physical_boundary(0, 0, 1),
                 "a solid surface needs the whole x1 column on one block "
@@ -239,10 +235,10 @@ InternalBoundaryImpl::X1Wall const *InternalBoundaryImpl::x1_wall(
     TORCH_CHECK(!hy->options->perturbation_flux(),
                 "perturbation-flux does not support immersed solids");
     int dmax = w->cell.depths.back();
-    // key 4: the wall ghosts and wb_ref4's face density of a column's frame
-    // need 4 fluid cells, as on a wall column
+    // key 4 needs 4 fluid cells, as a wall column does
     TORCH_CHECK(hy->options->conversion_order() != 4 || nx1 - dmax >= 4,
-                "a solid column has ", nx1 - dmax, " fluid cells; dynamics/"
+                "a solid column has ", nx1 - dmax,
+                " fluid cells; dynamics/"
                 "conversion-order 4 (key-4 wall ghosts, wb_ref4 face density) "
                 "needs at least 4");
     TORCH_CHECK(nx1 - dmax >= 3, "a solid column has ", nx1 - dmax,

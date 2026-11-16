@@ -611,21 +611,21 @@ HydroImpl::X1Depth& HydroImpl::x1_depth(int o) const {
     d.x1f = pc->x1f, d.x1v = pc->x1v, d.dx1f = pc->dx1f, d.iu = pc->iu();
     return d;
   }
-  // the faces from the column's first fluid cell up; below it the nghost
-  // ghost faces of a wall there, mirrored as ghost rule (c) mirrors them
+  // faces from the surface up; ghost faces mirrored about it
   auto x = pc->x1f.narrow(0, o, n + 1).clone();
   x.narrow(0, 0, ng).copy_(2. * x[ng] - x.narrow(0, ng + 1, ng).flip(0));
   auto df = x.narrow(0, 1, n) - x.narrow(0, 0, n);
   d.x1f = x;
   d.dx1f = pc->dx1f.narrow(0, o, n).clone();
-  if (pc->options->stretched_x1()) d.dx1f.narrow(0, 0, ng).copy_(df.narrow(0, 0, ng));
+  if (pc->options->stretched_x1())
+    d.dx1f.narrow(0, 0, ng).copy_(df.narrow(0, 0, ng));
   // centres: the column's own above; the ghosts' by the grid's rule
   d.x1v = pc->x1v.narrow(0, o, n).clone();
   auto rm = x.narrow(0, 0, ng), rp = x.narrow(0, 1, ng);
-  d.x1v.narrow(0, 0, ng).copy_(
-      pc->options->type() == "spherical-polar"
-          ? 0.75 * (rp.pow(4) - rm.pow(4)) / (rp.pow(3) - rm.pow(3))
-          : 0.5 * (rm + rp));
+  d.x1v.narrow(0, 0, ng).copy_(pc->options->type() == "spherical-polar"
+                                   ? 0.75 * (rp.pow(4) - rm.pow(4)) /
+                                         (rp.pow(3) - rm.pow(3))
+                                   : 0.5 * (rm + rp));
   d.iu = pc->iu() - o;
   return d;
 }
@@ -690,8 +690,8 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
   bool phys_out = pmb->options->is_physical_boundary(0, 0, 1);
   bool clamp = options->wb_wall_clamp();
   auto& x1_reference_ = o ? xd.ref : this->x1_reference_;
-  if (!x1_reference_ || !x1_reference_->matches(xd.dx1f, iu, stretched,
-                                                phys_in, phys_out, clamp)) {
+  if (!x1_reference_ || !x1_reference_->matches(xd.dx1f, iu, stretched, phys_in,
+                                                phys_out, clamp)) {
     x1_reference_ = std::make_shared<HydroReferenceX1Operator>(
         xd.dx1f, iu, stretched, phys_in, phys_out, clamp);
   }
@@ -741,9 +741,8 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
   if (options->conversion_order() == 4) {
     if (!wb_ref4_ || wb_ref4_->stale(w)) {
       bool clamp = options->wb_wall_clamp();
-      wb_ref4_ = std::make_shared<WbRef4Stencils>(
-          wb_ref4_stencils(xd.x1f, is, iu, clamp && phys_in,
-                           clamp && phys_out, w.options()));
+      wb_ref4_ = std::make_shared<WbRef4Stencils>(wb_ref4_stencils(
+          xd.x1f, is, iu, clamp && phys_in, clamp && phys_out, w.options()));
     }
     wb4_flag = wb_ref4_flag(*wb_ref4_, psf_lo, psf_hi);
   }
@@ -847,8 +846,8 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
         auto const& co = pcoord->options;
         bool plain =
             x1_centroid_exact_enabled() && co->type() == "spherical-polar";
-        auto x1f = !plain ? pcoord->x1_row_faces(itype, xd.x1f, phys_in,
-                                                 phys_out)
+        auto x1f = !plain
+                       ? pcoord->x1_row_faces(itype, xd.x1f, phys_in, phys_out)
                    : co->stretched_x1() ? xd.x1f
                                         : torch::Tensor();
         if (x1f.defined()) dsf_lin_->set_x1_coeffs(x1f);

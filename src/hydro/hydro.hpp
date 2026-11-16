@@ -372,11 +372,7 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   //! FP64 totals from the stored representation (new tensor; `u` if no ref)
   torch::Tensor total_u(torch::Tensor const& u) const;
 
-  //! the x1 wall at depth o (InternalBoundaryImpl::X1Wall): a column frame
-  //! from its first fluid cell up, whose nghost ghost faces are mirrored
-  //! about that face as a wall's ghost faces are (coordinate.cpp, ghost rule
-  //! (c)), and main's wall-built tables for that frame. Depth 0 is the
-  //! block's own grid and members
+  //! the wall frame at depth o and main's wall tables built on it
   struct X1Depth {
     torch::Tensor x1f, x1v, dx1f;
     int iu = 0;
@@ -384,8 +380,7 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
     std::shared_ptr<Center5InterpImpl> dsf_lin;
     Reconstruct recon1 = nullptr;
     CorrectedPEFactors pe;
-    // conversion-order 4: wb_ref4's stencils and kept wall-face rows, and
-    // the conversion's x1 weights and wall ghost weights, of this frame
+    // conversion-order 4 tables of this frame
     std::shared_ptr<WbRef4Stencils> wb4;
     torch::Tensor wb4_side, wb4_col, conv4_k[2], wall4_E;
     std::array<int64_t, 3> wb4_at{-1, -1, -1};
