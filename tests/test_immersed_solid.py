@@ -71,20 +71,18 @@ def block(xf, internal=None, n2=1, scheme=0, tracer=False, nb1=0, dyn=None, eos=
         c["geometry"]["x1f"] = [float(v) for v in xf]
     if internal:
         c["boundary-condition"]["internal"] = internal
+    for key, v in (extra or {}).items():
+        c[key] = c[key] | v if isinstance(c.get(key), dict) else v
     if tracer:
         c["scalar"] = {"nvar": 1, "names": ["q"], "reconstruct": {"type": "weno5", "shock": False}}
     if nb1:
         c["distribute"] |= {"layout": "cubed" if nb1 > 1 else "slab", "nb1": nb1, "blocks_per_process": nb1}
-    for key, v in (extra or {}).items():
-        c[key] = c[key] | v if isinstance(c.get(key), dict) else v
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "c.yaml")
         yaml.safe_dump(c, open(p, "w"))
         if nb1:
             o = MeshOptions.from_yaml(p)
-            o.blocks_per_process(c["distribute"]["blocks_per_process"])
-            if c["distribute"]["layout"] == "cubed-sphere":
-                o.set_local_horizontal_cells(c["geometry"]["cells"]["nx2"], c["geometry"]["cells"]["nx3"])
+            o.blocks_per_process(nb1)
             m = Mesh(o)
             for b in m.blocks:
                 b.to(torch.device(DEV), DT)
@@ -236,44 +234,52 @@ def thin_x2(wid, scheme):
 
 
 def terrain(scheme, nstep=10):
-    """six cubed-sphere panels (x1 10..11) over terrain on interior columns only: a 3-cell mountain on a
-    panel edge and a 2-cell equatorial ridge across the edges; earth == matched fill bitwise, finite"""
-    tag, rp = f"TERRAIN cubed sphere, mountain on a panel edge + ridge, scheme {scheme}", fluid(torch.arange(9.) / 8)
-    a = {f"x{k}{e}_pi": s * .25 for k in (2, 3) for e, s in (("min", -1), ("max", 1))}
-    sphere = {"geometry": {"type": "gnomonic-equiangle", "bounds": {"x1min": 10., "x1max": 11.} | a,
-                           "cells": {"nx1": 8, "nx2": 8, "nx3": 8, "nghost": NG}},
-              "distribute": {"layout": "cubed-sphere", "nb1": 1, "blocks_per_process": 6}}
-    out, dts, fin = [], [], True
-    try:
-        for fill in (EARTH, {"solid-density": float(rp[0, 0]), "solid-pressure": float(rp[1, 0])}):
-            m, mv, out = block(torch.arange(9.) / 8 + 10., fill, 8, scheme, nb1=6, extra=sphere), [], out + [[]]
-            ll = [[b.module("coord").buffer(n)[..., 0] for n in ("longitude", "latitude")] for b in m.blocks]
-            lon0, lat0 = (float(x[NG + 4, -NG - 1] + x[NG + 4, -NG]) / 2 for x in ll[0])  # panel 0's x2 edge
-            dlat = float((ll[0][1][NG + 1, NG + 4] - ll[0][1][NG, NG + 4]).abs())
-            for b, (lon, lat) in zip(m.blocks, ll):
-                cosd = lat.sin() * math.sin(lat0) + lat.cos() * math.cos(lat0) * (lon - lon0).cos()
-                h = torch.round(3 * torch.exp(-(torch.arccos(cosd.clamp(-1, 1)) / (1.5 * dlat)) ** 2))
-                h = torch.maximum(h, 2. * (lat.abs() < .6 * dlat))[NG:-NG, NG:-NG, None]
-                w, i = b.buffer("hydro.D").clone().zero_(), torch.arange(8 + 2 * NG)
-                for c, v in ((kIDN, rp[0]), (kIPR, rp[1])):
-                    w[c, ..., NG:NG + 8], w[c, ..., :NG], w[c, ..., NG + 8:] = v.to(w), v[0], v[-1]
-                solid = torch.zeros_like(w[kIDN], dtype=torch.bool)  # interior columns only
-                solid[NG:-NG, NG:-NG] = ((i >= NG) & (i < NG + h.cpu())).to(solid.device)
-                mv.append({"hydro_w": w, "solid": solid})
-            mv, _ = m.initialize(mv)
-            for cycle in range(1, nstep + 1):
-                m.set_cycle(cycle)
-                dts += [m.max_time_step(mv)] if len(dts) < cycle else []
-                for st in range(3):
-                    m.forward(mv, dts[cycle - 1], st)
-                fin &= all(bool(torch.isfinite(v["hydro_w"]).all()) for v in mv)
-                out[-1].append([v["hydro_w"][:5][:, ~v["solid"]].double().cpu() for v in mv])
-    except RuntimeError as e:
-        print(f"{tag}: RAISED {str(e).splitlines()[0][:200]} FAIL", flush=True)
-        return False
-    d = max(float((a - b).abs().max()) for x, y in zip(*out) for a, b in zip(x, y))
-    print(f"{tag}: max|earth - matched| {d:.2e} finite {fin} {'PASS' if d == 0 and fin else 'FAIL'}", flush=True)
-    return d == 0 and fin
+    """the six-panel deck of test_axial_momentum_flux_form at rest over terrain given on interior
+    columns only (ghost depths are the API's): a 3-cell mountain centred on a panel edge and a 2-cell
+    equatorial ridge across the panel edges; earth vs matched fill, the earth run's dt on both"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    import test_axial_momentum_flux_form as afm
+    cfg = yaml.safe_load(open(os.path.join(here, "test_axial_momentum_flux_form.yaml")))
+    cfg["integration"]["implicit-scheme"] = scheme
+    mesh, blocks = afm.build(cfg, "cpu")
+    la0, lo0 = (blocks[0].module("coord").buffer(n)[..., 0] for n in ("latitude", "longitude"))
+    lon0, lat0 = (float(x[NG + 4, -NG - 1] + x[NG + 4, -NG]) / 2 for x in (lo0, la0))  # panel 0's x2 edge
+    dlat = float((la0[NG + 1, NG + 4] - la0[NG, NG + 4]).abs())
+    w0 = [v["hydro_w"].clone() for v in afm.initial_state(cfg, blocks, None, False)]
+    masks = []
+    for b in blocks:
+        lon, lat = (b.module("coord").buffer(n)[..., 0] for n in ("longitude", "latitude"))
+        d = torch.arccos((lat.sin() * math.sin(lat0) + lat.cos() * math.cos(lat0) * (lon - lon0).cos()).clamp(-1, 1))
+        h = torch.maximum(torch.round(3. * torch.exp(-(d / (1.5 * dlat)) ** 2)).long(),
+                          torch.where(lat.abs() < .6 * dlat, 2, 0))
+        s, at = torch.zeros(w0[0].shape[1:], dtype=torch.bool), torch.arange(w0[0].size(-1))
+        s[NG:-NG, NG:-NG] = (at >= NG) & (at < NG + h[NG:-NG, NG:-NG, None])  # interior columns only
+        masks.append(s)
+    del mesh, blocks
+    out, dts, fin = {}, [], True
+    for fill in ("earth", "matched"):
+        c = yaml.safe_load(yaml.safe_dump(cfg))
+        c["boundary-condition"]["internal"] = EARTH if fill == "earth" else {
+            "solid-density": float(w0[0][kIDN, NG, NG, NG]), "solid-pressure": float(w0[0][kIPR, NG, NG, NG])}
+        mesh, blocks = afm.build(c, "cpu")
+        mv, _ = mesh.initialize([{"hydro_w": w.clone(), "solid": s.clone()} for w, s in zip(w0, masks)])
+        out[fill] = []
+        for cycle in range(1, nstep + 1):
+            mesh.set_cycle(cycle)
+            if fill == "earth":
+                dts.append(mesh.max_time_step(mv))
+            for st in range(len(blocks[0].module("intg").stages)):
+                mesh.forward(mv, dts[cycle - 1], st)
+            fl = [(v["hydro_w"][:5], ~v["solid"]) for v in mv]  # ghost columns: the API's depth
+            fin &= all(bool(torch.isfinite(x[:, f]).all()) for x, f in fl)
+            out[fill].append([x[:, f].double() for x, f in fl])
+        del mesh, blocks, mv
+    d = max(float((a - b).abs().max()) for x, y in zip(out["earth"], out["matched"]) for a, b in zip(x, y))
+    ok = d == 0 and fin
+    print(f"TERRAIN cubed sphere, mountain on a panel edge + ridge, scheme {scheme}: max|earth - matched| "
+          f"{d:.2e} finite {fin} {'PASS' if ok else 'FAIL'}", flush=True)
+    return ok
 
 
 def tracer():
