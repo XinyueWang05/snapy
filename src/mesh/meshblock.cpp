@@ -539,6 +539,20 @@ void MeshBlockImpl::check_x1_wall_seams(Variables &vars) {
                             .contiguous();
   exchange(dv, SyncOptions().interpolate(true).type(kScalar));
   auto got = dv.at("x1_wall_depth")[0].select(-1, il).round().to(torch::kLong);
+  // a physical x2/x3 face: the ghost columns' run is the one its own fill
+  // gives the state (reflecting mirrors the interior, outflow copies the edge)
+  int ng = pcoord->options->nghost();
+  for (int f = BoundaryFace::kInnerX2; f <= BoundaryFace::kOuterX3; ++f) {
+    if (f >= (int)options->bfuncs().size() || !options->bfuncs()[f]) continue;
+    auto const &fn = options->bfuncs()[f];
+    int ax = f < BoundaryFace::kInnerX3 ? 1 : 0, n = got.size(ax);
+    if (n <= 1) continue;
+    auto g = got.narrow(ax, f % 2 ? n - ng : 0, ng);
+    if (is_reflecting(fn))
+      g.copy_(got.narrow(ax, f % 2 ? n - 2 * ng : ng, ng).flip(ax));
+    else if (is_outflow(fn))
+      g.copy_(got.narrow(ax, f % 2 ? n - ng - 1 : ng, 1).expand_as(g));
+  }
   auto kk = torch::arange(run.size(0), run.options()).unsqueeze(1);
   auto jj = torch::arange(run.size(1), run.options()).unsqueeze(0);
   auto ghost = (kk < pcoord->kl()) | (kk > pcoord->ku()) | (jj < pcoord->jl()) |

@@ -9,6 +9,8 @@ TERRAIN: six cubed-sphere panels over terrain on interior columns across panel e
 REST: the six panels at rest over a 1-cell step: the first stage moves no fluid cell sideways (to TOL).
 BALANCE: the same step started from snapy.balance_column given the deck's reference (reference=, solid=)
 stays at the no-solid level for 20 steps (within 10x of the same deck without a solid).
+NARROW: an x2 deck 4 and 8 columns wide with a 2-cell step beside a reflecting x2 wall, the mask given on
+interior columns only: finite, and equal to the same deck with the mask mirrored into the ghosts by hand.
 RESTART: an x2 deck over a 2-cell step, balanced with reference='auto', solid=True, restarted from its
 checkpoint: the mask comes back, so the restart resolves the same x1 wall reference, and it continues
 bitwise equal to the uninterrupted run.
@@ -379,6 +381,36 @@ def balance(scheme):
     return ok
 
 
+def narrow(nx, scheme=0, nstep=5):
+    """NARROW: the step deck nx columns wide, interior mask vs mirrored ghosts: (finite, max|diff|)"""
+    k = 2
+    f = faces(32, k, False)
+    rp = fluid(f)
+    out = []
+    for mirrored in (False, True):
+        b = block(f, EARTH, nx, scheme)
+        w = b.buffer("hydro.D").clone().zero_()
+        for c, v in ((kIDN, rp[0]), (kIPR, rp[1])):
+            w[c, 0, :, NG:-NG] = v
+            w[c, 0, :, :NG], w[c, 0, :, -NG:] = v[0], v[-1]
+        solid = torch.zeros_like(w[kIDN], dtype=torch.bool)
+        solid[:, NG:NG + nx // 2, NG:NG + k] = True
+        if mirrored:  # reflecting x2 walls: the ghosts mirror the interior
+            solid[:, :NG], solid[:, -NG:] = solid[:, NG:2 * NG].flip(1), solid[:, -2 * NG:-NG].flip(1)
+        w[kIDN][solid], w[kIPR][solid] = EARTH["solid-density"], EARTH["solid-pressure"]
+        var, _ = b.initialize({"hydro_w": w.to(DEV), "solid": solid.to(DEV)})
+        for _ in range(nstep):
+            for st in range(3):
+                b.forward(var, .3 / 40, st)
+        out.append(var["hydro_u"][:, :, NG:-NG, NG:-NG].cpu().double())
+    fin = bool(torch.isfinite(out[0]).all())
+    d = float((out[0] - out[1]).abs().max()) if fin else float("nan")
+    ok = fin and d == 0.
+    print(f"NARROW x2 step beside a reflecting wall, {nx} columns: finite {fin}, max|interior mask - mirrored| "
+          f"{d:.2e} {'PASS' if ok else 'FAIL'}", flush=True)
+    return ok
+
+
 def restart(scheme, n1=5, n2=5):
     """RESTART: max |u_restarted - u_uninterrupted| after n2 steps (0 = bitwise), the mask restored"""
     k, nx = 2, 8
@@ -462,6 +494,8 @@ def group(name):
         return all(v <= TOL for v in d)
     if name == "terrain":
         return all([terrain(scheme) for scheme in (0, 9)])
+    if name == "narrow":
+        return all([narrow(nx) for nx in (4, 8)])
     if name == "restart":
         return all([restart(scheme) for scheme in (0, 9)])
     if name == "balance":
@@ -484,7 +518,7 @@ def group(name):
 
 
 GROUPS = ("col", "fill", "impl", "cov", "conv4", "thin", "tracer", "terrain", "rest", "balance",
-          "restart", "short", "split")
+          "restart", "narrow", "short", "split")
 
 
 def main():
