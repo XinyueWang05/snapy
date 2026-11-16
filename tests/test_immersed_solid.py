@@ -196,7 +196,7 @@ def tracer(steps=20):
     w[kIDN][solid], w[kIPR][solid] = 1.e3, 1.e9
     r = torch.full((1,) + tuple(solid.shape), 1.e-3)
     r[0][solid] = .5
-    var, _ = b.initialize({"hydro_w": w.to(DT), "solid": solid, "scalar_r": r.to(DT)})
+    var, _ = b.initialize({"hydro_w": w.to(DT), "solid": solid, "scalar_r": r.to(w.device, DT)})
     for _ in range(steps):
         for st in range(3):
             b.forward(var, .4 / 8 / math.sqrt(GAM), st)
