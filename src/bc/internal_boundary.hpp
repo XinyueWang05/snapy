@@ -1,6 +1,7 @@
 #pragma once
 
 // C/C++
+#include <array>
 #include <functional>
 #include <map>
 
@@ -117,20 +118,19 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
    */
   torch::Tensor forward(torch::Tensor wlr, int dim, torch::Tensor solid) const;
 
-  //! x2/x3 solid mirror maps along w-dimension `dim`, built once per mask:
-  //! gather `idx`, normal `sign`; thin runs' second copy (idx1, sign1) on x1
-  //! `rows`, `pick` the ILT/IRT read from it; `cov_keep` the face covariance
-  //! (0 beside a solid)
+  //! x2/x3 solid walls along w-dimension `dim`, built once per mask: each
+  //! fluid run [a, b) of a line with a solid end (`span`, its `lines`) is a
+  //! wall frame, gathered by `src` with the normal times `sign`; `cov_keep`:
+  //! the face covariance (0 beside a solid)
   struct Mirror {
-    torch::Tensor idx, sign, rows, idx1, sign1, pick, cov_keep;
+    std::vector<std::array<int, 2>> span;
+    std::vector<torch::Tensor> lines, src, sign;
+    torch::Tensor cov_keep;
   };
-  //! the maps of other["solid"] (nullptr without one)
+  //! the walls of other["solid"] (nullptr without one)
   Mirror const *mirror_index(std::map<std::string, torch::Tensor> const &other,
                              int dim) const;
-  //! v [..., nc3, nc2, nc1] mirrored (copy 1: on its rows); row `normal` odd
-  torch::Tensor mirror(torch::Tensor v, Mirror const &m, int dim,
-                       int normal = -1, int copy = 0) const;
-  //! recon of the mirrored v; on thin rows the picked sides of copy 1
+  //! recon of v, each wall frame's faces from recon of its frame
   torch::Tensor reconstruct(
       torch::Tensor v, Mirror const &m, int dim, int normal,
       std::function<torch::Tensor(torch::Tensor const &)> const &recon) const;

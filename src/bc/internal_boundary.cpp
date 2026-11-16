@@ -1,3 +1,6 @@
+// C/C++
+#include <algorithm>
+
 // yaml
 #include <yaml-cpp/yaml.h>
 
@@ -105,138 +108,77 @@ InternalBoundaryImpl::Mirror const *InternalBoundaryImpl::mirror_index(
   if (mirrors_.count(dim)) return &mirrors_.at(dim);
   // x2/x3 only: x1 is the per-column wall (x1_wall)
   TORCH_CHECK(dim != 3, "mirror_index: x1 goes through x1_wall");
-  int reach = pmb->pcoord->options->nghost() - 1;
-  int axis = dim - 1, il = pmb->pcoord->il();
-  bool phys_in = pmb->options->is_physical_boundary(0, 0, -1);
-  bool phys_out = pmb->options->is_physical_boundary(0, 0, 1);
+  int ng = pmb->pcoord->options->nghost(), axis = dim - 1, il = pmb->pcoord->il();
   auto s = solid.to(torch::kCPU, torch::kBool).clone();
-  // x2/x3: a solid end cell continues into the x1 ghosts beyond it
-  if (phys_in) s.narrow(2, 0, il) |= s.narrow(2, il, 1);
-  int top = s.size(2) - il;  // the first x1 ghost above
-  if (phys_out) s.narrow(2, top, il) |= s.narrow(2, top - 1, 1);
-  s = s.movedim(axis, -1).contiguous();
-  int n = s.size(-1), lines = s.numel() / n;
-  auto sp = s.data_ptr<bool>();
-  // the solid runs [a, b] of each line; two copies only on a line with an
-  // interior run too thin to serve both sides
-  std::vector<std::vector<std::pair<int, int>>> lruns(lines);
-  std::vector<char> thin(lines, 0);
-  bool two = false;
-  for (int l = 0; l < lines; ++l)
-    for (int a = 0, b; a < n; a = b + 1) {
-      for (; a < n && !sp[l * n + a]; ++a) {
-      }
-      if (a == n) break;
-      for (b = a; b + 1 < n && sp[l * n + b + 1]; ++b) {
-      }
-      lruns[l].push_back({a, b});
-      if (a > 0 && b + 1 < n && b - a + 1 < 2 * reach)
-        two = thin[l] = 1;
-    }
-  int nc = two ? 2 : 1;
-  auto idx = torch::arange(n, torch::kLong).repeat({nc, lines, 1});
-  auto odd = torch::zeros({nc, lines, n}, torch::kBool);
-  auto pick = torch::zeros({lines, n}, torch::kLong);
-  auto ip = idx.data_ptr<int64_t>(), pp = pick.data_ptr<int64_t>();
-  auto op = odd.data_ptr<bool>();
-  for (int l = 0; l < lines; ++l) {
-    bool tl = thin[l];
-    auto const &runs = lruns[l];
-    // the fluid source of cell j mirrored across face `face`, folded back
-    // into the fluid gap [lo, hi]; returns (source, odd reflection count)
-    auto reflect = [&](int j, int face, int lo, int hi) {
-      int src = 2 * face - 1 - j, k = 1;
-      while (src < lo || src > hi) {
-        src = src < lo ? 2 * lo - 1 - src : 2 * (hi + 1) - 1 - src;
-        ++k;
-      }
-      return std::make_pair(src, k % 2 == 1);
-    };
-    int nr = runs.size();
-    for (int c = 0; c < (tl ? 2 : 1); ++c) {
-      int64_t *ic = ip + (c * lines + l) * n;
-      bool *oc = op + (c * lines + l) * n;
-      auto put = [&](int j, int face, int lo, int hi) {
-        auto [src, o] = reflect(j, face, lo, hi);
-        ic[j] = src, oc[j] = o;
-      };
-      // one copy: each run's own cells from its nearer fluid side; two copies:
-      // run r from below in copy (r % 2), from above in the other, its
-      // mirror running past a thin run into the fluid beyond (extensions
-      // first, the runs' own cells last)
-      for (int pass = 0; pass < 2; ++pass)
-        for (int r = 0; r < nr; ++r) {
-          auto [a, b] = runs[r];
-          int glo = r ? runs[r - 1].second + 1 : 0;
-          int ghi = r + 1 < nr ? runs[r + 1].first - 1 : n - 1;
-          bool below = a > 0 && (!tl || (r + c) % 2 == 0);
-          bool above = b + 1 < n && (!tl || (r + c) % 2 == 1);
-          for (int k = 0; k < reach; ++k) {
-            int jb = a + k, ja = b - k;
-            if (below && jb < n && (jb <= b) == (pass == 1) &&
-                (tl || !above || 2 * k < b - a + 1))
-              put(jb, a, glo, a - 1);
-            if (above && ja >= 0 && (ja >= a) == (pass == 1) &&
-                (tl || !below || 2 * k < b - a + 1))
-              put(ja, b + 1, b + 1, ghi);
-          }
-        }
-    }
-    // a cell reads the copy in which the run above it is seen from below
-    for (int j = 0, r = 0; tl && j < n; ++j) {
-      for (; r < nr && runs[r].second < j; ++r) {
-      }
-      pp[l * n + j] = r < nr ? r % 2 : nr % 2;
-    }
-  }
-  auto shape = s.sizes().vec();
-  auto back = [&](torch::Tensor t, int lead) {
-    std::vector<int64_t> sh(shape);
-    if (lead) sh.insert(sh.begin(), lead);
-    return t.view(sh).movedim(-1, axis + (lead ? 1 : 0)).contiguous().to(
-        solid.device());
-  };
-  // one gather per copy; the normal velocity times a sign (odd: -1)
+  // a solid end cell continues into the x1 ghosts beyond it
+  if (pmb->options->is_physical_boundary(0, 0, -1))
+    s.narrow(2, 0, il) |= s.narrow(2, il, 1);
+  int top = s.size(2) - il;
+  if (pmb->options->is_physical_boundary(0, 0, 1))
+    s.narrow(2, top, il) |= s.narrow(2, top - 1, 1);
+  auto sl = s.movedim(axis, -1).contiguous();
+  int n = sl.size(-1), lines = sl.numel() / n;
+  auto sp = sl.data_ptr<bool>();
+  // each fluid run [a, b) of a line with a solid end is a wall frame, as the
+  // x1 surface is (per_column): lines grouped by their run
   Mirror m;
-  auto real = solid.is_mps() ? torch::kFloat32 : torch::kFloat64;
-  auto i2 = back(idx, nc), sg = 1. - 2. * back(odd, nc).to(real);
-  m.idx = i2[0], m.sign = sg[0];
-  if (two) {  // copy 1 only on the x1 rows (lines: [other, x1]) of a thin line
-    m.rows = torch::tensor(std::vector<int64_t>(thin.begin(), thin.end()))
-                 .view({shape[0], shape[1]}).any(0).nonzero().flatten()
-                 .to(solid.device());
-    m.idx1 = i2[1].index_select(-1, m.rows);
-    m.sign1 = sg[1].index_select(-1, m.rows);
-    auto pr = back(pick, 0).eq(1);  // ILT from cell i - 1, IRT from cell i
-    m.pick = torch::stack({pr.roll(1, axis), pr}).index_select(-1, m.rows);
+  std::map<std::pair<int, int>, std::vector<int64_t>> runs;
+  for (int l = 0; l < lines; ++l)
+    for (int a = 0, b; a < n; a = b) {
+      for (; a < n && sp[l * n + a]; ++a) {
+      }
+      for (b = a; b < n && !sp[l * n + b]; ++b) {
+      }
+      if (a < b && (a > 0 || b < n)) runs[{a, b}].push_back(l);
+    }
+  auto dev = solid.device();
+  for (auto const &[ab, ls] : runs) {
+    auto [a, b] = ab;
+    // frame cell p is cell a - ng + p, reflected into [a, b) at each solid
+    // end as a reflecting wall's ghosts are (odd count: the normal flips)
+    int len = b - a + 2 * ng;
+    std::vector<int64_t> src(len);
+    std::vector<double> sg(len, 1.);
+    for (int p = 0; p < len; ++p) {
+      int x = a - ng + p;
+      while ((x < a && a > 0) || (x >= b && b < n))
+        x = x < a ? 2 * a - 1 - x : 2 * b - 1 - x, sg[p] = -sg[p];
+      src[p] = std::clamp(x, 0, n - 1);
+    }
+    m.span.push_back({a, b});
+    m.lines.push_back(torch::tensor(ls, torch::kLong).to(dev));
+    m.src.push_back(torch::tensor(src, torch::kLong).to(dev));
+    m.sign.push_back(torch::tensor(sg, torch::kFloat64).to(dev));
   }
   // x2/x3 face covariance: no covariance on a face beside a solid
   auto f = solid.to(torch::kBool) | solid.to(torch::kBool).roll(1, axis);
-  m.cov_keep = (~f).to(real);
+  m.cov_keep = (~f).to(solid.is_mps() ? torch::kFloat32 : torch::kFloat64);
   return &(mirrors_[dim] = m);
-}
-
-torch::Tensor InternalBoundaryImpl::mirror(torch::Tensor v, Mirror const &m,
-                                           int dim, int normal,
-                                           int copy) const {
-  auto idx = copy ? m.idx1 : m.idx;
-  int lead = v.dim() - 3;
-  for (int k = 0; k < lead; ++k) idx = idx.unsqueeze(0);
-  auto out = v.gather(lead + dim - 1, idx.expand_as(v));
-  auto sign = copy ? m.sign1 : m.sign;
-  if (normal >= 0) out[normal].mul_(sign.to(v.scalar_type()));
-  return out;
 }
 
 torch::Tensor InternalBoundaryImpl::reconstruct(
     torch::Tensor v, Mirror const &m, int dim, int normal,
     std::function<torch::Tensor(torch::Tensor const &)> const &recon) const {
-  auto lr = recon(mirror(v, m, dim, normal));
-  if (!m.rows.defined()) return lr;
-  auto lr1 = recon(mirror(v.index_select(-1, m.rows), m, dim, normal, 1));
-  auto pick = lr.dim() == 5 ? m.pick.unsqueeze(1) : m.pick;
-  return lr.index_copy_(
-      -1, m.rows, torch::where(pick, lr1, lr.index_select(-1, m.rows)));
+  auto lr = recon(v);  // lines without a solid end
+  if (m.span.empty()) return lr;
+  int ng = pmb->pcoord->options->nghost(), n = v.size(dim);
+  auto vl = v.movedim(dim, -1).flatten(1, 2);  // [nv, lines, n]
+  auto out = lr.movedim(dim + 1, -1).contiguous();
+  auto sh = out.sizes().vec();
+  out = out.flatten(2, 3);  // [2, nv, lines, n]
+  for (size_t k = 0; k < m.span.size(); ++k) {
+    auto [a, b] = m.span[k];
+    auto f = vl.index_select(1, m.lines[k]).index_select(-1, m.src[k]);
+    if (normal >= 0) f[normal].mul_(m.sign[k].to(f.dtype()));
+    auto r = recon(f.unsqueeze(1).movedim(-1, dim)).movedim(dim + 1, -1);
+    // the run's faces a..b that the block sweep defines: frame index - a + ng
+    int fa = std::max(a, ng), fb = std::min(b, n - ng);
+    if (fb >= fa)
+      out.narrow(-1, fa, fb - fa + 1)
+          .index_copy_(2, m.lines[k],
+                       r.flatten(2, 3).narrow(-1, fa - a + ng, fb - fa + 1));
+  }
+  return out.view(sh).movedim(-1, dim + 1);
 }
 
 namespace {
