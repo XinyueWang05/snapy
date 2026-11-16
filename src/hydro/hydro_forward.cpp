@@ -1614,7 +1614,13 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         // the fixer runs with sealed walls only) plus the gravity work booked
         // into E; x2/x3 fluxes do not move mass across geopotential surfaces
         auto fw = total_mass_flux1.clone();
-        if (is_x1_wall(0)) fw.select(-1, is).zero_();
+        // a solid column's lower wall is its surface face lo (X1Wall)
+        torch::Tensor lo;
+        if (_xw) lo = (_xw->cell.depth.to(fw.device()) + is).unsqueeze(-1);
+        if (is_x1_wall(0) && lo.defined())
+          fw.masked_fill_(torch::arange(fw.size(-1), lo.options()) <= lo, 0.);
+        else if (is_x1_wall(0))
+          fw.select(-1, is).zero_();
         if (is_x1_wall(1)) fw.select(-1, ie).zero_();
         auto dm =
             -dt *
@@ -1624,6 +1630,8 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         auto e = (original_gravity_work + face_gravity_work +
                   phi_cell.slice(0, is, ie) * dm) *
                  volume.slice(-1, is, ie);
+        if (lo.defined())  // the fluid cells only
+          e = e * other.at("solid").slice(-1, is, ie).logical_not();
         int js = pmb->pcoord->jl(), je = pmb->pcoord->ju() + 1;
         int ks = pmb->pcoord->kl(), ke = pmb->pcoord->ku() + 1;
         gwfix_stage = e.slice(-2, js, je).slice(-3, ks, ke).to(wide).sum();
@@ -1632,6 +1640,11 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
           if (!is_x1_wall(f)) continue;
           int i = f == 0 ? is : ie;
           auto m = area1.select(-1, i) * total_mass_flux1.select(-1, i).abs();
+          if (f == 0 && lo.defined())
+            m = (area1.narrow(-1, 0, total_mass_flux1.size(-1)) *
+                 total_mass_flux1.abs())
+                    .gather(-1, lo)
+                    .squeeze(-1);
           _gwfix_wall +=
               dt * m.slice(-1, js, je).slice(-2, ks, ke).sum().to(wide);
         }
