@@ -350,17 +350,22 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
       phydro->pmb->part({0, 0, 0}, PartOptions().exterior(false).ndim(3));
   int nx1 = pcoord->options->nx1();
   torch::Tensor rx_lo, rx_mid, rx_hi, rx_t0, rx_t1, rx_fluid, rx_mass0;
+  CorrectedPEFactors const* rx_f = nullptr;
   // the full corrected-PE operator: tridiagonal part plus the two wall
   // third points of the exact 3-point slope (no lumping)
   auto rx_tri = [&](torch::Tensor const& q) {  // q: [nx3, nx2, nx1]
-    auto s = rx_mid * q;
+    auto const &lo = no_solid ? rx_lo : _rs_lo, &hi = no_solid ? rx_hi : _rs_hi;
+    auto s = (no_solid ? rx_mid : _rs_mid) * q;
     s.narrow(-1, 1, nx1 - 1) +=
-        rx_lo.narrow(-1, 1, nx1 - 1) * q.narrow(-1, 0, nx1 - 1);
+        lo.narrow(-1, 1, nx1 - 1) * q.narrow(-1, 0, nx1 - 1);
     s.narrow(-1, 0, nx1 - 1) +=
-        rx_hi.narrow(-1, 0, nx1 - 1) * q.narrow(-1, 1, nx1 - 1);
+        hi.narrow(-1, 0, nx1 - 1) * q.narrow(-1, 1, nx1 - 1);
     s.select(-1, 0) += rx_t0 * q.select(-1, 2);
     s.select(-1, nx1 - 1) += rx_t1 * q.select(-1, nx1 - 3);
-    return no_solid ? s : rx_fluid * s;  // 1 * s == s
+    if (no_solid) return s;
+    auto j = _rs_surf.unsqueeze(-1);  // the surface row's third point
+    s.scatter_add_(-1, j, _rs_ts.unsqueeze(-1) * q.gather(-1, j + 2));
+    return rx_fluid * s;
   };
   auto couple_radial_exact = [&]() {
     if (!radial_exact || nx1 < 3) return;
@@ -396,13 +401,34 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
       // the one-sided wall slopes' third points
       _rx_t0 = gv[0] * band(2)[0];
       _rx_t1 = gv[nx1 - 1] * band(-2)[nx1 - 1];
+      _rs_src = nullptr;
     }
     rx_lo = _rx_lo;
     rx_mid = _rx_mid;
     rx_hi = _rx_hi;
     rx_t0 = _rx_t0;
     rx_t1 = _rx_t1;
+    rx_f = &corrected_pe_factors(key, &_rx_work);
     if (!no_solid) rx_fluid = (mask.index(in3) == 0).to(w.options());
+    if (!no_solid &&
+        (_rs_src != solid.data_ptr() || _rs_ver != solid._version())) {
+      _rs_src = solid.data_ptr(), _rs_ver = solid._version();
+      // each column's first fluid cell: the x1 wall's depth (X1Wall)
+      auto const* xw = phydro->pmb->pib->x1_wall({{"solid", solid}});
+      _rs_surf = xw->cell.depth.index({in3[0], in3[1]}).to(w.device());
+      auto at = torch::arange(nx1, _rs_surf.options());
+      auto row = [&](int k) {  // the explicit surface row of a unit q
+        auto q = (at == (_rs_surf + k).unsqueeze(-1)).to(w.options());
+        auto r = torch::zeros_like(q);
+        corrected_pe_work_surface(r, q, *rx_f, _rs_surf);
+        return r;
+      };
+      auto on = (at == _rs_surf.unsqueeze(-1)) & (_rs_surf > 0).unsqueeze(-1);
+      _rs_ts = row(2).sum(-1);
+      _rs_mid = torch::where(on, row(0), rx_mid);
+      _rs_lo = torch::where(on, 0., rx_lo);
+      _rs_hi = torch::where(on, row(1), rx_hi);
+    }
     // row IPR, column 0 (the total mass) of each cell's blocks; Eigen stores
     // them column-major
     int nx2 = pcoord->options->nx2(), nx3 = pcoord->options->nx3();
@@ -414,9 +440,9 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
       entry(_b).sub_(rx_lo / dt);
       entry(_c).sub_(rx_hi / dt);
     } else {
-      entry(_a).sub_(rx_fluid * rx_mid / dt);
-      entry(_b).sub_(rx_fluid * rx_lo / dt);
-      entry(_c).sub_(rx_fluid * rx_hi / dt);
+      entry(_a).sub_(rx_fluid * _rs_mid / dt);
+      entry(_b).sub_(rx_fluid * _rs_lo / dt);
+      entry(_c).sub_(rx_fluid * _rs_hi / dt);
     }
     rx_mass0 = _du0[IDN].index(in3).clone();
     if (du.size(0) > ICY)
@@ -456,11 +482,14 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
     auto y = _delta.view({nx3, nx2, nx1, m});
     z0 = z0.view({nx3, nx2, nx1, m}), z1 = z1.view({nx3, nx2, nx1, m});
     auto k0 = -rx_t0 / dt, k1 = -rx_t1 / dt;
-    if (!no_solid) {
-      k0 = k0 * rx_fluid.select(-1, 0), k1 = k1 * rx_fluid.select(-1, nx1 - 1);
+    if (!no_solid) {  // a surface: the lower wall row at its first fluid cell
+      k0 = k0 * rx_fluid.select(-1, 0) - _rs_ts / dt;
+      k1 = k1 * rx_fluid.select(-1, nx1 - 1);
     }
     auto pick = [&](torch::Tensor const& v, int cell) {
-      return v.select(-2, cell).select(-1, 0);
+      if (cell != 2 || no_solid) return v.select(-2, cell).select(-1, 0);
+      auto j = (_rs_surf + 2).unsqueeze(-1);
+      return v.select(-1, 0).gather(-1, j).squeeze(-1);
     };
     auto m00 = 1. + k0 * pick(z0, 2), m01 = k0 * pick(z1, 2);
     auto m10 = k1 * pick(z0, nx1 - 3), m11 = 1. + k1 * pick(z1, nx1 - 3);
@@ -581,9 +610,15 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
     if (rx_mass0.defined()) {
       int nx2 = pcoord->options->nx2(), nx3 = pcoord->options->nx3();
       auto raw = _delta.view({nx3, nx2, nx1, options->size()}).select(-1, 0);
-      work.slice(-2, pcoord->jl(), pcoord->ju() + 1)
-          .slice(-3, pcoord->kl(), pcoord->ku() + 1)
-          .sub_(rx_tri(raw - rx_mass0));
+      auto inner = [&](torch::Tensor const& t) {
+        return t.slice(-2, pcoord->jl(), pcoord->ju() + 1)
+            .slice(-3, pcoord->kl(), pcoord->ku() + 1);
+      };
+      auto wi = inner(work);
+      if (!no_solid)  // the surface row, one-sided as the explicit one
+        corrected_pe_work_surface(wi, inner(moved.slice(-1, is, ie)), *rx_f,
+                                  _rs_surf);
+      wi.sub_(rx_tri(raw - rx_mass0));
     }
     // solid cells get none: their slope stencil reads fluid neighbours
     if (no_solid)
