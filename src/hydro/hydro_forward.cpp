@@ -1726,6 +1726,60 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     du[IPR].slice(-1, is, ie) += gravity_energy_correction;
   }
 
+  // a solid surface: x2/x3 mass moving between columns of different depth
+  // changes the corrected PE, whose work the x1 term books per column only
+  if (_xw && options->grav() && options->grav()->grav1() != 0. && !gw_cell &&
+      radial_exact_work()) {
+    auto pc = pmb->pcoord;
+    int is = pc->il(), ie = pc->iu() + 1, nx = ie - is;
+    auto dep = _xw->cell.depth.to(du.device());
+    auto faces = [&](int ax) {  // (k, j) of cells A with a different B above
+      int n = dep.size(ax);
+      return (dep.narrow(ax, 1, n - 1) != dep.narrow(ax, 0, n - 1)).nonzero();
+    };
+    auto f2 = u.size(DIM2) > 1 ? faces(1) : torch::Tensor();
+    auto f3 = u.size(DIM3) > 1 ? faces(0) : torch::Tensor();
+    if ((f2.defined() && f2.size(0)) || (f3.defined() && f3.size(0))) {
+      auto measure = x1_measure(pc->options->type());
+      // per unit mass at each cell of a depth's frame: the work of a unit
+      // density there, summed with the radial volume factor v
+      auto W = pmb->pib->per_column(
+          _xw->cell, torch::zeros_like(du[IPR].slice(-1, is, ie)),
+          [&](torch::Tensor const& t, int o) {
+            auto& xd = x1_depth(o);
+            int n = nx - o;
+            auto f = xd.x1f.slice(0, is, is + n + 1).to(t.options());
+            auto r = measure == X1Measure::plain ? f : f.pow(3) / 3.;
+            auto v = r.slice(0, 1) - r.slice(0, 0, n);
+            X1GridKey key(xd.x1f, xd.x1v, is, xd.iu + 1, is, xd.iu + 1,
+                          options->grav()->grav1(), measure);
+            auto work = corrected_pe_factors(key, o ? &xd.pe : &_pe_work)(
+                torch::eye(n, t.options()).unsqueeze(1));
+            return ((work.squeeze(1) * v).sum(-1) / v).expand({1, t.size(-2), n});
+          },
+          /*zero_pad=*/true);
+      int nv = _flux2.defined() ? _flux2.size(0) : _flux3.size(0);
+      auto e = du[IPR].slice(-1, is, ie).flatten(0, 1);
+      auto vol = pc->cell_volume().slice(-1, is, ie);
+      auto book = [&](torch::Tensor const& at, torch::Tensor const& flx,
+                      torch::Tensor area, int ax) {
+        // dE = (W_B - W_A) dm for the total mass dm from A to B, half to each
+        auto m = flx[IDN] + flx.narrow(0, ICY, nv - ICY).sum(0);
+        area = area.narrow(ax, 0, m.size(ax));
+        auto k = at.select(1, 0), j = at.select(1, 1);
+        auto kb = ax == 0 ? k + 1 : k, jb = ax == 1 ? j + 1 : j;
+        auto sl = torch::indexing::Slice(is, ie);
+        auto dm = dt * m.index({kb, jb, sl}) * area.index({kb, jb, sl});
+        auto de = 0.5 * (W.index({kb, jb}) - W.index({k, j})) * dm;
+        int nc2 = dep.size(1);
+        e.index_add_(0, k * nc2 + j, de / vol.index({k, j}));
+        e.index_add_(0, kb * nc2 + jb, de / vol.index({kb, jb}));
+      };
+      if (f2.defined() && f2.size(0)) book(f2, _flux2, pc->face_area2(), 1);
+      if (f3.defined() && f3.size(0)) book(f3, _flux3, pc->face_area3(), 0);
+    }
+  }
+
   //// ------------ (8) x1 mass-flux w in Coriolis and metric sources -------
   // -2 Omega w cos(lat) and -u w / r take rho w from the stage's final x1
   // face mass transfers Phi (explicit flux + implicit transfer), split as
