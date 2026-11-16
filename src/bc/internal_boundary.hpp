@@ -169,10 +169,10 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
 
  private:
   mutable std::shared_ptr<X1Wall> x1wall_;
-  mutable void const *x1wall_src_ = nullptr;
+  mutable torch::Tensor x1wall_src_;  // held: its storage is not reused
   mutable int64_t x1wall_ver_ = -1;
   mutable std::map<int, Mirror> mirrors_;
-  mutable void const *mirror_src_ = nullptr;
+  mutable torch::Tensor mirror_src_;  // held, as x1wall_src_
   mutable int64_t mirror_ver_ = -1;
 };
 TORCH_MODULE(InternalBoundary);

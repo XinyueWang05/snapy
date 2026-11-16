@@ -133,7 +133,7 @@ class ImplicitHydroImpl : public torch::nn::Cloneable<ImplicitHydroImpl> {
   // a solid: the rows with each column's surface row (explicit, one-sided),
   // the surface cell and its third point, built once per mask and grid
   torch::Tensor _rs_mid, _rs_lo, _rs_hi, _rs_surf, _rs_ts;
-  void const* _rs_src = nullptr;
+  torch::Tensor _rs_src;  // held: its storage cannot be reused under the key
   int64_t _rs_ver = -1;
   CorrectedPEFactors _rx_work;
 

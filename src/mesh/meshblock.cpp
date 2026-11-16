@@ -512,6 +512,7 @@ void MeshBlockImpl::build_hydro_reference(Variables &vars) {
 void MeshBlockImpl::check_x1_wall_seams(Variables &vars) {
   // each column's bottom solid run is exchanged once like a scalar; a ghost
   // column takes its neighbour's run, so the caller gives the interior only
+  // only bottom-attached runs move; other solid runs keep caller ghosts (main)
   if (!vars.count("solid") || options->coord()->nc1() <= 1) return;
   auto solid = vars.at("solid");
   int il = pcoord->il(), iu = pcoord->iu();

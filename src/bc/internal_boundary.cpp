@@ -101,9 +101,9 @@ InternalBoundaryImpl::Mirror const *InternalBoundaryImpl::mirror_index(
     std::map<std::string, torch::Tensor> const &other, int dim) const {
   if (!other.count("solid")) return nullptr;
   auto solid = other.at("solid");
-  if (mirror_src_ != solid.data_ptr() || mirror_ver_ != solid._version()) {
+  if (!mirror_src_.is_same(solid) || mirror_ver_ != solid._version()) {
     mirrors_.clear();
-    mirror_src_ = solid.data_ptr(), mirror_ver_ = solid._version();
+    mirror_src_ = solid, mirror_ver_ = solid._version();
   }
   if (mirrors_.count(dim)) return &mirrors_.at(dim);
   // x2/x3 only: x1 is the per-column wall (x1_wall)
@@ -201,7 +201,7 @@ InternalBoundaryImpl::X1Wall const *InternalBoundaryImpl::x1_wall(
     std::map<std::string, torch::Tensor> const &other) const {
   if (!other.count("solid")) return nullptr;
   auto solid = other.at("solid");
-  if (x1wall_ && x1wall_src_ == solid.data_ptr() &&
+  if (x1wall_ && x1wall_src_.is_same(solid) &&
       x1wall_ver_ == solid._version())
     return x1wall_.get();
   auto pc = pmb->pcoord;
@@ -251,7 +251,7 @@ InternalBoundaryImpl::X1Wall const *InternalBoundaryImpl::x1_wall(
                 "least 3");
   }
   x1wall_ = w;
-  x1wall_src_ = solid.data_ptr(), x1wall_ver_ = solid._version();
+  x1wall_src_ = solid, x1wall_ver_ = solid._version();
   return x1wall_.get();
 }
 

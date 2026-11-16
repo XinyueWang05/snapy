@@ -400,7 +400,7 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
       // the one-sided wall slopes' third points
       _rx_t0 = gv[0] * band(2)[0];
       _rx_t1 = gv[nx1 - 1] * band(-2)[nx1 - 1];
-      _rs_src = nullptr;
+      _rs_src = torch::Tensor();
     }
     rx_lo = _rx_lo;
     rx_mid = _rx_mid;
@@ -409,8 +409,8 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
     rx_t1 = _rx_t1;
     if (!no_solid) rx_fluid = (mask.index(in3) == 0).to(w.options());
     if (!no_solid &&
-        (_rs_src != solid.data_ptr() || _rs_ver != solid._version())) {
-      _rs_src = solid.data_ptr(), _rs_ver = solid._version();
+        (!_rs_src.is_same(solid) || _rs_ver != solid._version())) {
+      _rs_src = solid, _rs_ver = solid._version();
       // each column's first fluid cell: the x1 wall's depth (X1Wall)
       auto const* xw = phydro->pmb->pib->x1_wall({{"solid", solid}});
       _rs_surf = xw->cell.depth.index({in3[0], in3[1]}).to(w.device());
