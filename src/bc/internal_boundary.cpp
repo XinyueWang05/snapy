@@ -255,7 +255,7 @@ InternalBoundaryImpl::X1Wall const *InternalBoundaryImpl::x1_wall(
 torch::Tensor InternalBoundaryImpl::per_column(
     X1Group const &g, torch::Tensor const &t,
     std::function<torch::Tensor(torch::Tensor const &, int)> const &fn,
-    bool zero_pad) const {
+    bool zero_pad, bool input_pad) const {
   if (g.uniform()) return fn(t, 0);
   int64_t nc3 = t.size(-3), nc2 = t.size(-2), n = t.size(-1);
   auto flat = t.flatten(-3, -2);
@@ -270,6 +270,8 @@ torch::Tensor InternalBoundaryImpl::per_column(
       sh.back() = o;
       auto low = zero_pad ? torch::zeros(sh, r.options())
                           : r.narrow(-1, 0, 1).expand(sh);
+      if (input_pad)  // t's own levels: x1v keeps a nonzero spacing there
+        low = flat.index_select(-2, c).narrow(-1, 0, o).to(r.options());
       r = torch::cat({low, r}, -1);
     }
     if (!out.defined()) {

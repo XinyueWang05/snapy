@@ -98,7 +98,7 @@ torch::Tensor HydroImpl::_flux_covariance(torch::Tensor const& wl,
   auto un = wbar[dim == 2 ? IVY : IVZ];
 
   auto x1v = pcoord->x1v.to(p.device(), p.scalar_type());
-  // a solid surface: each face column's own x1 wall
+  // a solid surface: each face column's x1 wall, the block x1v below (dx1 > 0)
   auto const* fg = _xw ? (dim == 2 ? &_xw->face2 : &_xw->face3) : nullptr;
   auto d1p = [&](torch::Tensor const& q) {
     if (!fg) return d1_pressure(q, x1v, pcoord->il(), pcoord->iu());
@@ -108,13 +108,14 @@ torch::Tensor HydroImpl::_flux_covariance(torch::Tensor const& wl,
     });
   };
   if (fg)
-    x1v = pmb->pib->per_column(*fg,
-                               x1v.expand({p.size(0), p.size(1), x1v.size(0)}),
-                               [&](torch::Tensor const& t, int o) {
-                                 return x1_depth(o)
-                                     .x1v.to(t.options())
-                                     .expand({1, t.size(-2), t.size(-1)});
-                               });
+    x1v = pmb->pib->per_column(
+        *fg, x1v.expand({p.size(0), p.size(1), x1v.size(0)}),
+        [&](torch::Tensor const& t, int o) {
+          return x1_depth(o)
+              .x1v.to(t.options())
+              .expand({1, t.size(-2), t.size(-1)});
+        },
+        /*zero_pad=*/false, /*input_pad=*/true);
   // face_moment2_x1() is grid-only; cache it per block, keyed on the x1f
   // tensor it is built from, its version, the device and the dtype
   auto const& x1f_ = pcoord->x1f;
@@ -284,7 +285,8 @@ torch::Tensor HydroImpl::scalar_flux_covariance(torch::Tensor const& rl,
           return x1_depth(o)
               .x1v.to(t.options())
               .expand({1, t.size(-2), t.size(-1)});
-        });
+        },
+        /*zero_pad=*/false, /*input_pad=*/true);
   auto s2 = pcoord->face_moment2_x1()
                 .to(un.device(), un.scalar_type())
                 .unsqueeze(0)
@@ -1158,8 +1160,7 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
   auto wall_cov = [&](torch::Tensor& dcov, int dim) {
     auto s = has_solid ? pmb->pib->mirror_index(other, dim) : nullptr;
     if (!dcov.defined() || !s) return;
-    auto const& k = s->cov_keep;
-    dcov.mul_(cov_rows ? k.narrow(-1, 1, k.size(-1) - 2) : k);
+    dcov = s->drop_walls(dcov, cov_rows);
   };
   // the covariance increment of _flux_covariance into a face flux: the whole
   // flux on a curved grid, only the nonzero rows' x1 interior in Cartesian

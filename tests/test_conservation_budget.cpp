@@ -19,6 +19,8 @@ struct Case {  // gw: cell (+ fixer) or face; per: periodic x2/x3; vsed: rain
   double vsed = 0., qv = 0.01;
   int key = 2;           // dynamics/conversion-order
   bool terrain = false;  // a 3-cell mountain on an x2 (panel) edge
+  int cliff = 0;         // terrain: one interior column this deep, rest 0
+  int ng = 0, nx1 = 0;   // nghost, nx1 (0: the deck's)
 };
 double const C = 4., kEps = 2.220446049250313e-16, g = 10.;
 bool const kMp = getenv("SNAP_BUDGET_MP") != nullptr;  // E2: three ranks
@@ -28,6 +30,8 @@ std::string card(Case const& c) {  // the in-tree deck, closed and small
   d.remove("outputs");
   auto cells = d["geometry"]["cells"];
   if (cells["nx2"].as<int>() == 1) cells["nx2"] = 4, cells["nx3"] = 4;
+  if (c.ng) cells["nghost"] = c.ng;
+  if (c.nx1) cells["nx1"] = c.nx1, d["geometry"]["bounds"]["x1max"] = c.nx1;
   for (auto f : {"x2-inner", "x2-outer", "x3-inner", "x3-outer"})
     if (c.per || !d["boundary-condition"]["external"][f])
       d["boundary-condition"]["external"][f] =
@@ -79,6 +83,11 @@ TEST_P(Budget, closes_to_round_off) {
       return mod->named_buffers()[n].select(-1, 0).cpu();
     };
     int ng = co->il(), k = ng + 4, j = co->ju();
+    if (c.cliff) {  // a depth jump above nghost to the four neighbours
+      auto one = torch::zeros({co->x3v.size(0), co->x2v.size(0)}, torch::kLong);
+      one[co->kl() + 1][co->jl() + 1] = c.cliff;
+      return one;
+    }
     if (co->options->type() == "cartesian") {
       auto m = torch::meshgrid({co->x3v.cpu(), co->x2v.cpu()}, "ij");
       double x3c = .5 * (co->options->x3min() + co->options->x3max()),
@@ -239,6 +248,11 @@ TEST_P(Budget, closes_to_round_off) {
 char const *A = "test_gravity_energy.yaml", *B = "test_species_face_clamp.yaml",
            *Cs = "test_fix_vapor_volume.yaml",
            *D = "test_cubed_sphere_cell_volume.yaml";
+Case cliff(char const* name, int scheme, int depth, int ng = 0, int nx1 = 0) {
+  Case c{name, A, "face", scheme};  // the t_cart row, one column this deep
+  c.terrain = true, c.cliff = depth, c.ng = ng, c.nx1 = nx1;
+  return c;
+}
 Case const kDecks[] = {{"a_cell_s0", A, "cell", 0},
                        {"a_cell_s1", A, "cell", 1},
                        {"a_cell_s9", A, "cell", 9},
@@ -259,6 +273,10 @@ Case const kDecks[] = {{"a_cell_s0", A, "cell", 0},
                        {"t_cubed_s0", D, "face", 0, 0, 0, 0., .01, 2, true},
                        {"t_cubed_s9", D, "face", 9, 0, 0, 0., .01, 2, true},
                        {"t_moist_s0", B, "face", 0, 0, 0, 0., .01, 2, true},
+                       cliff("t_cliff3_s0", 0, 3),
+                       cliff("t_cliff3_s9", 9, 3),
+                       cliff("t_cliff4_ng3_s0", 0, 4, 3, 8),
+                       cliff("t_cliff4_ng3_s9", 9, 4, 3, 8),
                        {"e2_mp", A, "face", 0, true}};
 INSTANTIATE_TEST_SUITE_P(Decks, Budget, testing::ValuesIn(kDecks),
                          [](auto const& p) {

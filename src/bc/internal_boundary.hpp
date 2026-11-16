@@ -123,6 +123,11 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
     std::vector<std::array<int, 2>> span;
     std::vector<torch::Tensor> lines, src, sign;
     torch::Tensor cov_keep;
+    //! x with the faces beside a solid set to 0 by a select (0 x NaN is NaN)
+    torch::Tensor drop_walls(torch::Tensor const &x, bool trim = false) const {
+      auto k = trim ? cov_keep.narrow(-1, 1, cov_keep.size(-1) - 2) : cov_keep;
+      return torch::where(k != 0, x, torch::zeros({}, x.options()));
+    }
   };
   //! the walls of other["solid"] (nullptr without one)
   Mirror const *mirror_index(std::map<std::string, torch::Tensor> const &other,
@@ -147,11 +152,12 @@ class InternalBoundaryImpl : public torch::nn::Cloneable<InternalBoundaryImpl> {
   //! the x1 wall of other["solid"], built once per mask (nullptr without one)
   X1Wall const *x1_wall(
       std::map<std::string, torch::Tensor> const &other) const;
-  //! fn on each depth's columns, x1 narrowed so il is the surface
+  //! fn on each depth's columns, x1 narrowed so il is the surface; below it
+  //! a copy of fn's first level, zeros, or (input_pad) t's own levels
   torch::Tensor per_column(
       X1Group const &g, torch::Tensor const &t,
       std::function<torch::Tensor(torch::Tensor const &, int)> const &fn,
-      bool zero_pad = false) const;
+      bool zero_pad = false, bool input_pad = false) const;
   //! reflecting-wall ghosts below each column's surface
   torch::Tensor x1_wall_fill(X1Group const &g, torch::Tensor const &v,
                              int normal = -1) const;

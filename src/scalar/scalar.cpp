@@ -206,7 +206,7 @@ torch::Tensor ScalarImpl::forward(double dt, torch::Tensor u,
     auto dcov = pmb->phydro->scalar_flux_covariance(cr[ILT], cr[IRT], dim);
     // terrain: a face beside a solid cell carries no covariance
     if (auto m = pmb->pib->mirror_index(other, dim); m && dcov.defined())
-      dcov *= m->cov_keep;
+      dcov = m->drop_walls(dcov);
     if (!dcov.defined())
       return priemann->forward(rlr[ILT], rlr[IRT], dim, mass);
     cov = true;
