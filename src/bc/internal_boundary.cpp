@@ -226,7 +226,8 @@ InternalBoundaryImpl::X1Wall const *InternalBoundaryImpl::x1_wall(
     TORCH_CHECK(pmb->options->is_physical_boundary(0, 0, -1) &&
                     pmb->options->is_physical_boundary(0, 0, 1),
                 "a solid surface needs the whole x1 column on one block "
-                "(nb1 = 1)");
+                "(nb1 = 1): the implicit scheme requires it, and an explicit "
+                "run can split its blocks in x2/x3 instead");
     // paths the per-column wall does not take yet, refused by name
     auto const &hy = pmb->phydro;
     TORCH_CHECK(!(x1_centroid_exact_enabled() &&

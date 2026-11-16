@@ -350,7 +350,6 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
       phydro->pmb->part({0, 0, 0}, PartOptions().exterior(false).ndim(3));
   int nx1 = pcoord->options->nx1();
   torch::Tensor rx_lo, rx_mid, rx_hi, rx_t0, rx_t1, rx_fluid, rx_mass0;
-  CorrectedPEFactors const* rx_f = nullptr;
   // the full corrected-PE operator: tridiagonal part plus the two wall
   // third points of the exact 3-point slope (no lumping)
   auto rx_tri = [&](torch::Tensor const& q) {  // q: [nx3, nx2, nx1]
@@ -408,7 +407,6 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
     rx_hi = _rx_hi;
     rx_t0 = _rx_t0;
     rx_t1 = _rx_t1;
-    rx_f = &corrected_pe_factors(key, &_rx_work);
     if (!no_solid) rx_fluid = (mask.index(in3) == 0).to(w.options());
     if (!no_solid &&
         (_rs_src != solid.data_ptr() || _rs_ver != solid._version())) {
@@ -417,17 +415,26 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
       auto const* xw = phydro->pmb->pib->x1_wall({{"solid", solid}});
       _rs_surf = xw->cell.depth.index({in3[0], in3[1]}).to(w.device());
       auto at = torch::arange(nx1, _rs_surf.options());
-      auto row = [&](int k) {  // the explicit surface row of a unit q
-        auto q = (at == (_rs_surf + k).unsqueeze(-1)).to(w.options());
-        auto r = torch::zeros_like(q);
-        corrected_pe_work_surface(r, q, *rx_f, _rs_surf);
-        return r;
-      };
+      // the surface row: row 0 of its depth's frame (x1_depth) for a unit q
+      torch::Tensor r[3];
+      for (auto& x : r) x = torch::zeros_like(_rs_surf, w.options());
+      for (int o : xw->cell.depths) {
+        if (o == 0) continue;
+        auto& xd = phydro->x1_depth(o);
+        X1GridKey ko(xd.x1f, xd.x1v, is, xd.iu + 1, is, xd.iu + 1, key.grav1,
+                     key.measure);
+        auto const& f = corrected_pe_factors(ko, &xd.pe);
+        for (int k = 0; k < 3; ++k) {
+          auto e = torch::zeros({1, 1, nx1 - o}, w.options());
+          e[0][0][k] = 1.;
+          r[k].masked_fill_(_rs_surf == o, f(e)[0][0][0].item<double>());
+        }
+      }
       auto on = (at == _rs_surf.unsqueeze(-1)) & (_rs_surf > 0).unsqueeze(-1);
-      _rs_ts = row(2).sum(-1);
-      _rs_mid = torch::where(on, row(0), rx_mid);
+      _rs_ts = r[2];
+      _rs_mid = torch::where(on, r[0].unsqueeze(-1), rx_mid);
       _rs_lo = torch::where(on, 0., rx_lo);
-      _rs_hi = torch::where(on, row(1), rx_hi);
+      _rs_hi = torch::where(on, r[1].unsqueeze(-1), rx_hi);
     }
     // row IPR, column 0 (the total mass) of each cell's blocks; Eigen stores
     // them column-major
@@ -604,9 +611,21 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
                    .sum(0);
     // the whole column (no x1 split under an implicit scheme, see above), so
     // the slope is one-sided only at the two walls
-    auto work = corrected_pe_work(
-        moved.slice(-1, is, ie), pcoord->x1f, pcoord->x1v, is, ie, grav1,
-        x1_measure(pcoord->options->type()), &_rx_work);
+    auto measure = x1_measure(pcoord->options->type());
+    auto work =
+        no_solid
+            ? corrected_pe_work(moved.slice(-1, is, ie), pcoord->x1f,
+                                pcoord->x1v, is, ie, grav1, measure, &_rx_work)
+            // a solid column: its wall frame's slope (x1_depth)
+            : phydro->pmb->pib->per_column(
+          phydro->pmb->pib->x1_wall({{"solid", solid}})->cell,
+          moved.slice(-1, is, ie),
+          [&](torch::Tensor const& t, int o) {
+            auto& xd = phydro->x1_depth(o);
+            return corrected_pe_work(t, xd.x1f, xd.x1v, is, xd.iu + 1, grav1,
+                                     measure, o ? &xd.pe : &_rx_work);
+          },
+          /*zero_pad=*/true);
     if (rx_mass0.defined()) {
       int nx2 = pcoord->options->nx2(), nx3 = pcoord->options->nx3();
       auto raw = _delta.view({nx3, nx2, nx1, options->size()}).select(-1, 0);
@@ -614,11 +633,7 @@ torch::Tensor ImplicitHydroImpl::forward_masked(torch::Tensor du,
         return t.slice(-2, pcoord->jl(), pcoord->ju() + 1)
             .slice(-3, pcoord->kl(), pcoord->ku() + 1);
       };
-      auto wi = inner(work);
-      if (!no_solid)  // the surface row, one-sided as the explicit one
-        corrected_pe_work_surface(wi, inner(moved.slice(-1, is, ie)), *rx_f,
-                                  _rs_surf);
-      wi.sub_(rx_tri(raw - rx_mass0));
+      inner(work).sub_(rx_tri(raw - rx_mass0));
     }
     // solid cells get none: their slope stencil reads fluid neighbours
     if (no_solid)

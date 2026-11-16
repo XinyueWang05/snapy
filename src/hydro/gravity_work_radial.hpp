@@ -204,28 +204,6 @@ inline torch::Tensor corrected_pe_work(torch::Tensor const& drho,
   return corrected_pe_factors(key)(drho);
 }
 
-//! the surface cell (interior index surf > 0) of a column on a solid: the
-//! one-sided slope of a column-end cell, as on the wall column above it
-inline void corrected_pe_work_surface(torch::Tensor& work,
-                                      torch::Tensor const& q,
-                                      CorrectedPEFactors const& f,
-                                      torch::Tensor const& surf) {
-  auto x = f.key.x1v.slice(0, f.key.is, f.key.ie).to(q.options());
-  auto j = surf.to(q.device(), torch::kLong).unsqueeze(-1);
-  auto jj = (j + torch::arange(3, j.options())).clamp_max(q.size(-1) - 1);
-  auto xs = x.index_select(0, jj.flatten()).view_as(jj), qs = q.gather(-1, jj);
-  auto x1 = xs.narrow(-1, 1, 1), q0 = qs.narrow(-1, 0, 1);
-  auto a = x1 - xs.narrow(-1, 0, 1), b = xs.narrow(-1, 2, 1) - x1;
-  auto s = -(2. * a + b) / (a * (a + b)) * q0;
-  s += (a + b) / (a * b) * qs.narrow(-1, 1, 1);
-  s += -(a / ((a + b) * b)) * qs.narrow(-1, 2, 1);
-  auto row = f.gvar.to(q.options()).index_select(0, j.flatten()).view_as(j) * s;
-  if (f.goff.defined())
-    row += f.goff.to(q.options()).index_select(0, j.flatten()).view_as(j) * q0;
-  work.scatter_(-1, j, torch::where(surf.unsqueeze(-1).to(q.device()) > 0, row,
-                                    work.gather(-1, j)));
-}
-
 //! corrected_pe_work of the interior cells [is, ie) when q, given over the
 //! whole x1 array (..., nc1), also holds the neighbour's value one cell past an
 //! internal x1 seam (seam_lo: cell is - 1, seam_hi: cell ie). The slope of a
