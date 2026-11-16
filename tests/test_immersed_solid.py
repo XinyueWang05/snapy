@@ -215,7 +215,7 @@ def x1_split(stretched, nb1, scheme=0, n=26, k=6, steps=20):
         w[c, 0, 0] = torch.cat([v[:1].expand(NG), torch.full((k,), s), v, v[-1:].expand(NG)])
     solid = torch.zeros_like(w[kIDN], dtype=torch.bool)
     solid[..., NG:NG + k] = True
-    i0 = [int(torch.argmin((f - b.buffer("coord.x1f")[NG]).abs())) for b in m.blocks]
+    i0 = [int(torch.argmin((f - b.buffer("coord.x1f")[NG].cpu()).abs())) for b in m.blocks]
     sl = [slice(i, i + b.buffer("coord.x1f").numel() - 1) for i, b in zip(i0, m.blocks)]
     dev = m.blocks[0].buffer("hydro.D").device
     var, _ = m.initialize([{"hydro_w": w[..., s].to(dev, DT), "solid": solid[..., s].to(dev)} for s in sl])
