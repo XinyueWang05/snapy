@@ -1156,11 +1156,42 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
     _x1_ghost_rows(g, 1, false, tag);
     return g;
   };
-  // terrain: a face beside a solid cell carries no covariance
+  // delta d_1 p per cell (x1 interior), each column in its own wall frame:
+  // the geometric source takes p* = p - this (step 5)
+  auto pstar_shift = [&]() {
+    int n1 = w.size(-1);
+    auto dsh = pmb->pcoord->face_centroid_shift_x1()
+                   .to(w.device(), w.scalar_type())
+                   .narrow(0, 1, n1 - 2);
+    auto x1v = pmb->pcoord->x1v.to(w.device(), w.scalar_type());
+    return dsh * (_xw ? pmb->pib->per_column(
+                            _xw->cell, w[IPR],
+                            [&](torch::Tensor const& t, int o) {
+                              auto& xd = x1_depth(o);
+                              return d1_pressure(t, xd.x1v.to(t.options()),
+                                                 pmb->pcoord->il(), xd.iu);
+                            })
+                      : d1_pressure(w[IPR], x1v, pmb->pcoord->il(),
+                                    pmb->pcoord->iu()));
+  };
+  // terrain: a face beside a solid cell carries no covariance; on a curved
+  // grid it keeps the fluid cell's p* shift, as that cell's source does
   auto wall_cov = [&](torch::Tensor& dcov, int dim) {
     auto s = has_solid ? pmb->pib->mirror_index(other, dim) : nullptr;
     if (!dcov.defined() || !s) return;
     dcov = s->drop_walls(dcov, cov_rows);
+    if (cov_rows) return;  // Cartesian: p* == p
+    int ax = dim - 1, n1 = w.size(-1);
+    auto sr = other.at("solid").to(torch::kBool).narrow(-1, 1, n1 - 2);
+    auto sl = sr.roll(1, ax), d = pstar_shift();
+    auto pw = torch::zeros_like(dcov);  // face-local, then global as dflx
+    pw[dim == DIM2 ? IVY : IVZ].narrow(-1, 1, n1 - 2) =
+        torch::where(sl != sr, -torch::where(sr, d.roll(1, ax), d), 0.);
+    if (dim == DIM2)
+      pmb->pcoord->flux2global2_(pw);
+    else
+      pmb->pcoord->flux2global3_(pw);
+    dcov += pw;
   };
   // the covariance increment of _flux_covariance into a face flux: the whole
   // flux on a curved grid, only the nonzero rows' x1 interior in Cartesian
@@ -1367,21 +1398,8 @@ torch::Tensor HydroImpl::forward(double dt, torch::Tensor u,
         pmb->pcoord->forward(w, _flux1, _flux2, _flux3, _face_pressure1));
   } else {
     int n1 = w.size(-1);
-    auto dsh = pmb->pcoord->face_centroid_shift_x1()
-                   .to(w.device(), w.scalar_type())
-                   .narrow(0, 1, n1 - 2);
-    auto x1v = pmb->pcoord->x1v.to(w.device(), w.scalar_type());
     auto wsrc = w.clone();
-    wsrc[IPR].narrow(-1, 1, n1 - 2) -=
-        dsh *
-        (_xw ? pmb->pib->per_column(_xw->cell, w[IPR],
-                                    [&](torch::Tensor const& t, int o) {
-                                      auto& xd = x1_depth(o);
-                                      return d1_pressure(
-                                          t, xd.x1v.to(t.options()),
-                                          pmb->pcoord->il(), xd.iu);
-                                    })
-             : d1_pressure(w[IPR], x1v, pmb->pcoord->il(), pmb->pcoord->iu()));
+    wsrc[IPR].narrow(-1, 1, n1 - 2) -= pstar_shift();
     auto div =
         pmb->pcoord->forward(wsrc, _flux1, _flux2, _flux3, _face_pressure1);
     // a resolved direction whose faces are NOT corrected keeps the plain p
