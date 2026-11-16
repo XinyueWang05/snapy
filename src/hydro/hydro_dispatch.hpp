@@ -31,9 +31,11 @@ enum X1RefGrid : int {
   kX1RefStretched = 2
 };
 
+//! upward: each owned cell's row starts at its own lower face (min(i, iu - 4)),
+//! so its pref reads faces at and above it only (one reference for any wall)
 torch::Tensor hydro_ref_x1_stretched_rows(torch::Tensor const& dx1f, int iu,
                                           bool phys_in, bool phys_out,
-                                          bool wall_clamp);
+                                          bool wall_clamp, bool upward = false);
 
 //! Tensor fallback; also callable on CPU for backend parity tests.
 void hydro_pressure_scan_x1_tensor(torch::Tensor const& rho,

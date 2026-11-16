@@ -640,6 +640,8 @@ def main(argv=None):
         cfg["geometry"]["cells"]["nx1"] = 8 - k
         if k == 0:
             cfg["boundary-condition"]["internal"] = {"solid-density": 1.e3 * fill, "solid-pressure": 1.e9 * fill}
+        else:  # the floor's deck runs the upward x1 wall reference; the plain wall asks for it
+            cfg["dynamics"]["wb-wall-reference"] = "upward"
         mesh, blocks = build(cfg, device)
         mv = [{"hydro_w": w[..., k:].clone().to(device)} for w in w0]  # the wall deck drops k rows below
         if k == 0:

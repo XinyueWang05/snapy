@@ -276,9 +276,10 @@ void hydro_ref_x1_mps(torch::Tensor const& w, torch::Tensor const& dx1f,
 
 torch::Tensor hydro_ref_x1_stretched_rows(torch::Tensor const& dx1f, int iu,
                                           bool phys_in, bool phys_out,
-                                          bool wall_clamp) {
+                                          bool wall_clamp, bool upward) {
   auto h = dx1f.cpu().to(torch::kFloat64).contiguous();
   int nc1 = h.size(0);
+  int il = nc1 - 1 - iu;
   auto hp = h.data_ptr<double>();
   auto rows = torch::zeros({nc1, 7}, torch::kFloat64);
   auto r = rows.accessor<double, 2>();
@@ -288,6 +289,7 @@ torch::Tensor hydro_ref_x1_stretched_rows(torch::Tensor const& dx1f, int iu,
   for (int i = 0; i < nc1; ++i) {
     int start =
         hydro_ref_x1_six_face_start(i, nc1, iu, phys_in, phys_out, wall_clamp);
+    if (upward && i >= il && i <= iu && iu - 4 >= il) start = std::min(i, iu - 4);
     r[i][0] = start;
     if (start < 0) continue;
     long double t[6];

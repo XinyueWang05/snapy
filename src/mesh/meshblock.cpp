@@ -406,9 +406,12 @@ double MeshBlockImpl::initialize(Variables &vars, char const *restart_file) {
   SignalHandler::GetInstance();
 
   if (restart_file != nullptr) {
-    return _init_from_restart(vars, std::string(restart_file));
+    auto time = _init_from_restart(vars, std::string(restart_file));
+    phydro->upward_reference = wall_reference(vars.count("solid"));
+    return time;
   }
 
+  phydro->upward_reference = wall_reference(vars.count("solid"));
   initialize_local(vars);
 
   //// ------ (6) Exchange hydro and scalar buffers -------- ////
@@ -507,6 +510,20 @@ void MeshBlockImpl::build_hydro_reference(Variables &vars) {
     SINFO(MeshBlock) << "anomaly reference built, shape "
                      << phydro->u_ref().sizes() << std::endl;
   }
+}
+
+bool MeshBlockImpl::wall_reference(bool local_solid) const {
+  std::vector<at::Tensor> any = {
+      torch::tensor({local_solid ? 1. : 0.}, torch::dtype(torch::kFloat64))};
+  if (_playout->has_process_group())
+    _playout->comm->allreduce(any, c10d::ReduceOp::MAX);
+  bool solid = any[0].item<double>() > 0.;
+  auto const& ref = phydro->options->wb_wall_reference();
+  TORCH_CHECK(!solid || ref != "main",
+              "dynamics/wb-wall-reference: main cannot run a deck with an "
+              "immersed solid (its floors and walls need one x1 reference); "
+              "use auto or upward");
+  return solid || ref == "upward";
 }
 
 void MeshBlockImpl::check_x1_wall_seams(Variables &vars) {

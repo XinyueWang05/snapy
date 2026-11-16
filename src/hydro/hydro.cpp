@@ -689,11 +689,15 @@ HydroImpl::_hydro_ref_x1(torch::Tensor const& w, torch::Tensor const& dw,
   bool phys_in = o > 0 || pmb->options->is_physical_boundary(0, 0, -1);
   bool phys_out = pmb->options->is_physical_boundary(0, 0, 1);
   bool clamp = options->wb_wall_clamp();
+  // upward reference (a solid in the deck, or dynamics/wb-wall-reference):
+  // every column of every block, depth 0 and all-fluid blocks included, takes
+  // the upward rows, so a level's pref does not depend on where its wall is
+  bool up = upward_reference && w.size(-1) > 1;
   auto& x1_reference_ = o ? xd.ref : this->x1_reference_;
   if (!x1_reference_ || !x1_reference_->matches(xd.dx1f, iu, stretched, phys_in,
-                                                phys_out, clamp)) {
+                                                phys_out, clamp, up)) {
     x1_reference_ = std::make_shared<HydroReferenceX1Operator>(
-        xd.dx1f, iu, stretched, phys_in, phys_out, clamp);
+        xd.dx1f, iu, stretched, phys_in, phys_out, clamp, kX1RefNonUniform, up);
   }
   HydroReferenceX1 reference;
   if (paired) {

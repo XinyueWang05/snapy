@@ -184,6 +184,9 @@ class MeshBlockImpl : public torch::nn::Cloneable<MeshBlockImpl> {
   void finalize_initialization(Variables& vars);
   //! ghost columns take the neighbour's solid depth (panel edges, seams)
   void check_x1_wall_seams(Variables& vars);
+  //! upward x1 reference: dynamics/wb-wall-reference "upward", or "auto" and
+  //! any rank's caller passed a solid mask (MAX over the process group)
+  bool wall_reference(bool local_solid) const;
 
   //! compute the maximum allowable time step
   /*!

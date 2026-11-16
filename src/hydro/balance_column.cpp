@@ -17,7 +17,8 @@ namespace snap {
 std::tuple<torch::Tensor, double, int> balance_column(
     torch::Tensor const& w, torch::Tensor const& dx1f, double grav,
     bool wall_clamp, double rtol, int max_iter, std::string const& geometry,
-    bool stretched, int conversion_order, EquationOfStateImpl* eos) {
+    bool stretched, int conversion_order, EquationOfStateImpl* eos,
+    bool upward) {
   TORCH_CHECK(conversion_order == 2 || conversion_order == 4,
               "balance_column: conversion_order must be 2 or 4, got ",
               conversion_order);
@@ -107,8 +108,9 @@ std::tuple<torch::Tensor, double, int> balance_column(
       for (int c = 0; c < w2.size(0); ++c)
         wall4_fill(w2[c], E, 0, 1, n, walls, c == IDN || c == IPR, {});
       w4 = torch::where(good, w4 + lap(w2), w2.narrow(-1, 1, n));
-      auto [b, err, sweeps] = balance_column(w4, dx1f, grav, wall_clamp, rtol,
-                                             max_iter, geometry, stretched);
+      auto [b, err, sweeps] =
+          balance_column(w4, dx1f, grav, wall_clamp, rtol, max_iter, geometry,
+                         stretched, 2, nullptr, upward);
       if (sweeps == 0) return {wb, err, pass};
       wb[IDN] += b[IDN] - w4[IDN];
       wb[IPR] += b[IPR] - w4[IPR];
@@ -126,7 +128,7 @@ std::tuple<torch::Tensor, double, int> balance_column(
   auto& pref = reference.pref;
   HydroReferenceX1Operator ref_operator(dxf, nc1 - 1, stretched,
                                         /*phys_in=*/true, /*phys_out=*/true,
-                                        wall_clamp, kX1RefStretched);
+                                        wall_clamp, kX1RefStretched, upward);
   torch::Tensor anchor;  // undefined: the kernel builds its own top anchor
 
   auto wgt = grav * dxf;

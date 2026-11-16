@@ -50,6 +50,8 @@ class MeshImpl : public torch::nn::Cloneable<MeshImpl> {
   void reset() override;
 
   double initialize(MeshVariables& vars, char const* restart_file = nullptr);
+  //! sets every block's hydro upward_reference (wall_reference)
+  void set_wall_reference(MeshVariables const& vars);
   double max_time_step(MeshVariables const& vars);
   void forward(MeshVariables& vars, double dt, int stage);
   void exchange(MeshVariables& vars, SyncOptions const& opts);

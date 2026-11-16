@@ -32,8 +32,10 @@ class HydroReferenceX1Operator {
  public:
   HydroReferenceX1Operator(torch::Tensor const& dx1f, int iu, bool stretched,
                            bool phys_in, bool phys_out, bool wall_clamp,
-                           X1RefGrid unequal = kX1RefNonUniform)
-      : dx1f_(dx1f),
+                           X1RefGrid unequal = kX1RefNonUniform,
+                           bool upward = false)
+      : upward_(upward),
+        dx1f_(dx1f),
         version_(version(dx1f)),
         dtype_(dx1f.scalar_type()),
         device_(dx1f.device()),
@@ -43,24 +45,26 @@ class HydroReferenceX1Operator {
         phys_out_(phys_out),
         wall_clamp_(wall_clamp) {
     auto d = dx1f.cpu().to(torch::kFloat64);
-    grid_ = stretched ? kX1RefStretched
+    // upward (dynamics/wb-wall-reference): every grid takes the rows path
+    grid_ = stretched || upward ? kX1RefStretched
                       : ((d.max() - d.min()).item<double>() <
                                  1.e-10 * d.mean().item<double>()
                              ? kX1RefUniform
                              : unequal);
     if (grid_ == kX1RefStretched) {
-      rows_ =
-          hydro_ref_x1_stretched_rows(dx1f, iu, phys_in, phys_out, wall_clamp);
+      rows_ = hydro_ref_x1_stretched_rows(dx1f, iu, phys_in, phys_out,
+                                          wall_clamp, upward);
     }
   }
 
   bool matches(torch::Tensor const& dx1f, int iu, bool stretched, bool phys_in,
-               bool phys_out, bool wall_clamp) const {
+               bool phys_out, bool wall_clamp, bool upward = false) const {
     // Module::to preserves identity and version but changes dtype/device.
     return dx1f_.is_same(dx1f) && version_ == version(dx1f) &&
            dtype_ == dx1f.scalar_type() && device_ == dx1f.device() &&
            iu_ == iu && stretched_ == stretched && phys_in_ == phys_in &&
-           phys_out_ == phys_out && wall_clamp_ == wall_clamp;
+           phys_out_ == phys_out && wall_clamp_ == wall_clamp &&
+           upward_ == upward;
   }
 
   int grid() const { return grid_; }
@@ -143,6 +147,7 @@ class HydroReferenceX1Operator {
   }
 
  private:
+  bool upward_ = false;
   static int64_t version(torch::Tensor const& t) {
     return t.is_inference() ? 0 : t._version();
   }

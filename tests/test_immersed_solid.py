@@ -25,6 +25,10 @@ EARTH = {"solid-density": 1.e3, "solid-pressure": 1.e9}
 Z = (torch.arange(8 + 2 * NG) - NG + .5) / 8  # x1 centres of the 8-cell x2 decks
 
 
+# a deck with a solid runs the upward x1 wall reference; its plain-wall twin asks for it explicitly
+WALL_UP = {"wb-wall-reference": "upward"}
+
+
 def gap(solid, wall):
     """per field: max|solid - wall| / (RT S_f), non-finite kept (pass: <= 1)"""
     cs = (GAM * wall[kIPR] / wall[kIDN]).abs().sqrt()
@@ -124,7 +128,8 @@ def column(k, fill="earth", stretched=False, scheme=0, courant=.4, dyn=None):
     nstep = math.ceil(.3 / (courant * float(h.min()) / math.sqrt(GAM)))
     out = {}
     for name, xf, kk in (("wall", f[k:], 0), ("solid", f, k)):
-        b = block(xf, {"solid-density": sd, "solid-pressure": sp} if kk else None, 1, scheme, dyn=dyn)
+        b = block(xf, {"solid-density": sd, "solid-pressure": sp} if kk else None, 1, scheme,
+                  dyn=(dyn or {}) | ({} if kk else WALL_UP))
         w = b.buffer("hydro.D").clone().zero_()
         for c, v in ((kIDN, rp[0]), (kIPR, rp[1])):
             w[c, 0, 0, NG + kk:NG + kk + n] = v
@@ -196,9 +201,9 @@ def split(scheme, n=26, k=6):
     m.initialize([{"hydro_w": w[..., s].clone(), "solid": solid[..., s].clone()} for s in sl])
 
 
-def x2_deck(n2, d, solid, scheme=0, tracer=False):
+def x2_deck(n2, d, solid, scheme=0, tracer=False, dyn=None):
     """8 x1 cells, n2 wide in x2, earth fill: the state exp(-z) (1 + d), solid cells filled"""
-    b = block(torch.arange(9.) / 8, EARTH, n2, scheme, tracer)
+    b = block(torch.arange(9.) / 8, EARTH, n2, scheme, tracer, dyn=dyn)
     w = b.buffer("hydro.D").clone().zero_()
     w[kIDN, 0], w[kIPR, 0] = torch.exp(-Z) * (1 + d), torch.exp(-Z) * (1 + d) ** GAM
     w[kIDN][solid], w[kIPR][solid] = 1.e3, 1.e9
@@ -225,7 +230,7 @@ def thin_x2(wid, scheme):
                 y = (torch.arange(c)[:, None] + .5) / c
                 d[j:j + c] = 1.e-3 * torch.exp(-((y - y0) / .2) ** 2 - ((Z - .5) / .2) ** 2)
             j += c
-        b, w = x2_deck(n2, d, solid, scheme)
+        b, w = x2_deck(n2, d, solid, scheme, dyn=None if name == "solid" else WALL_UP)
         var, _ = b.initialize({"hydro_w": w} | ({"solid": solid} if name == "solid" else {}))
         steps(b, var)
         out[name] = var["hydro_u"][:, 0, NG:NG + n2, NG:NG + 8]

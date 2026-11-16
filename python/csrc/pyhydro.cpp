@@ -32,6 +32,7 @@ void bind_hydro(py::module& m) {
       .ADD_OPTION(bool, snap::HydroOptionsImpl, disable_flux_x2)
       .ADD_OPTION(bool, snap::HydroOptionsImpl, disable_flux_x3)
       .ADD_OPTION(bool, snap::HydroOptionsImpl, wb_wall_clamp)
+      .ADD_OPTION(std::string, snap::HydroOptionsImpl, wb_wall_reference)
       .ADD_OPTION(int, snap::HydroOptionsImpl, conversion_order)
       .ADD_OPTION(bool, snap::HydroOptionsImpl, flux_covariance)
       .ADD_OPTION(bool, snap::HydroOptionsImpl, x1_mass_covariance)
@@ -57,7 +58,7 @@ void bind_hydro(py::module& m) {
         py::arg("grav"), py::arg("wall_clamp") = true, py::arg("rtol") = 1.e-10,
         py::arg("max_iter") = 120, py::arg("geometry") = "",
         py::arg("stretched") = false, py::arg("conversion_order") = 2,
-        py::arg("eos") = nullptr,
+        py::arg("eos") = nullptr, py::arg("upward") = false,
         R"(Project a ghost-free x1 column onto the well-balanced scheme's own
 discrete hydrostatic balance, holding p/rho -- the temperature -- fixed per
 cell. Returns (w, residual, sweeps); the residual is max|p'-C|/(rho*g*dz), the

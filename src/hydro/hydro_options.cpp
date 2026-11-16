@@ -51,7 +51,7 @@ HydroOptions HydroOptionsImpl::from_yaml(std::string const& filename,
           dyn, "dynamics",
           {"equation-of-state", "reconstruct", "riemann-solver", "verbose",
            "disable-flux-x1", "disable-flux-x2", "disable-flux-x3",
-           "wb-wall-clamp", "conversion-order", "anomaly", "flux-covariance",
+           "wb-wall-clamp", "wb-wall-reference", "conversion-order", "anomaly", "flux-covariance",
            "x1-mass-covariance", "perturbation-flux", "precision",
            "conserve-axial-momentum", "conserve-axial-momentum-closure"});
       op->verbose() = dyn["verbose"].as<bool>(verbose);
@@ -59,6 +59,14 @@ HydroOptions HydroOptionsImpl::from_yaml(std::string const& filename,
       op->disable_flux_x2() = dyn["disable-flux-x2"].as<bool>(false);
       op->disable_flux_x3() = dyn["disable-flux-x3"].as<bool>(false);
       op->wb_wall_clamp() = dyn["wb-wall-clamp"].as<bool>(true);
+      // auto | upward | main; YAML true/false read as upward/main
+      auto ref = dyn["wb-wall-reference"].as<std::string>("auto");
+      if (ref == "true" || ref == "on" || ref == "yes") ref = "upward";
+      if (ref == "false" || ref == "off" || ref == "no") ref = "main";
+      TORCH_CHECK(ref == "auto" || ref == "upward" || ref == "main",
+                  "dynamics/wb-wall-reference must be auto, upward or main, "
+                  "got '", ref, "'");
+      op->wb_wall_reference() = ref;
       op->conversion_order() = dyn["conversion-order"].as<int>(2);
       op->anomaly() = dyn["anomaly"].as<bool>(false);
       op->flux_covariance() = dyn["flux-covariance"].as<bool>(true);
@@ -166,6 +174,7 @@ HydroOptions HydroOptionsImpl::clone() const {
   op->disable_flux_x1() = disable_flux_x1();
   op->disable_flux_x2() = disable_flux_x2();
   op->disable_flux_x3() = disable_flux_x3();
+  op->wb_wall_reference() = wb_wall_reference();
   op->conversion_order() = conversion_order();
   op->anomaly() = anomaly();
   op->flux_covariance() = flux_covariance();

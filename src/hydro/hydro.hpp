@@ -54,7 +54,8 @@ struct HydroOptionsImpl {
        << "* x1_mass_covariance = " << x1_mass_covariance() << "\n"
        << "* conserve_axial_momentum = " << conserve_axial_momentum() << "\n"
        << "* conserve_axial_momentum_closure = "
-       << conserve_axial_momentum_closure() << "\n";
+       << conserve_axial_momentum_closure() << "\n"
+       << "* wb_wall_reference = " << wb_wall_reference() << "\n";
   }
 
   //! verbose
@@ -66,6 +67,12 @@ struct HydroOptionsImpl {
 
   //! Keep the well-balanced x1 reference's stencils off the wall ghosts
   ADD_ARG(bool, wb_wall_clamp) = true;
+  //! x1 well-balanced reference at walls (YAML `dynamics/wb-wall-reference`):
+  //! "main" = main's (w6e rows next to the wall), "upward" = one reference for
+  //! any wall level (each cell's six-face row starts at its own lower face),
+  //! "auto" (default) = "upward" if the deck has a solid, else "main". A solid
+  //! with an explicit "main" is refused at initialize.
+  ADD_ARG(std::string, wb_wall_reference) = "auto";
 
   //! order of the x1 cell-average <-> point conversion of the primitives: 2
   //! (W of the averages) or 4 (hydro_forward.cpp); x2/x3 stay second order
@@ -391,6 +398,10 @@ class HydroImpl : public torch::nn::Cloneable<HydroImpl> {
   Reconstruct x1_recon(int o, torch::Tensor const& w);
   //! this stage's non-uniform x1 wall, or nullptr (main's path)
   mutable InternalBoundaryImpl::X1Wall const* _xw = nullptr;
+  //! the x1 reference uses the upward rows (dynamics/wb-wall-reference, or a
+  //! solid anywhere in the deck); one value on every block and rank, set by
+  //! MeshBlock/Mesh::initialize
+  bool upward_reference = false;
 
  protected:
   void _revise_x1inner_ghost(torch::Tensor const& w);

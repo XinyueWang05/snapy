@@ -296,6 +296,15 @@ void MeshImpl::run_block_jobs(std::function<void(size_t)> func) {
   workers_->submit(std::move(func));
 }
 
+void MeshImpl::set_wall_reference(MeshVariables const& vars) {
+  // the deck has a solid if any block of any rank was given a mask; every
+  // block takes that one answer, so no rank mixes x1 wall references
+  bool any = false;
+  for (auto const& v : vars) any = any || v.count("solid");
+  bool up = blocks.front()->wall_reference(any);
+  for (auto& b : blocks) b->phydro->upward_reference = up;
+}
+
 double MeshImpl::initialize(MeshVariables& vars, char const* restart_file) {
   TORCH_CHECK(vars.size() == blocks.size(),
               "Mesh::initialize expects one Variables map per local MeshBlock");
@@ -308,6 +317,7 @@ double MeshImpl::initialize(MeshVariables& vars, char const* restart_file) {
         current_time = block_time;
       }
     }
+    set_wall_reference(vars);
     return current_time;
   }
 
@@ -316,6 +326,7 @@ double MeshImpl::initialize(MeshVariables& vars, char const* restart_file) {
     layout->comm->barrier();
   }
   SignalHandler::GetInstance();
+  set_wall_reference(vars);
 
   run_block_jobs([&](size_t i) { blocks[i]->initialize_under_mesh(vars[i]); });
 
