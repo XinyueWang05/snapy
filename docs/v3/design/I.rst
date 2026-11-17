@@ -10,9 +10,15 @@ Every ``file:line`` below is at the pin unless it says otherwise. Lines
 cited for #369 are at that PR's head
 ``c382f0da7b84dbc14219053758054f874669cc84`` (open, merge base
 ``cbf86830``). A claim I have not tested is marked **hypothesis**. A change in
-results beyond round-off is marked **FOR CHENG**. The section titles and the
+results beyond round-off is marked **FOR CHENG** until Cheng rules. The
+section titles and the
 register requirements R1-R10 follow the brief as Cheng resent it in the lane
 I thread.
+
+**Rulings (Cheng's decision, 2026-11-17).** (a) ``gravity-work: cell`` is
+removed. (b) The global gravity-work fixer is removed. Both are settled
+design below, no longer FOR CHENG. (c) The per-column FP64 retry is still
+open: it stays as proposed and keeps its FOR CHENG row in section 10.
 
 .. contents::
    :local:
@@ -136,7 +142,7 @@ Current sites:
    * - ``gravity-work: cell`` (non-Riemann flux split, Roe-diffusion work)
      - ``const_gravity.cpp:54-58``; ``hydro_forward.cpp:579-580, 846-849, 1426-1434``; ``vic_gravity_work_impl.h:243-247``
    * - global E+PE fixer
-     - ``const_gravity.cpp:59-64``; ``hydro.cpp:120-145``; ``hydro_forward.cpp:1416-1417, 1505-1533, 1584-1598, 1608, 1682-1693``; ``meshblock.cpp:997-1003, 1036-1109, 1336-1337``; ``hydro.hpp:290-314``
+     - ``const_gravity.cpp:59-64`` (lane I); lane R: ``hydro.hpp:273-274, 296-314, 480``, ``hydro.cpp:126-135, 138-145, 287-293, 322-327``, ``hydro_forward.cpp:1416-1417, 1507-1533, 1584-1598, 1608, 1682-1693``; lane X: ``meshblock.hpp:217-222``, ``meshblock.cpp:724-730, 993-1004, 1036-1109, 1336-1337, 1477, 1502``, ``mesh.cpp:363, 384-402`` (section 10, table)
    * - readers of the implicit transfers
      - Coriolis/metric m1 ``hydro_forward.cpp:1637-1653`` (#355); AAM ``:1668-1669``; tracer donor transfer ``meshblock.cpp:786-806``
    * - solid and wall rows
@@ -159,7 +165,8 @@ every shipped deck runs ``face``.
    face work W plus the corrected-PE work K, with K = 0 where the grid has no
    measure (cylindrical, ``X1Measure::none``: plain face work and a warning,
    as now). Its operator row is generated from the booked work (section 4).
-   ``gravity-work: cell`` is refused. Why:
+   ``gravity-work: cell`` is refused, and the global fixer is removed.
+   **Settled: Cheng's decision, 2026-11-17** (rulings (a), (b)). Why:
 
    - it is what every shipped deck runs;
    - E+P closes by construction (#297, #345);
@@ -476,9 +483,10 @@ no host read between assemble and post.
 
 - ``ConstGravityOptions.gravity_work`` keeps working; ``"cell"`` is refused
   when the Hydro module is built.
-- ``gravity_work_fixer``: setting ``False`` is accepted as a no-op and
-  ``True`` is refused (``python/csrc/pyforcing.cpp:28-29``,
-  ``python/snapy/forcing.pyi:53-69``).
+- ``gravity_work_fixer`` is removed with the option: the binding
+  ``python/csrc/pyforcing.cpp:29`` and the stubs ``python/snapy/forcing.pyi:61-70``
+  go, and the ``"cell"`` docstring at ``forcing.pyi:54`` is edited. The C++
+  setter call in ``test_lu_failure.cpp:228`` is removed with it.
 - ``ImplicitOptions.scheme`` (``python/snapy/implicit.pyi:55-60``) stays an
   int spelling of ``VicMatrix``.
 - The buffers ``hydro.icorr.{a,b,c,delta,du0,corr,mass_corr}`` leave
@@ -490,7 +498,8 @@ no host read between assemble and post.
 **YAML.**
 
 - ``forcing/const-gravity/gravity-work: cell`` is refused.
-- ``gravity-work-fixer: false`` is accepted with a deprecation warning, and
+- ``gravity-work-fixer: false`` is still parsed by ``const_gravity.cpp``
+  (lane I) with a deprecation warning, so decks that spell it keep running.
   ``true`` is refused. Inline test YAML uses ``false``
   (``test_lu_failure.cpp:109``).
 - ``integration/implicit-scheme: 1|9`` is unchanged.
@@ -593,14 +602,19 @@ design, not counts of written code.
      - **-788 (-29.7%)**
      - target: at least 20% (at most 2,124)
 
-There are also deletions outside the baseline, in files that other lanes own
-and count. Lane I does not count them:
+The deletions that rulings (a) and (b) cause outside lane I's files are
+listed by owner in section 10 ("Outside-lane deletions"). They are counted
+in lane R's and lane X's tables, not here. None of their lines is in the
+2,655-line baseline (checked: no range falls in ``src/implicit``,
+``gravity_work*.hpp`` or ``const_gravity.cpp``), so the lane I total above
+needs no correction.
 
-- the fixer: ``meshblock.cpp:997-1003, 1036-1109, 1336-1337`` and about 70
-  lines in ``hydro_forward.cpp``, ``hydro.cpp`` and ``hydro.hpp``;
-- the ``cell`` flux split: ``hydro_forward.cpp:579-580, 846-849, 1426-1434``;
-- the explicit face-work block ``hydro_forward.cpp:1412-1537`` (126 lines),
-  which becomes about 30 lines around ``GravityWork::apply``.
+Revision 1 listed these sites only roughly, and two of its pointers were
+wrong. ``meshblock.cpp:997-1003`` is really ``:993-1004``. "The explicit
+face-work block ``hydro_forward.cpp:1412-1537`` becomes about 30 lines" also
+overlapped the fixer and ``cell`` lines inside that block. Neither was in
+lane I's -788. The remaining rewrite of that block around
+``GravityWork::apply`` sits in lane R's file and is lane R's line count.
 
 
 10. Migration
@@ -628,8 +642,11 @@ round-off; and why.
 #. **I-5 device status and the Woodbury 2x2 in the kernel.** Rounding on
    CUDA (**hypothesis**: FMA contraction); bitwise on CPU.
 #. **I-6 per-column FP64 retry.** See (c).
-#. **I-7 removing ``gravity-work: cell`` and the global fixer.** See (a)
-   and (b).
+#. **I-7 removing ``gravity-work: cell`` and the global fixer** (settled,
+   Cheng 2026-11-17). See (a) and (b). The lane I part is
+   ``const_gravity.cpp`` and ``src/implicit``. The lane R and lane X parts
+   are in their own PRs (table below), merged together with I-7 so that no
+   commit leaves a dangling ``gravity_work_fixer()`` call.
 
 **Options and paths removed.**
 
@@ -643,7 +660,8 @@ round-off; and why.
 
 **What each removal changes in results.**
 
-(a) **Refusing ``gravity-work: cell``.** **FOR CHENG**
+(a) **Refusing ``gravity-work: cell``.** **Settled: Cheng's decision,
+2026-11-17.**
 
 - Decks on ``face``, which is every shipped ``*.yaml``: bitwise
   (**hypothesis**, gated by #348). Every removed branch is gated on
@@ -681,12 +699,13 @@ round-off; and why.
     form ("a 1-ulp change flips the outcome", ``:5``), so it is re-recorded
     on face. The result is a **hypothesis** until run.
 
-(b) **Removing the global gravity-work fixer.** **FOR CHENG**
+(b) **Removing the global gravity-work fixer.** **Settled: Cheng's
+decision, 2026-11-17.**
 
 - With ``face`` the fixer is already off: ``hydro.cpp:128`` forces it false
   and ``gravity_work_fixer()`` requires ``cell`` (``hydro.cpp:322-326``).
   Removing it is therefore **bitwise** for every face deck (**hypothesis**;
-  the code it removes is not executed for face, ``meshblock.cpp:997-1003``,
+  the code it removes is not executed for face, ``meshblock.cpp:997-1004``,
   ``hydro_forward.cpp:1507, 1598, 1608, 1682``).
 - For cell decks it goes away with (a), so there is no case where the fixer
   is removed and cell kept.
@@ -695,12 +714,115 @@ round-off; and why.
   monitor (R6).
 - The redo signal is not lost, because ``check_redo`` reads the solve latch
   itself (``meshblock.cpp:1549-1551``).
-- Decks with ``gravity-work-fixer: false`` keep running bitwise, with a
-  deprecation warning: ``test_lu_failure.cpp:109, 228``,
-  ``test_stencil_cache_small_block.py:54``,
-  ``test_implicit_gravity_tall_column.py:57``.
+- Decks that spell ``gravity-work-fixer: false`` keep running bitwise,
+  with a deprecation warning: ``test_lu_failure.cpp:109``,
+  ``test_stencil_cache_small_block.py:54`` and
+  ``test_implicit_gravity_tall_column.py:57``. The C++ setter call
+  ``test_lu_failure.cpp:228`` is deleted, because the option goes.
 
-(c) **Per-column FP64 retry.** **FOR CHENG**
+**Outside-lane deletions (rulings (a), (b)).** These lines are counted in
+lane R's or lane X's table, **not here**. They are exact inclusive ranges at
+the pin, one entry per line, with no line in two rows (checked by a script
+over the ranges). "Edited" lines change but are not deleted, and they are
+not counted.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 50 8 32
+
+   * - owner
+     - range at the pin
+     - lines
+     - what
+   * - R
+     - ``src/hydro/hydro.hpp:273-274``
+     - 2
+     - ``gravity_work_fixer()`` declaration
+   * - R
+     - ``src/hydro/hydro.hpp:296-314``
+     - 19
+     - ``gravity_work_defect``, ``gravity_work_fix``, ``add_``/``commit_``/``drop_gravity_work_fix``, ``gravity_work_wall_mass``
+   * - R
+     - ``src/hydro/hydro.hpp:480``
+     - 1
+     - ``_gwfix_d, _gwfix_total, _gwfix_pending, _gwfix_wall``
+   * - R
+     - ``src/hydro/hydro.cpp:126-135, 138-145``
+     - 18
+     - fixer reset, the grav2/grav3 and periodic-x1 checks (``:136-137`` stay: the face warning reads ``nm``, ``wrap``)
+   * - R
+     - ``src/hydro/hydro.cpp:287-293``
+     - 7
+     - ``_gwfix_*`` ``register_buffer``
+   * - R
+     - ``src/hydro/hydro.cpp:322-327``
+     - 6
+     - ``HydroImpl::gravity_work_fixer()``
+   * - R
+     - ``src/hydro/hydro_forward.cpp:1416-1417, 1507-1533, 1584-1598, 1608, 1682-1693``
+     - 57
+     - the stage E+PE defect, wall-mass meter, implicit ``epe`` lambda and the stage-weight accumulation into ``_gwfix_d``
+   * - R
+     - ``src/hydro/hydro_forward.cpp:575-580, 846-849, 1426-1434, 1505-1506, 1534, 1536``
+     - 23
+     - ``cell``: ``bflux1``, ``gw_cell``, ``F - F^R`` split, the ``cell`` branch (``:1535`` stays as the only branch)
+   * - **R total**
+     -
+     - **133**
+     - hydro.hpp 22, hydro.cpp 31, hydro_forward.cpp 80
+   * - X
+     - ``src/mesh/meshblock.hpp:217-222``
+     - 6
+     - ``gravity_work_fixer_sums``, ``apply_gravity_work_fixer`` declarations, ``defer_gravity_work_fixer``
+   * - X
+     - ``src/mesh/meshblock.cpp:724-730``
+     - 7
+     - step-start reset and commit
+   * - X
+     - ``src/mesh/meshblock.cpp:993-1004``
+     - 12
+     - single-block step-end call (``:992`` stays: it is the ``apply_boundaries`` comment)
+   * - X
+     - ``src/mesh/meshblock.cpp:1036-1109``
+     - 74
+     - ``gravity_work_fixer_sums`` and ``apply_gravity_work_fixer``
+   * - X
+     - ``src/mesh/meshblock.cpp:1336-1337``
+     - 2
+     - ``fixgrav=`` print (if cycle printing is lane O's, it moves there; count it once)
+   * - X
+     - ``src/mesh/meshblock.cpp:1477, 1502``
+     - 2
+     - ``check_redo``: ``drop_`` / ``commit_gravity_work_fix``
+   * - X
+     - ``src/mesh/mesh.cpp:363, 384-402``
+     - 20
+     - ``defer_gravity_work_fixer``; multi-block sum, reduction and apply
+   * - **X total**
+     -
+     - **123**
+     - meshblock.hpp 6, meshblock.cpp 97, mesh.cpp 20
+   * - not R or X
+     - ``src/forcing/forcing.hpp:48, 56-58, 60-62``; ``python/csrc/pyforcing.cpp:29``; ``python/snapy/forcing.pyi:61-70``
+     - 18
+     - option report, the ``cell`` doc, the ``gravity_work_fixer`` option, its binding and stubs; owner to be named by Cheng (the forcing header and the Python bindings are outside every claimed lane)
+
+Edited, not counted:
+
+- ``hydro.cpp:123-125`` (accept ``face`` only), ``:146-147, 157`` (the
+  warning no longer names ``cell``), ``:324, 331``;
+- ``hydro.hpp:290-291`` (comment);
+- ``hydro_forward.cpp:1412-1414`` (comment), ``:1470`` (``!gw_cell &&``
+  goes), ``:1535`` (dedent);
+- ``meshblock.hpp:225``, ``meshblock.cpp:1476`` (comments);
+- ``forcing.hpp:47``, ``pyforcing.cpp:28`` (the line terminator);
+- ``forcing.pyi:54`` (docstring).
+
+``docs/derivations/curved-gravity-work-weight.md:429, 433, 521, 525`` name
+the fixer and ``cell``; they are docs, not ``src``, and are edited with I-7.
+
+(c) **Per-column FP64 retry.** **FOR CHENG** (still open with Cheng; kept
+as proposed)
 
 - A step where no FP32 column fails: **bitwise**. The predicated FP64
   launch does no column work.
@@ -767,7 +889,7 @@ round-off; and why.
 - Where do the graph segments start and end around the solve?
 - Should the FP32 restriction to Cartesian ideal-moist stay?
 
-**Cheng:** (a), (b) and (c) of section 10.
+**Cheng:** (c) of section 10. (a) and (b) were ruled on 2026-11-17.
 
 
 12. Skeleton index
