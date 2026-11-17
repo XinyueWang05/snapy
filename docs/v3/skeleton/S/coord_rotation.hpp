@@ -1,12 +1,12 @@
 #pragma once
-// V3 lane S skeleton: declarations only, in no build. Revision 1.
+// V3 lane S skeleton: declarations only, in no build. Revision 1.1.
 // Pin chengcli/snapy 9e5de2d4ce497d0b2d4da3295fc1fe969fe7e410; lines at the
 // pin. Untested claims: "hypothesis". S-1 (settled): coord owns ONE rotation
 // and the rotation data; lane A owns the Omega and mass-flux consumers.
 #include <array>
 #include <torch/torch.h>
 
-namespace snap {  // R's namespace (flux_register.hpp:39 at 543ff84f)
+namespace snap {  // R's namespace (flux_register.hpp:32 at 3490d7e1)
 class CoordinateImpl;
 
 //! declared rotation axis. Only z is supported; anything else is refused at
@@ -38,6 +38,8 @@ class PanelRotation {
   //! (gnomonic_equiangle.cpp:365-484), unchanged in V3
   void prim2local_(torch::Tensor w, int dim) const;
   void flux2global_(torch::Tensor flux, int dim) const;
+  //! face unit normal in the post frame, for boundary.prescribed (S.rst s4)
+  torch::Tensor face_normal(int dim) const;
 };
 
 //! the rotation data coord owns (gnomonic_equiangle.hpp, AAM block): the
