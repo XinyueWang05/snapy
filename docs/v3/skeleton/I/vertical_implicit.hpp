@@ -66,6 +66,7 @@ struct VicIncrement {
   torch::Tensor mass_dry;    //!< [nc3, nc2, nc1+1] clamped dry transfer
   torch::Tensor mass_species;//!< [ny, nc3, nc2, nc1+1] clamped transfers
   torch::Tensor mass_total;  //!< [nc3, nc2, nc1+1] dry + species: G reads it
+  torch::Tensor mass_clamped;//!< [nc3, nc2, nc1+1] requested - moved (R7)
   torch::Tensor momentum_t;  //!< [2, nc3, nc2, nc1+1] partial matrix only
   torch::Tensor cell;        //!< [nvar, nc3, nc2, nc1] increments not in face
                              //!< form: x1 momentum, energy (gravity work
