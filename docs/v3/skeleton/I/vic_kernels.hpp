@@ -1,24 +1,25 @@
 #pragma once
-// V3 lane I skeleton (declarations only; not part of any build). I.rst s6, s8:
+// V3 lane I skeleton (declarations only; not part of any build). I.rst s3, s7:
 // one definition of the column kernels for CPU, CUDA and MPS (OnHost). Replaces
 // implicit_dispatch.hpp, vic_assemble_{partial,full}_impl.h,
 // vic_gravity_work_impl.h and the stub bodies of implicit_dispatch.cpp/.cu.
+// Kept: flux_decomposition_impl.h, forward_sweep_impl.h, vic_redistribute_impl.h,
+// vic_solve_failure.h, and lubksb.h, ludcmp.h (moved in from src/math, lane O).
 
 #include <ATen/TensorIterator.h>
 #include <ATen/native/DispatchStub.h>
 #include <configure.h>
-
 namespace snap {
 
-//! scalar arguments of every stage; no flag bits in dir (I.rst s6)
+//! scalar arguments of every stage; no flag bits in dir (I.rst s3)
 struct VicParams {
-  double dt = 0.;
+  double const* dt = nullptr;  //!< device FP64 scalar, written before replay
   double grav = 0.;   //!< grav1, the full gravity (implicit_hydro.cpp:326)
   int dir = 0;        //!< 0: x1
   int ny = 0;         //!< species rows
   int n = 5;          //!< block size, VicMatrix
   int k = 0;          //!< 2: Woodbury wall third points, 0: none
-  bool fp64_retry = false;  //!< the predicated second launch (s8)
+  bool fp64_retry = false;  //!< the predicated second launch (s7)
 };
 
 //! one column's operands, unpacked once from the iterator (13-15 operands
@@ -26,11 +27,14 @@ struct VicParams {
 template <typename T>
 struct VicColumn {
   T *du, *mass, *w, *gamma, *area, *vol;
-  T *face_lo, *face_hi;      //!< GravityWorkRows of this column
+  T *face_lo, *face_hi;      //!< W rows: GravityWorkRows face weights
+  T *k_lo, *k_mid, *k_hi;    //!< K rows on the density column, per cell
+  T k_t0, k_t1;              //!< this column's Woodbury third points (#369)
+  int k0, k1;                //!< this column's Woodbury rows (ColumnSegments)
   void *a, *b, *c, *delta, *z0, *z1;
-  int lo, hi;                //!< ColumnSegments
-  bool solid_floor;
-  int32_t* status;           //!< VicStatusBit, block-wide (atomic OR)
+  int const *lo, *hi;        //!< this column's fluid runs; nrun entries
+  int nrun;
+  int32_t* status;           //!< this column's VicStatusBit; retry predicate
   int64_t stride1, stride2;
 };
 
@@ -41,16 +45,15 @@ template <typename T, int N>
 DISPATCH_MACRO void vic_assemble_cell(VicColumn<T> const& col, int i,
                                       VicParams const& p);
 
-//! the K = 2 correction y -= Z (I + V^T Z)^{-1} V^T y, per column, after
-//! the back-substitution (was host tensor code, implicit_hydro.cpp:446-472)
+//! the K = 2 correction y -= Z (I + V^T Z)^{-1} V^T y with the column's own
+//! k_t0/k_t1 and k0/k1, after the back-substitution (was host tensor code,
+//! implicit_hydro.cpp:446-472)
 template <typename T, int N>
-DISPATCH_MACRO void vic_woodbury_column(VicColumn<T> const& col, T k0,
-                                        T k1);
+DISPATCH_MACRO void vic_woodbury_column(VicColumn<T> const& col);
 
 //! input screen of one column; sets kVicInputNonfinite, returns false then
 template <typename T>
-DISPATCH_MACRO bool vic_column_finite(VicColumn<T> const& col,
-                                      VicParams const& p);
+DISPATCH_MACRO bool vic_column_finite(VicColumn<T> const& col, VicParams const& p);
 
 enum class VicStage { assemble, solve, redistribute };
 //! the CPU launcher: iter.for_each over columns (assembly: over cells)

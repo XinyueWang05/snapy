@@ -3,7 +3,7 @@ V3 lane I: vertical implicit solver and gravity work
 
 :Lane: I (vertical implicit solver and gravity work)
 :Owner: Xinyue Wang (alternate: Tianhao Le)
-:Revision: 1 (round 1; written without reading the other lanes' drafts)
+:Revision: 2 (round 2: lane R's provisional header, Cheng's rulings, Tianhao's 15 notes)
 :Pin: chengcli/snapy ``9e5de2d4ce497d0b2d4da3295fc1fe969fe7e410``
 
 Every ``file:line`` below is at the pin unless it says otherwise. Lines
@@ -11,14 +11,20 @@ cited for #369 are at that PR's head
 ``c382f0da7b84dbc14219053758054f874669cc84`` (open, merge base
 ``cbf86830``). A claim I have not tested is marked **hypothesis**. A change in
 results beyond round-off is marked **FOR CHENG** until Cheng rules. The
-section titles and the
-register requirements R1-R10 follow the brief as Cheng resent it in the lane
-I thread.
+section titles and the register requirements R1-R10 follow the brief as
+Cheng resent it in the lane I thread. Gates and costs are specified here,
+not run: this round is design only.
+
+**Lane R's header.** Section 4 and the skeleton use the names and
+signatures of lane R's provisional register header,
+``docs/v3/skeleton/R/flux_register.hpp`` at happysky19/snapy ``v3-design/R``
+``543ff84f4adb4b79c3f43fa7c2f0a5a6eb54fa48`` (checked with
+``git ls-remote``), cited below as ``R.hpp:<line>``.
 
 **Rulings (Cheng's decision, 2026-11-17).** (a) ``gravity-work: cell`` is
 removed. (b) The global gravity-work fixer is removed. Both are settled
-design below, no longer FOR CHENG. (c) The per-column FP64 retry is still
-open: it stays as proposed and keeps its FOR CHENG row in section 10.
+design below. (c) The per-column FP64 retry is still open: it stays as
+proposed and keeps its FOR CHENG row in section 10.
 
 .. contents::
    :local:
@@ -30,9 +36,12 @@ open: it stays as proposed and keeps its FOR CHENG row in section 10.
 
 **Scope.** Lane I covers ``src/implicit/*`` (12 files),
 ``src/hydro/gravity_work.hpp``, ``src/hydro/gravity_work_radial.hpp`` and
-``src/forcing/const_gravity.cpp``. The lane reads its callers but does not
-own them: ``src/hydro/hydro_forward.cpp:1412-1690``,
-``src/hydro/hydro.cpp:479-549`` and ``src/mesh/meshblock.cpp:1036-1109``.
+``src/forcing/const_gravity.cpp``. In revision 2 it also takes
+``src/math/lubksb.h`` (71) and ``src/math/ludcmp.h`` (95), which lane O
+moves into ``src/implicit``; their only includer is
+``implicit/forward_sweep_impl.h:14-15`` (section 9). The lane reads its
+callers but does not own them: ``src/hydro/hydro_forward.cpp:1412-1690``,
+``src/hydro/hydro.cpp:479-549`` and ``src/mesh/meshblock.cpp:1036-1110``.
 
 **Pins.**
 
@@ -124,11 +133,11 @@ Current sites:
    * - matrix choice, a bit test of ``scheme``
      - ``implicit_hydro.hpp:36-42``, ``implicit_hydro.cpp:97-111, 427, 489``
    * - face-work flag bits in ``dir``
-     - ``implicit_dispatch.hpp:27-30``, ``implicit_hydro.cpp:330-337``
+     - ``implicit_dispatch.hpp:32-35``, ``implicit_hydro.cpp:330-337``
    * - Jacobian assembly, partial / full
      - ``vic_assemble_partial_impl.h:42-200`` / ``vic_assemble_full_impl.h:17-112``
    * - gravity-work rows of the energy row
-     - ``vic_gravity_work_impl.h:229-254``; corrected-PE rows ``implicit_hydro.cpp:365-425``; Woodbury wall third points ``:436-472``
+     - ``vic_gravity_work_impl.h:23-48``; corrected-PE rows ``implicit_hydro.cpp:365-425``; Woodbury wall third points ``:436-472``
    * - solve, back-substitution, redistribution
      - ``forward_sweep_impl.h:29-132``; ``vic_redistribute_impl.h:30-225``
    * - post-solve gravity-work remainders
@@ -140,9 +149,9 @@ Current sites:
    * - explicit face work (two formulas) and corrected-PE work
      - ``hydro_forward.cpp:1447-1452`` (Cartesian, ``gravity_work.hpp:12-24``), ``:1453-1465`` (curved), ``:1470-1495`` (K)
    * - ``gravity-work: cell`` (non-Riemann flux split, Roe-diffusion work)
-     - ``const_gravity.cpp:54-58``; ``hydro_forward.cpp:579-580, 846-849, 1426-1434``; ``vic_gravity_work_impl.h:243-247``
+     - ``const_gravity.cpp:28-32``; ``hydro_forward.cpp:579-580, 846-849, 1426-1434``; ``vic_gravity_work_impl.h:37-41``
    * - global E+PE fixer
-     - ``const_gravity.cpp:59-64`` (lane I); lane R: ``hydro.hpp:273-274, 296-314, 480``, ``hydro.cpp:126-135, 138-145, 287-293, 322-327``, ``hydro_forward.cpp:1416-1417, 1507-1533, 1584-1598, 1608, 1682-1693``; lane X: ``meshblock.hpp:217-222``, ``meshblock.cpp:724-730, 993-1004, 1036-1110, 1336-1337, 1477, 1502``, ``mesh.cpp:363, 384-402`` (section 10, table)
+     - ``const_gravity.cpp:33-38`` (lane I); lane R: ``hydro.hpp:273-274, 296-314, 480``, ``hydro.cpp:126-135, 138-145, 287-293, 322-327``, ``hydro_forward.cpp:1416-1417, 1507-1533, 1584-1598, 1608, 1682-1693``; lane X: ``meshblock.hpp:217-222``, ``meshblock.cpp:724-730, 993-1004, 1036-1110, 1336-1337, 1477, 1502``, ``mesh.cpp:363, 384-402`` (section 10, table)
    * - readers of the implicit transfers
      - Coriolis/metric m1 ``hydro_forward.cpp:1637-1653`` (#355); AAM ``:1668-1669``; tracer donor transfer ``meshblock.cpp:786-806``
    * - solid and wall rows
@@ -150,7 +159,7 @@ Current sites:
    * - well-balanced reference in the RHS
      - ``hydro_forward.cpp:837, 1380-1382, 1394-1400``; operator gravity ``implicit_hydro.cpp:326-329``
 
-Default: ``gravity-work: face`` since #303 (``const_gravity.cpp:54``). No
+Default: ``gravity-work: face`` since #303 (``const_gravity.cpp:28``). No
 ``*.yaml`` file in the repository sets ``gravity-work``
 (``grep -rln gravity-work --include=*.yaml examples tests`` is empty), so
 every shipped deck runs ``face``.
@@ -187,10 +196,24 @@ every shipped deck runs ``face``.
    and folds the tangential momenta (``partial:159-199``) under
    ``if constexpr``.
 #. **Wall and solid rows live in the column operator**, through one
-   ``ColumnSegments`` per block built from #369's ``X1Wall`` depth: fluid
-   ``[lo, hi)`` per column and the kind of floor. The assembly flags, the
-   Woodbury cells ``k0``/``k1`` and the per-depth ``GravityWork`` rows all
-   read it.
+   ``ColumnSegments`` per block. Its scope (Tianhao's note 15):
+
+   - The general case is any solid mask. Each column holds its list of fluid
+     runs, as the pin's redistribution already walks them
+     (``implicit_dispatch.cpp:216-235``). Solids at the top or in strides
+     are supported at the pin (``tests/test_implicit_stratified_solid.py:99``)
+     and stay supported.
+   - The single-segment fast path is taken when every column has one fluid
+     run that reaches the top wall: no solid, or #369's per-column floor
+     from ``X1Wall`` depth. Only in that path are the corrected-PE wall
+     rows the Woodbury rows at ``k0`` (first fluid cell, #369) and
+     ``k1 = nx1 - 1``.
+   - Any other shape keeps the pin's per-cell masking of the K rows
+     (``rx_fluid``, ``implicit_hydro.cpp:405, 412-420``) with Woodbury at
+     the physical wall cells, unchanged (**hypothesis**: bitwise).
+
+   The assembly flags, ``k0``/``k1`` and the per-depth ``GravityWork`` rows
+   all read ``ColumnSegments``.
 #. **No reference row** in the operator. A contract test replaces it
    (section 5).
 #. **One kernel definition.** The plumbing that is duplicated across 9
@@ -212,13 +235,13 @@ every shipped deck runs ``face``.
      - grid-only coefficients of G; ``apply``, ``apply_seam``, ``rows``, ``potential``
    * - ``VerticalImplicitImpl`` (``vertical_implicit.hpp``)
      - ``HydroImpl`` (submodule ``icorr``)
-     - options, ``ColumnSegments``, scratch, device ``status``, meters
+     - options, ``ColumnSegments``, scratch, per-column and block ``status``, meters
    * - ``VicIncrement``
-     - ``VerticalImplicitImpl``, posted to the register (lane R)
-     - face transfers (mass, species, partial-matrix tangential momenta) and cell increments
+     - ``VerticalImplicitImpl``; its face fields are posted to lane R's ``FluxRegister`` in phase ``implicit``
+     - face transfers (dry mass, species, tangential momenta under both matrices), the kept ``vic.mass_total``, monitor amounts (``vic.cell``, ``vic.mass_clamped``)
    * - ``ColumnSegments``
      - ``VerticalImplicitImpl``, rebuilt per solid-mask version
-     - fluid ``[lo, hi)``, floor kind
+     - fluid runs per column, the single-segment flag, ``k0``/``k1``
    * - ``VicParams``, ``VicColumn``, ``vic_stage`` (``vic_kernels.hpp``)
      - ``src/implicit`` dispatch
      - kernel scalars, unpacked per-column operands, the launcher template
@@ -228,81 +251,139 @@ change):
 
 .. code-block:: text
 
-   explicit x1 fluxes --post--> [ x1 face register (lane R) ] <--post-- VicIncrement
-          |                         |        |        |                 ^
-          |                 read M_exp|  read M (final)|                 |
-          v                         v        v        v                 |
-   forcings (w-free     GravityWork.apply   m1 (A)  tracer      VerticalImplicit::forward
-   Coriolis rows)       G[M_exp] -> du_E             donor        assemble(N; rows())
-          \______________________ du ______________________/      solve (+Woodbury in kernel)
-                                   \____________________________>  redistribute -> post
-                                                                   remainder G[M_imp] - R dq -> du_E
-                                                                   status bits (device)
+   phase sweep..divergence (C, R): riemann, sedimentation, seam replace,
+          positivity; du += div(total)            [R.hpp:25-27]
+     |
+   phase pre_implicit: forcings (w-free Coriolis rows into du, #355);
+          GravityWork.apply(total(1) mass rows) = G[M_exp] -> du_E
+     |
+   phase implicit: VerticalImplicit::forward(du, w, gamma, dt, gw, reg)
+          assemble(N; rows()) -> solve (+Woodbury, per column)
+          -> redistribute -> de-project
+          -> reg.add(1, "vic.mass_dry" | "vic.mass_species" | "vic.momentum_t")
+          -> reg.keep(1, "vic.mass_total"); reg.cell_amount("vic.cell" | "vic.mass_clamped")
+          -> remainder G[kept vic.mass_total] - R dq -> du_E
+          -> per-column status (device)
+     |
+   phase post_implicit (A, R): m1 from total(1), axial source from
+          vic.momentum_t, tracer transfer from kept vic.mass_dry
+     |
+   end_stage: c_s dt total -> FP64 step accumulator (R)
 
 
 4. Flux-register contract
 -------------------------
 
-**Posts.** The solve posts after de-projection and redistribution:
+**Calls and phase.** Lane R's header gives the phases (``R.hpp:43-51``)
+and the calls (``R.hpp:62-94``). The solve runs in phase ``implicit``
+(``R.hpp:49``), after ``pre_implicit``, where the explicit gravity work
+reads the explicit x1 total (``R.hpp:48``). Its readers run in
+``post_implicit`` (``R.hpp:50``): lane A's m1 rows, the gravity-work
+remainder and the tracer transfer. Lane I uses ``add`` for posts, ``keep``
+for a kept part, and ``cell_amount`` for monitor amounts. It uses no
+``slot``/``post_slot`` (those are for the first post of a stage, the
+Riemann flux), no ``scale``, no ``replace`` (the solve posts no seam face,
+R5) and no ``post_split``. Dim ``1`` is x1, as in the header's
+``"vic.mass_total@1"`` (``R.hpp:56``).
+
+**Posts** (phase ``implicit``, in this declared order):
 
 .. list-table::
    :header-rows: 1
+   :widths: 26 30 44
 
-   * - name (declared order)
-     - kind
+   * - name and call
+     - rows, quantity
      - source at the pin
-   * - ``vic.mass_dry``
-     - x1 face transfer, after the availability clamp
+   * - ``vic.mass_dry``: ``reg.add(1, "vic.mass_dry", {IDN}, f)``
+     - dry-gas x1 face transfer after the availability clamp
      - ``vic_redistribute_impl.h:119-147`` (``MASS(IVX+(dir+1)%3)``)
-   * - ``vic.mass_species[n]``
-     - x1 face transfer, after the clamp
+   * - ``vic.mass_species``: ``reg.add(1, "vic.mass_species", {ICY..ICY+ny-1}, f)``
+     - species x1 face transfers after the clamp
      - ``vic_redistribute_impl.h:156-175``
-   * - ``vic.mass_total``
-     - x1 face transfer, equal to dry plus species (checked)
-     - ``MASS(IVX+(dir+2)%3)``, ``:144, 172``
-   * - ``vic.mass_clamped``
-     - x1 face: requested minus moved
-     - ``implicit_hydro.cpp:527-528``
-   * - ``vic.momentum_t[2]`` (partial matrix)
-     - x1 face transfer at the donor velocity
-     - ``vic_redistribute_impl.h:186-201``
-   * - ``vic.cell``
-     - cell increment: x1 momentum, energy without gravity work, full-matrix tangential momenta
-     - ``vic_redistribute_impl.h:205-225``
+   * - ``vic.momentum_t``: ``reg.add(1, "vic.momentum_t", {IVY, IVZ}, f)``
+     - tangential-momentum x1 face transfers, **both matrices**: donor
+       transfers under scheme 1; the prefix sum from the bottom wall of the
+       solve's tangential cell increments under scheme 9, as
+       ``gnomonic_equiangle.cpp:536-545`` builds them today
+     - scheme 1 ``vic_redistribute_impl.h:186-201``; scheme 9
+       ``vic_redistribute_impl.h:217-218`` (``delta(2), delta(3)``)
 
-The x1 momentum has a gravity source and wall pressure, so it cannot be a
-telescoping face transfer. Energy stays a cell increment in round 1 because
-the linearised wall flux leaves a column residual. The mass row shows this
-residual: the redistribution removes it in proportion to mass
-(``vic_redistribute_impl.h:65-71``). **Hypothesis:** the energy residual at
-a sealed wall is round-off. If so, energy could become a face transfer too
-(question to lane R).
+**Kept part:** ``vic.mass_total`` through ``reg.keep(1, "vic.mass_total",
+f)``, requested as ``"vic.mass_total@1"`` (``R.hpp:56-60, 82``). It is the
+dry + species total each face moved after the clamps
+(``vic_redistribute_impl.h:88-89, 144, 172``). The gravity-work remainder
+reads it, and lane I checks that it equals the sum of the two mass posts.
+Lane I also requests ``"vic.mass_dry@1"``. The tracer donor transfer needs
+the implicit dry transfer alone (``meshblock.cpp:786-806``), and the header
+reads parts per face only if they are kept (``R.hpp:9-12``). Lane R is asked
+to confirm in section 11.
 
-**Frame and units.** The two cells across an x1 face share (j, k), so the
-cell frame is the face frame. The solve posts after ``flux2global1_``
-(``implicit_hydro.cpp:561``), in the explicit x1 flux's components. The
-solve computes its transfers A·dt-integrated, in mass per stage
+**Monitor amounts**, through ``reg.cell_amount(name, V du)``
+(``R.hpp:83-84``). Revision 1's ``vic.cell`` and ``vic.mass_clamped`` were
+posts; lane R's header makes them monitor amounts, and lane I adopts that:
+
+- ``vic.cell``: :math:`V_i(du_i - du_{0,i})` for the rows that are not face
+  transfers: x1 momentum, energy without gravity work, and under scheme 9
+  the tangential momenta. The solve still writes ``du`` itself
+  (``vic_redistribute_impl.h:205-225``), so nothing reads this as a field.
+  It is no correctness loss: the only per-cell reader of the correction
+  outside lane I is the ``implicit`` output diagnostic
+  (``output/load_diag_output_data.cpp:220-221``). It keeps
+  ``correction()`` as an output-only accessor (lane O), not a register
+  read.
+- ``vic.mass_clamped``: a floor amount, :math:`V_i` times the divergence of
+  (moved - requested), with the code's sign (``implicit_hydro.cpp:527-528``:
+  ``moved = _mass_corr[IVZ] - requested``). The gravity-work remainder needs
+  no per-face clamp field, because it reads the kept ``vic.mass_total``.
+- ``vic.momentum_t.top`` (scheme 9 only): the top-face value of the prefix
+  sum. **Hypothesis:** it is not zero under scheme 9, because the w-free
+  Coriolis rows pass through the solve (#355). It is posted as the top face
+  of ``vic.momentum_t``, exactly as today's ``axial_x1_source_`` uses it
+  (``gnomonic_equiangle.cpp:541-544``), so lane A reads the same values,
+  and it is also reported here so that the monitor's x1 boundary sum is
+  explained.
+
+**Energy.** Energy stays in ``vic.cell``. It becomes a face transfer
+``vic.energy`` only if the column residual of the linearised wall flux is
+round-off; the mass row shows such a residual, removed in proportion to mass
+(``vic_redistribute_impl.h:65-71``). That condition is a **hypothesis**, as
+in lane R's header (``R.hpp:32-33``). It would be measured by the per-column
+energy residual of the tall-column gate (section 5), not here. The x1
+momentum has a gravity source and wall pressure, so it is never a
+telescoping face transfer.
+
+**Frame and units** (Tianhao's note 14, ``R.hpp:5-8``). The two cells
+across an x1 face share (j, k), so the cell frame is the face frame. Posts
+are made after ``flux2global1_`` (``implicit_hydro.cpp:561``), in the
+explicit x1 flux's global components. The solve computes its transfers
+integrated over area and the stage, in mass per stage
 (``vic_redistribute_impl.h:82-89``), with the stage's full ``dt``: today
 ``hydro_forward.cpp:1641, 1646`` adds ``mc[IVZ] / dt`` to ``area * f1``,
-not ``/ dt_corr``. In revision 2 they are posted in lane C's ``riemann``
-convention, **before stage weights**: the x1 face transfers ``vic.mass_*``
-and ``vic.momentum_t`` as flux densities per unit face area per unit time,
-:math:`M_f / (A_f\,\Delta t)`, with ``face_area1`` and the stage ``dt``.
-``vic.cell`` is posted as a rate per unit volume, ``increment / dt``. The
-register applies the integrator's stage weights (R3); lane I applies none.
-This answers Tianhao's note 14 on lane I and lane R's R-3, pending lane R's
-API. **Hypothesis:** no x1 face the solve posts has :math:`A_f = 0`. A
-spherical-polar column with a face at r = 0 would; lane I would post zero
-there and set a status bit, which is unchecked.
+not ``/ dt_corr``. Each face field is posted as a flux density per unit
+face area per unit time at the step ``dt``, **before stage weights**:
+:math:`f = M_f / (A_f\,\Delta t)`, with ``face_area1``. That is lane C's
+``riemann`` convention and the header's (``R.hpp:5-8``). Lane I applies no
+weight. ``end_stage`` adds :math:`c_s\,\Delta t` times the total, posts
+included, into the FP64 step accumulator (``R.hpp:13-15, 92``). Monitor
+amounts are volume-integrated per stage. **Hypothesis:** no x1 face the
+solve posts has :math:`A_f = 0`. A spherical-polar face at r = 0 would; lane
+I would post zero there and set the column's status bit, which is unchecked.
 
 **Reads.**
 
-- ``GravityWork::apply`` reads the register's explicit total x1 mass before
-  the solve, and the implicit part after it. This replaces the rebuilt
-  ``vertical_mass_flux1`` at ``hydro_forward.cpp:1422-1425``.
-- Coriolis/metric m1 (lane A) reads the final total.
-- The tracer donor transfer reads ``vic.mass_dry``.
-- ``mass_correction()`` and ``correction()`` stop being public.
+- ``GravityWork::apply`` reads ``reg.total(1)`` mass rows (IDN + species)
+  in ``pre_implicit`` for :math:`M^{\rm exp}`, and ``reg.kept(1,
+  "vic.mass_total")`` in ``implicit`` for the remainder (``R.hpp:89-90``).
+  This replaces the rebuilt ``vertical_mass_flux1`` at
+  ``hydro_forward.cpp:1422-1425``.
+- In ``post_implicit``: lane A's m1 reads ``reg.total(1)`` mass rows
+  (explicit + vic, today ``hydro_forward.cpp:1637-1646``); the axial source
+  reads ``vic.momentum_t`` (today ``picorr->correction()``, ``:1668-1669``);
+  the tracer transfer reads ``reg.kept(1, "vic.mass_dry")``.
+- ``mass_correction()`` stops being public. ``correction()`` stays as an
+  output-only accessor for the ``implicit`` diagnostic
+  (``load_diag_output_data.cpp:220-221``, lane O).
 - **Not read by the solve** (Tianhao's note 10). The VIC reads only the
   cell ``w``, the EOS ``gamma``, the solid mask and the explicit ``du``
   (``implicit_hydro.cpp:303-322``). It reads neither the Riemann face
@@ -326,44 +407,63 @@ there and set a status bit, which is unchecked.
 solve. It is the one place a booked energy depends on the registered
 transfer.
 
-**G as one function of the registered x1 mass.** With :math:`M_f` the x1
-mass through face :math:`f` (kg per stage) and cell :math:`i` between faces
-:math:`l` and :math:`u`:
+**G as one function of the registered x1 mass** (W and K written apart,
+Tianhao's note 6). With :math:`M_f` the x1 mass through face :math:`f` in
+the stage and cell :math:`i` between faces :math:`l` and :math:`u`:
 
 .. math::
 
-   G_i[M] = \underbrace{\frac{g_1 (x_u - x_i)\,M_u - g_1 (x_l - x_i)\,M_l}{V_i}}_{W_i[M]}
-          + \underbrace{g_1\sigma_i^2 s_i[\Delta\rho] + g_1(r_{c,i}-x_{1v,i})\Delta\rho_i}_{K_i[\Delta\rho]},
-   \qquad \Delta\rho_i = \frac{M_l - M_u}{V_i}.
+   W_i[M] = \frac{g_1 (x_u - x_i)\,M_u - g_1 (x_l - x_i)\,M_l}{V_i},
+   \qquad
+   K_i[\Delta\rho] = g_1\sigma_i^2\, s_i[\Delta\rho] + g_1(r_{c,i}-x_{1v,i})\,\Delta\rho_i,
 
-- W is ``gravity_work_from_face_mass`` (``gravity_work.hpp:12-24``).
-- K is ``corrected_pe_work`` (``gravity_work_radial.hpp:190-205``); its
-  second term exists only on gnomonic-equiangle (``:172-176``).
+and :math:`G = W[M] + K[\Delta\rho]` with :math:`\Delta\rho_i = (M_l - M_u)/V_i`.
+
+- W is ``gravity_work_from_face_mass`` (``gravity_work.hpp:12-24``). It is
+  local to the two faces of a cell.
+- K is ``corrected_pe_work`` (``gravity_work_radial.hpp:190-205``). The
+  slope :math:`s_i` is the three-point stencil on cells :math:`i-1, i, i+1`,
+  one-sided at the walls (``gravity_work_radial.hpp:76-98``). Its second
+  term exists only on gnomonic-equiangle (``:172-176``).
+- Written on :math:`M` through :math:`\Delta\rho`, K would reach four faces
+  (a five-point row in cells). It is not written that way. **In the
+  operator, K acts on the density unknown** :math:`\delta\rho` (column 0 of
+  each block), which the continuity row gives directly. It enters as three
+  bands on that column (``implicit_hydro.cpp:409-420``), plus the two
+  one-sided wall third points by Woodbury (``:436-472``; per column under
+  #369). The block tridiagonal structure is unchanged.
 - The curved formula at ``hydro_forward.cpp:1453-1465`` equals W
   algebraically:
   :math:`[\Phi_i(M_u-M_l) - (\Phi_u M_u - \Phi_l M_l)]/V_i = [(\Phi_i-\Phi_u)M_u-(\Phi_i-\Phi_l)M_l]/V_i`.
 
-G is linear in M.
+Both parts are linear.
 
-**The energy row equals the booked work by construction.** The linearised
-implicit transfer is
-:math:`M^{\rm lin}_f(\delta q)=\Delta t A_f[\tfrac12(m_{f-}+m_{f+})-\tfrac12B^\rho_f(\delta q_{f+}-\delta q_{f-})]`
-(#288 derivation). V3 assembles the row as
-:math:`R=\sum_f (\partial G/\partial M_f)(\partial M^{\rm lin}_f/\partial\delta q)`.
-The first factor comes from ``GravityWork::rows()``, the same tensors
-``apply()`` uses. The second is the mass row of the assembled ``|A|`` and
-flux Jacobians, which ``vic_gravity_work_impl.h`` already receives as
-``am``/``ap``. The booked total for the stage is
+**The energy row equals the booked work by construction.** The operator's
+energy row is :math:`R = R_W + R_K`:
+
+- :math:`R_W = \sum_f (\partial W/\partial M_f)(\partial M^{\rm lin}_f/\partial\delta q)`,
+  with the linearised transfer
+  :math:`M^{\rm lin}_f(\delta q)=\Delta t A_f[\tfrac12(m_{f-}+m_{f+})-\tfrac12B^\rho_f(\delta q_{f+}-\delta q_{f-})]`
+  (#288 derivation). The first factor is ``GravityWork::rows()`` face
+  weights; the second is the mass row of the assembled ``|A|`` and flux
+  Jacobians (``vic_gravity_work_impl.h:23-48`` receives them as
+  ``am``/``ap``).
+- :math:`R_K = \partial K/\partial \delta\rho`: the three K bands and the
+  two wall third points of ``rows()`` on column 0.
+
+The booked total for the stage is
 
 .. math::
 
    G[M^{\rm exp}] + R\,\delta q + \big(G[M^{\rm imp}] - R\,\delta q\big)
-   = G[M^{\rm exp}+M^{\rm imp}] = G[M^{\rm register}].
+   = G[M^{\rm exp}+M^{\rm imp}] = G[M^{\rm register}],
 
-The last bracket is the one post-solve call. It vanishes wherever no clamp or
-projection acted, because :math:`R\,\delta q = G[M^{\rm lin}(\delta q)]`
-there. It generalises #345's identity for K to W and K together and
-replaces ``implicit_hydro.cpp:522-556`` and ``:569-594``.
+with :math:`M^{\rm imp}` the kept ``vic.mass_total``. The last bracket is the
+one post-solve call. It vanishes wherever no clamp or projection acted. In
+that case :math:`R_W\,\delta q = W[M^{\rm lin}(\delta q)]` and
+:math:`R_K\,\delta q = K[\delta\rho]` with :math:`\delta\rho` the density
+change the transfers make. It generalises #345's identity for K to W and K
+together, and it replaces ``implicit_hydro.cpp:522-556`` and ``:569-594``.
 
 **How the four PRs broke the pairing.** Each time the booked work gained a
 term, the row was edited separately:
@@ -379,17 +479,23 @@ term, the row was edited separately:
   row in f256ab5, and the wall third points only in #345 (wall mode from
   :math:`N\Delta t\approx 119`-149 before).
 
-**Ordering constraints.**
+**Ordering constraints** (lane R's stage order, ``R.hpp:25-28``):
 
-#. The explicit x1 fluxes are posted, and the flux reconciliation of lane R
-   is done, before ``G[M_exp]`` is booked into the RHS.
-#. The w-free Coriolis rows enter ``du`` before the solve (#355 commit 6).
-#. The solve posts before any reader of the final x1 transfer runs (G
-   remainder, m1, tracer transfer).
-#. The register's stage accumulation (R3) takes the posted stage
-   transfer. The solve's own ``dt`` stays stage-weighted for 3 or more
-   stages (``hydro_forward.cpp:1568-1583``), unchanged.
-#. A failed column posts zero transfers and sets its status bit. The
+#. Explicit x1: ``riemann`` (``hydro_forward.cpp:845``), then sedimentation
+   (``:861-866``), then the x1 seam replace (``:882``), then positivity
+   (``:1154-1252``), then the divergence (``:1254``). This is the pin's order,
+   with positivity after the seam average as at ``:1154-1164``. Only after
+   all of it does ``pre_implicit`` book :math:`G[M^{\rm exp}]`.
+#. The w-free Coriolis rows enter ``du`` in ``pre_implicit``, before the
+   solve (#355 commit 6; ``hydro_forward.cpp:1378-1385``).
+#. Every ``vic.*`` post and the ``keep`` are made before ``implicit`` ends,
+   and so before any ``post_implicit`` reader (``hydro_forward.cpp:1618-1680``).
+#. Implicit posts are made after the divergence. They never enter ``du``
+   through the register (``R.hpp:46``), because the solve writes ``du``
+   itself. They do enter the stage total, which ``end_stage`` accumulates
+   (R3). The solve's own ``dt`` stays stage-weighted for 3 or more stages
+   (``hydro_forward.cpp:1568-1583``), unchanged.
+#. A failed column posts zero transfers and sets its own status bit. The
    restore of ``du`` and ``w`` (``implicit_hydro.cpp:606-611``) happens
    before the post.
 
@@ -404,48 +510,64 @@ term, the row was edited separately:
    * - R1 one owner, frame, area weighting
      - Lane I owns no face flux. The solve posts its transfers into the register (this section, "Posts") instead of keeping ``_mass_corr``. Frame: global components after ``flux2global1_`` (``implicit_hydro.cpp:561``). Area: posted per unit face area per unit time, lane C's ``riemann`` convention, before stage weights ("Frame and units").
    * - R2 named increments, declared order, total and parts
-     - The six ``vic.*`` names in the declared order above. Parts are reportable: ``vic.mass_total`` = dry + species (a check), and the register total = explicit + ``vic``.
+     - Three posts in declared order (``vic.mass_dry``, ``vic.mass_species``, ``vic.momentum_t``), two kept parts (``vic.mass_total``, ``vic.mass_dry``), monitor amounts ``vic.cell``, ``vic.mass_clamped`` and ``vic.momentum_t.top``. Parts are reportable through the monitor's per-post amounts (``R.hpp:96-99``); ``vic.mass_total`` = dry + species is checked.
    * - R3 stage weights into the step transfer
-     - Lane I posts the stage transfer. The register accumulates it with the integrator weights (``w2_s * prod w1_t``), the weights the fixer uses today (``hydro_forward.cpp:1682-1691``); that fixer code is deleted (section 10).
+     - Lane I posts the stage transfer, unweighted. ``end_stage`` adds :math:`c_s\,\Delta t` times it, with :math:`c_s = w_{2,s}\prod_{t>s} w_{1,t}`, into the FP64 step accumulator (``R.hpp:13-15``). These are the weights the fixer uses today (``hydro_forward.cpp:1682-1691``); that fixer code is deleted (section 10).
    * - R4 divergence and flux-derived terms read the register
-     - G reads the register's x1 mass, explicit and implicit, and no longer rebuilds ``vertical_mass_flux1`` (``hydro_forward.cpp:1422-1425``). m1 and the tracer transfer read it too. The linearised fluxes inside the operator are its unknowns, not a rebuilt registered flux.
+     - G reads ``total(1)`` and the kept ``vic.mass_total``, and no longer rebuilds ``vertical_mass_flux1`` (``hydro_forward.cpp:1422-1425``). m1, the axial source and the tracer transfer read the register in ``post_implicit``. The linearised fluxes inside the operator are its unknowns, not a rebuilt registered flux.
    * - R5 seams, reconciliation, single-valuedness, rotation in coord
      - N/A for the implicit post: the solve refuses an x1 split (``hydro.cpp:486-491``), so it posts no seam face. The explicit G at an x1 seam reads the reconciled register M; ``apply_seam`` takes the neighbour's Δρ from the existing ghost exchange (``hydro_forward.cpp:1484-1493``). Rotation: the solve calls coord's ``prim2local1_``/``flux2global1_`` and owns none.
    * - R6 device monitor, no host reads in a segment
-     - Lane I contributes, all on device: ``status`` bits, the clamp residual, dry clamp and FP64-fallback meters, and ``GravityWork::potential`` for the E+P term. In-stage host reads go from 6 to 0 (section 7).
+     - Lane I contributes, all on device, to lane R's ``RegisterMonitor`` (``R.hpp:96-104``): the ``cell_amount`` entries; the per-column status, OR-reduced into ``retry_flags()``; the clamp residual, dry clamp and FP64-fallback meters; and ``GravityWork::potential`` for the E+P term. In-stage host reads go from 6 to 0 (section 7).
    * - R7 fixers and floors register what they added
-     - The availability clamps, including the 4096-ulp species keep (``vic_redistribute_impl.h:151-155``), are floors: their change is posted as ``vic.mass_clamped``. The global gravity-work fixer is removed, so there is nothing of it to register.
+     - The availability clamps, including the 4096-ulp species keep (``vic_redistribute_impl.h:151-155``), are floors. Their change is the floor amount ``cell_amount("vic.mass_clamped", ...)`` (``R.hpp:83-84``). The global gravity-work fixer is removed (Cheng, 2026-11-17), so there is nothing of it to register.
    * - R8 FP32 dtype, graph-capturable storage
-     - The solve dtype follows section 6. The posts are written into register storage in the register's dtype. Scratch is fixed per (shape, dtype, device) (section 7).
+     - The solve dtype follows section 6. Posts are in ``Quantity::kFlux``, the stage-total dtype; the step accumulator is FP64 in both precisions (``R.hpp:13-14``). Scratch is fixed per (shape, dtype, device) (section 7).
    * - R9 no added full-field copy per stage
-     - V3 adds no copy. It removes ``w_in = w.clone()`` (``implicit_hydro.cpp:480``) and the ``rx_mass0`` clone (``:421``). ``_du0`` (one ``du``-sized copy, ``:212``) already exists and stays. Memory: the register slots for lane I are (ny + 4) face fields replacing ``_mass_corr`` (nvar cell fields), so the net is ≤ 0. Cost: not measured (**hypothesis**: ≤ the #358 spread).
+     - V3 adds no copy. It removes ``w_in = w.clone()`` (``implicit_hydro.cpp:480``) and the ``rx_mass0`` clone (``:421``). ``_du0`` (one ``du``-sized copy, ``:212``) already exists and stays. Memory: the posts add into the register's existing x1 total, and the two kept parts are 2 face fields. Together they replace ``_mass_corr`` (nvar cell fields), so the net is ≤ 0. **How cost will be measured** (specified, not run): ``examples/jupiter_gcm_dry`` C48 x 100 on one GPU, minimum of 3 interleaved runs of 30 timed steps against the pin, as #358 measured; GPU time of the implicit kernels from a profiler; bytes of the scratch and register slots counted from the shapes. **Hypothesis:** within the #358 spread.
    * - R10 rebuilt, not in restart
-     - Met at the pin and kept. Restart writes the state variables and times only (``restart.cpp:69-100``), not the module buffers. V3's scratch is unregistered and ``ColumnSegments`` and ``GravityWork`` are rebuilt from the grid and the mask.
+     - Met at the pin and kept. Restart writes the ``Variables`` map, the reference and the times (``restart.cpp:26-123``: variables ``:31-38``, reference ``:44-66``, times ``:70-99``), not the module buffers. The register resets at ``begin_stage(0)`` and ``rollback`` (``R.hpp:23-24``). V3's scratch is unregistered and ``ColumnSegments`` and ``GravityWork`` are rebuilt from the grid and the mask.
 
 
 5. Invariants and gates
 -----------------------
 
+Every gate here is **specified, not run**: this round is design only.
+
 **Invariants.**
 
-- I1 rows = apply: for random :math:`\delta q`, ``rows()·δq == apply(M_lin(δq))``
-  to round-off, for every ``X1Measure`` and every solid depth.
+- I1 rows = apply, written apart for W and K (Tianhao's note 6). For random
+  :math:`\delta q`, ``R_W·δq == W[M_lin(δq)]`` and
+  ``R_K·δρ == K[δρ]`` to round-off, for every ``X1Measure`` and every
+  solid depth, with the wall third points included.
 - I2 booked = G[register M] per stage. With the post-solve remainder, the
-  energy increment from gravity equals ``apply`` of the register's total
-  x1 mass.
+  energy increment from gravity equals ``apply`` of ``total(1)`` mass rows
+  at stage end.
 - I3 mass telescoping: ``vic.mass_total`` closes to zero at both walls of
   every fluid segment (the clamp-residual meter, ``implicit_hydro.cpp:495-518``).
-- I4 rest is exact: zero explicit increment gives a correction that is
-  zero bit for bit (``vic_assemble_partial_impl.h:40-41``,
-  ``implicit_hydro.cpp:421-424``).
-- I5 the Jacobian matches a finite difference of the split RHS. This holds
-  because the reference terms do not depend on the state within a stage:
-  ``face_gradient(pressure_base1)`` (``hydro_forward.cpp:837, 1394-1400``)
-  and ``background_force1`` (``:1380-1382``). It is a **hypothesis** for any
-  reference rebuilt from the stage state (#369 ``upward``, #361 FP32 gauge);
-  that question goes to lane C.
+- I4 the correction is linear in the explicit increment (softened from
+  revision 1). The solve maps ``du`` to a correction through a fixed
+  operator, and the only other input terms vanish with ``du``: the m_t
+  fold (``vic_assemble_partial_impl.h:38-41``) and ``rx_tri(rx_mass0)``
+  (``implicit_hydro.cpp:421-424``). So a rest column's correction is of the
+  size of its explicit residual. It is exactly zero only where that
+  residual is exactly zero. Lane C's rest gate is a tolerance
+  (``|v|/c <= 1e-12``, C.rst §5), not zero, so the bound comes from lane C
+  (C-N5).
+- I5 no reference row (rewritten, Tianhao's note 5). The operator is a
+  first-order Roe linearisation of the **full, unsplit** flux on the cell
+  states. It is built from ``CopyPrimitives`` on cell ``w``
+  (``vic_assemble_full_impl.h:53, 73``) and ``RoeAverage``/``FluxJacobian``
+  (``flux_decomposition_impl.h:38-130``), with the full gravity whatever
+  ``non-hydrostatic`` is (``implicit_hydro.cpp:326-329``). It
+  differentiates neither the reconstruction nor the reference. The default
+  reference is rebuilt from each stage's ``w`` (``hydro.cpp:605-607``),
+  before the solve, so within the solve it is a constant of the RHS. A
+  reference row would differentiate a term the operator never models, so
+  none is added. The well-balance is a property of the RHS (lane C); the
+  operator only has to map it as I4 says.
 
-**Gates (existing).**
+**Gates, existing** (specified; each is re-run on the changed PRs):
 
 - the #348 harness: 16 implicit decks x CPU/CUDA, ``hydro_u`` bytes;
 - ``test_conservation_budget`` (E+P rows);
@@ -453,9 +575,14 @@ term, the row was edited separately:
 - #369's "floor == wall" and rest-with-terrain rows;
 - ``test_fp32_implicit.py`` and ``test_fp32_jupiter.py`` (fallback counts).
 
-**Gates (new).** I1 and I2 as unit tests that go RED if one side is edited
-alone. I4 on each reference mode for schemes 1 and 9. A sync-counter test:
-no host read between assemble and post.
+**Gates, new** (specified):
+
+- I1 as two unit tests (W and K) that go RED if one side is edited alone;
+- I2 on a tall column, schemes 1 and 9;
+- I4 on each of lane C's reference modes, with lane C's rest bound;
+- a sync-counter test: no host read between assemble and the last post;
+- a per-column status test: one NaN column is retried in FP64 and the
+  others keep FP32 (section 10(c)).
 
 
 6. FP32 contract
@@ -475,6 +602,51 @@ no host read between assemble and post.
   I chose a second launch over an FP64 path inside the FP32 kernel because
   the K = 2 kernel is already register-bound (#358 runs it at 64 threads).
   The result change is in section 10(c).
+- **Map to lane X's rows** (Tianhao's note 13). The row names are those of
+  lane X's ``PrecisionPolicy`` as lane C cites them (``kPrimitive``,
+  ``kReference``, ``kGauge``, ``kFlux``, ``kRegister``). Lane X has no row
+  for the implicit solve, so ``kImplicit`` below is a proposal for X:
+
+  .. list-table::
+     :header-rows: 1
+
+     * - lane I quantity
+       - X row
+       - FP32 run
+       - FP64 run
+     * - RHS master ``du``, energy offset, ``rhs64``
+       - ``kPrimitive`` / ``kGauge``
+       - FP64
+       - FP64
+     * - solve inputs ``w``, ``gamma`` (cast), blocks a, b, c, delta, z0, z1
+       - ``kImplicit`` (proposed; follows ``implicit-precision``)
+       - FP32 (Cartesian ideal-moist only)
+       - FP64
+     * - the FP64 retry stage
+       - ``kImplicit`` forced FP64
+       - FP64
+       - FP64
+     * - ``GravityWork`` coefficient masters
+       - ``kReference`` (master, cast per use)
+       - FP64 master
+       - FP64
+     * - ``vic.*`` posts and kept parts
+       - ``kFlux`` (stage total)
+       - FP32
+       - FP64
+     * - step accumulator, monitor amounts
+       - ``kRegister``
+       - FP64
+       - FP64
+     * - meters (clamp residual, dry clamp, fallbacks)
+       - accumulation type
+       - FP64 (FP32 on MPS)
+       - FP64
+     * - status
+       - not a float
+       - ``int32``
+       - ``int32``
+
 - **FP64 literals.** The registered FP64 scratch (``implicit_hydro.cpp:126-136``)
   becomes unregistered scratch on ``w.options()``. ``GeoKey`` goes, and
   with it ``implicit_hydro.hpp:141``. That leaves one literal, the MPS-aware
@@ -488,11 +660,28 @@ no host read between assemble and post.
 - **No host read inside the solve segment.** Removed: ``implicit_hydro.cpp:477,
   479, 485, 487``, ``implicit_hydro.hpp:104`` and ``implicit_dispatch.cpp:255``
   (``donor_cap``: an always-run sweep on CPU, device-predicated on CUDA).
-  ``hydro.cpp:530`` moves into the predicate. The 0-d ``int32`` status
-  (``VicStatusBit``) is read once per step by ``check_redo``, which already
+  ``hydro.cpp:530`` moves into the predicate.
+- **Per-column status** (Tianhao's note 8). Each column has its own
+  ``int32`` status ``col_status[nc3, nc2]`` (``VicStatusBit``), written by
+  the column's kernel thread with no atomics. The FP64 retry stage reads
+  ``col_status`` per column as its predicate: a column with
+  ``kVicSingular`` or ``kVicResultNonfinite`` set and ``kVicFp64Retried``
+  clear is retried, and every other column returns. The block status is an
+  OR-reduction of ``col_status`` after the retry. It joins lane R's
+  ``retry_flags()`` (``R.hpp:103``) and X's one step-end read, which already
   reads the latch (``meshblock.cpp:1549-1551``). The failure log
-  (``implicit_hydro.cpp:219-239``) runs on a redo only.
-- **Fixed storage.** a, b, c, delta, z0, z1 and du0 are allocated once per
+  (``implicit_hydro.cpp:219-239``) reads ``col_status`` on a redo only.
+- **dt on the device** (Tianhao's note 12). The skeleton implements this
+  choice: ``VicParams`` carries a device pointer to a 0-d FP64 ``dt``,
+  written before replay, and no host ``double``. Kernels read ``*dt``; the
+  host-side corrected-PE band scaling (``implicit_hydro.cpp:413-419``,
+  ``rx / dt``) becomes a tensor operation with that scalar. Putting ``dt``
+  in the graph key would recapture every step under a CFL-varying ``dt``.
+  The stage weight in the operator's dt (``hydro_forward.cpp:1568-1583``)
+  is a per-stage constant, so it is part of the key, as ``c_s`` is for lane
+  R (``R.hpp:67``).
+- **Fixed storage.** a, b, c, delta, z0, z1, du0, ``col_status`` and the
+  ``dt`` scalar are allocated once per
   (shape, dtype, device) and never ``set_data``-replaced.
   ``ColumnSegments`` and the ``GravityWork`` rows change only when the mask
   version or the grid key changes, which ends a captured segment.
@@ -548,8 +737,10 @@ pyminichem and pydisort are not touched.
 9. Line budget
 --------------
 
-Baseline: 2,655 lines (section 1). The "after" numbers are estimates for the
-design, not counts of written code.
+Baseline: 2,655 lines (section 1), plus 166 lines of ``src/math`` that lane O
+moves into ``src/implicit``. That move is counted as cut by neither lane
+(agreed with Jiachen), so the baseline becomes 2,821. The "after" numbers
+are estimates for the design, not counts of written code.
 
 .. list-table::
    :header-rows: 1
@@ -573,7 +764,7 @@ design, not counts of written code.
      - 37
      - 25
      - -12
-     - 9 stubs become 2; ``kVicFaceWork``, ``kVicDiffusiveCell``, ``kVicCartesianFaceWork``
+     - 9 stubs (:16-24) become 2; ``kVicFaceWork``, ``kVicDiffusiveCell``, ``kVicCartesianFaceWork`` (:32-35)
    * - ``implicit/implicit_dispatch.cpp``
      - 313
      - 200
@@ -583,7 +774,7 @@ design, not counts of written code.
      - 307
      - 90
      - -217
-     - the CUDA copies of the same stubs (:32-289); the launcher, instantiation and registration remain
+     - the CUDA copies of the same stubs (:32-289) and the unused ``cuda_utils.h`` include (:15, lane O's item, counted here only); the launcher, instantiation and registration remain
    * - ``vic_assemble_partial_impl.h`` + ``vic_assemble_full_impl.h``
      - 324
      - 220
@@ -593,7 +784,7 @@ design, not counts of written code.
      - 50
      - 25
      - -25
-     - the Cartesian 0.25 branch (:235-242) and the diffusive-cell branch (:243-247)
+     - the Cartesian 0.25 branch (:29-36) and the diffusive-cell branch (:37-41)
    * - ``implicit/forward_sweep_impl.h``
      - 138
      - 140
@@ -623,16 +814,26 @@ design, not counts of written code.
      - 68
      - 50
      - -18
-     - the ``cell`` and fixer options and checks (:54-64)
+     - the ``cell`` and fixer options and checks (:28-38)
+   * - ``math/lubksb.h`` -> ``implicit/lubksb.h``
+     - 71
+     - 71
+     - 0
+     - moved in by lane O, counted by neither lane; kept as is
+   * - ``math/ludcmp.h`` -> ``implicit/ludcmp.h``
+     - 95
+     - 95
+     - 0
+     - moved in by lane O, counted by neither lane; kept as is (the #361 FP32 pivot lives here)
    * - **total**
-     - **2,655**
-     - **1,867**
-     - **-788 (-29.7%)**
-     - target: at least 20% (at most 2,124)
+     - **2,821**
+     - **2,033**
+     - **-788 (-27.9%)**
+     - target: at least 20% (at most 2,256). Without the move: 2,655 -> 1,867 (-29.7%)
 
 The deletions that rulings (a) and (b) cause outside lane I's files are
 listed by owner in section 10 ("Outside-lane deletions"). They are counted
-in lane R's and lane X's tables, not here. None of their lines is in the
+in lane R's (133), lane X's (124) and lane A's (18) tables, not here. None of their lines is in the
 2,655-line baseline (checked: no range falls in ``src/implicit``,
 ``gravity_work*.hpp`` or ``const_gravity.cpp``), so the lane I total above
 needs no correction.
@@ -696,7 +897,7 @@ round-off; and why.
   (**hypothesis**, gated by #348). Every removed branch is gated on
   ``gw_cell`` or ``gravity_work() == "cell"``
   (``hydro_forward.cpp:579-580, 1427, 1430, 1470, 1505``;
-  ``implicit_hydro.cpp:335-337``).
+  ``implicit_hydro.cpp:335-337``; ``const_gravity.cpp:28-38``).
 - A deck or script that selects ``cell``: refused at Hydro construction. If
   moved to ``face``, it changes **beyond round-off**:
 
@@ -898,34 +1099,35 @@ as proposed)
 11. Open questions to other lanes
 ---------------------------------
 
-**Lane R (Linfeng): register interface.**
+**Lane R (Tianhao, backup owner; header ``543ff84f``).** The header's three
+differences from revision 1 are adopted: ``vic.cell`` and
+``vic.mass_clamped`` become monitor amounts, and energy is a face transfer
+only under the round-off hypothesis. None is a conflict at the pin.
 
-- R-1: Which call posts an x1 face transfer, and are the explicit and
-  ``vic`` parts kept apart?
-- R-2: Do you accept the six ``vic.*`` names in the order of section 4,
-  and can the register hold cell increments next to face transfers?
-- R-3: Lane I now posts flux densities per unit face area, before stage
-  weights, in lane C's convention (section 4). Does the register's API take
-  them like that? Are the momentum components global on the cubed sphere?
-- R-4: Would you take energy as a face transfer if the wall residual turns
-  out to be round-off?
+- R-1: Does the register accept a second kept part, ``"vic.mass_dry@1"``,
+  for the tracer donor transfer (``meshblock.cpp:786-806``)? The header lists
+  only ``vic.mass_total@1`` (``R.hpp:49, 56``).
+- R-2: Do you agree that ``vic.momentum_t`` is posted under scheme 9 as
+  the bottom-up prefix sum, top face included, with the top value also
+  reported as ``vic.momentum_t.top``?
+- R-3: How are dims numbered? Lane I assumes ``1`` = x1, as in
+  ``"vic.mass_total@1"``.
+- R-4: Does ``cell_amount`` take a per-stage, volume-integrated amount, so
+  that the monitor applies ``c_s`` to it as ``end_stage`` does to the posts?
 
-**Lane C (Tianhao): the well-balanced reference row.**
+**Lane C (Tianhao).**
 
-- Is any reference rebuilt from the stage state inside a stage (#369
-  ``upward``, #361 FP32 gauge)? If so, the Jacobian misses that reference's
-  derivative (I5).
-- Do you accept a contract test in place of a row, and should it live in
-  your lane or mine?
+- The rest-state residual bound of ``du`` per reference mode (C-N5), for
+  I4's gate.
+- No reference row: I5 now rests on the operator, not on the split
+  (Tianhao's note 5). Do you agree?
 
-**Lane A (Jiachen): rho w for Coriolis and metric.**
+**Lane A (Jiachen).** Answered in the lane I thread (I-1). m1 reads
+``total(1)`` mass rows in ``post_implicit``, and the axial source reads
+``vic.momentum_t`` under both matrices. Open: whether
+``vic.momentum_t.top`` should enter the axial torque as today.
 
-- Can m1 read the register's final total instead of
-  ``mass_correction()[IVZ]``?
-- Is the cell increment enough for ``axial_x1_source_`` under the full
-  matrix?
-
-**Lane S (Jiheng): wall and solid rows against #369.**
+**Lane S (Xinyue, backup owner): wall and solid rows against #369.**
 
 - Is ``ColumnSegments``, built from ``X1Wall`` depth, the right owner of the
   surface rows and of ``k0``/``k1``?
@@ -934,6 +1136,10 @@ as proposed)
 **Lane X (Xi): FP64 fallback, device status, graph segments.**
 
 - A predicated second FP64 launch, or CUDA conditional nodes?
+- Will you add a ``kImplicit`` precision row (section 6), or should the solve
+  map onto ``kFlux``?
+- ``dt`` as a 0-d device FP64 scalar written before replay (section 7): does
+  that fit your ``GraphKey``?
 - Is one ``int32`` read per step in ``check_redo`` the G3 target?
 - Where do the graph segments start and end around the solve?
 - Should the FP32 restriction to Cartesian ideal-moist stay?
@@ -941,11 +1147,69 @@ as proposed)
 **Cheng:** (c) of section 10. (a) and (b) were ruled on 2026-11-17.
 
 
+11.1 Answers to Tianhao's review notes (lane I, revision 1)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 6 14 80
+
+   * - #
+     - type
+     - answer in revision 2
+   * - 1
+     - agree
+     - Noted. The twelve sections and the R1-R10 table stay; the R table now uses lane R's header.
+   * - 2
+     - agree
+     - Noted. The W pairing is unchanged; section 4 now writes W and K apart.
+   * - 3
+     - agree
+     - Settled by Cheng (2026-11-17). The FOR CHENG markers on (a) and (b) are gone; section 10 keeps the seven tests to re-target with file:line.
+   * - 4
+     - agree
+     - Settled by Cheng. Bitwise for face decks is still a **hypothesis**; its gate (the #348 harness) is specified in section 5.
+   * - 5
+     - conflict, accepted
+     - I5 is rewritten (section 5). The operator is a first-order Roe linearisation of the full flux on cell states, with full gravity at any ``non-hydrostatic`` (``implicit_hydro.cpp:326-329``). The default reference is rebuilt per stage (``hydro.cpp:605-607``). No row is added because the operator never models the split. The finite-difference claim is withdrawn.
+   * - 6
+     - conflict, accepted
+     - W and K are written apart (section 4). K acts on the density unknown as three bands (``implicit_hydro.cpp:409-420``) plus Woodbury wall points (``:436-472``), not as a five-point row in M. I1 is split into W and K tests.
+   * - 7
+     - conflict, accepted
+     - The ``VicColumn`` skeleton gains the K bands and per-column Woodbury data (third points, ``k0``/``k1``), as #369 makes them per column (``_rs_ts``, ``k0`` at its head ``c382f0da``).
+   * - 8
+     - conflict, accepted
+     - Per-column ``col_status[nc3, nc2]``, written without atomics, is the FP64 retry's predicate. The block status is its OR-reduction (section 7; skeleton).
+   * - 9
+     - conflict, accepted
+     - Citations corrected. Revision 1 numbered some files from concatenated output: ``const_gravity.cpp:54-64`` is ``:28-38``; ``vic_gravity_work_impl.h:229-254`` is ``:23-48`` (branches ``:29-36``, ``:37-41``); ``implicit_dispatch.hpp`` flags are ``:32-35`` and stubs ``:16-24``. Restart is ``restart.cpp:26-123``. ``vic.mass_clamped`` uses the code's sign, moved - requested (``implicit_hydro.cpp:527-528``). The skeleton's section references are fixed.
+   * - 10
+     - request, done
+     - Section 4 "Reads": the solve reads neither p* nor the well-balanced reference (``grep`` of ``src/implicit`` finds only the comment at ``implicit_hydro.cpp:326``). ``VicColumn`` has no such operand; changing that needs lanes C and I to agree.
+   * - 11
+     - request, done
+     - ``rho_grav`` is lane R's (``hydro_forward.cpp:825-838, 961-983, 1539-1545``). Lane I reads it only in the cell work it subtracts when ``non-hydrostatic < 1`` (``:1500-1504``), so p* reaches gravity work only through ``rho_grav`` on the ``SNAP_X1_CENTROID_EXACT`` path.
+   * - 12
+     - request, done
+     - ``dt`` is on the device: a 0-d FP64 scalar, read through ``VicParams``. The per-stage weight is part of the graph key (section 7). The skeleton implements this.
+   * - 13
+     - request, done
+     - Section 6 maps every lane I quantity to lane X's rows and proposes ``kImplicit`` for the solve (question to X).
+   * - 14
+     - request, done
+     - Posts are :math:`M_f/(A_f\,\Delta t)` with the step ``dt``, before stage weights, per lane R's header (``R.hpp:5-8``); ``end_stage`` applies :math:`c_s\,\Delta t` (section 4).
+   * - 15
+     - request, done
+     - ``ColumnSegments`` covers any mask (fluid runs per column). The single-segment fast path is taken when each column has one run reaching the top (no solid, or #369's floor). Other shapes keep the pin's per-cell K masking (section 3).
+
+
 12. Skeleton index
 ------------------
 
-``docs/v3/skeleton/I/`` holds declarations and comments only, 298 lines in
-all. It is not part of any build.
+``docs/v3/skeleton/I/`` holds declarations and comments only, 299 lines in
+all (``wc -l``). It is not part of any build. It uses lane R's
+``FluxRegister`` by forward declaration only.
 
 .. list-table::
    :header-rows: 1
@@ -955,10 +1219,10 @@ all. It is not part of any build.
      - replaces (pin)
    * - ``vertical_implicit.hpp``
      - ``VicMatrix``, ``VicStatusBit``, ``VerticalImplicitOptionsImpl``, ``ColumnSegments``, ``VicIncrement``, ``VerticalImplicitImpl``
-     - ``implicit_hydro.hpp``; the ``scheme`` bit test; ``_solve_failed``; ``mass_correction()``/``correction()``
+     - ``implicit_hydro.hpp``; the ``scheme`` bit test; ``_solve_failed`` (by per-column ``col_status``); ``mass_correction()`` (by register posts; ``correction()`` stays output-only)
    * - ``gravity_work.hpp``
      - ``X1Measure``, ``X1GridKey``, ``CentroidSlopeStencil``, ``GravityWorkRows``, ``GravityWork``
      - ``gravity_work.hpp``, ``gravity_work_radial.hpp``; ``_pe_work``, ``_rx_work``, ``_g_work_lo/hi``
    * - ``vic_kernels.hpp``
-     - ``VicParams``, ``VicColumn``, per-column kernel templates, ``CpuColumns``/``CudaColumns``, ``vic_stage``, 2 dispatch stubs
+     - ``VicParams`` (device ``dt``), ``VicColumn`` (W and K rows, per-column Woodbury data and status), per-column kernel templates, ``CpuColumns``/``CudaColumns``, ``vic_stage``, 2 dispatch stubs; its header comment lists the kept files, ``lubksb.h`` and ``ludcmp.h`` included
      - ``implicit_dispatch.hpp``; ``vic_assemble_{partial,full}_impl.h``; ``vic_gravity_work_impl.h``; the stub bodies of ``implicit_dispatch.cpp``/``.cu``

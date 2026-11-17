@@ -5,7 +5,6 @@
 // (HydroImpl::_pe_work, ImplicitHydroImpl::_rx_work, _g_work_lo/_g_work_hi).
 
 #include <string>
-
 #include <torch/torch.h>
 
 namespace snap {
@@ -19,8 +18,7 @@ struct X1GridKey {
   torch::Tensor x1f, x1v;
   int64_t vf = -1, vv = -1;
   int is = 0, ie = 0, lo = 0, hi = 0;
-  double grav1 = 0.;
-  X1Measure measure = X1Measure::none;
+  double grav1 = 0.;  X1Measure measure = X1Measure::none;
   bool operator==(X1GridKey const& o) const;
 };
 
