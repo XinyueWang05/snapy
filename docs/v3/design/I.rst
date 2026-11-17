@@ -142,7 +142,7 @@ Current sites:
    * - ``gravity-work: cell`` (non-Riemann flux split, Roe-diffusion work)
      - ``const_gravity.cpp:54-58``; ``hydro_forward.cpp:579-580, 846-849, 1426-1434``; ``vic_gravity_work_impl.h:243-247``
    * - global E+PE fixer
-     - ``const_gravity.cpp:59-64`` (lane I); lane R: ``hydro.hpp:273-274, 296-314, 480``, ``hydro.cpp:126-135, 138-145, 287-293, 322-327``, ``hydro_forward.cpp:1416-1417, 1507-1533, 1584-1598, 1608, 1682-1693``; lane X: ``meshblock.hpp:217-222``, ``meshblock.cpp:724-730, 993-1004, 1036-1109, 1336-1337, 1477, 1502``, ``mesh.cpp:363, 384-402`` (section 10, table)
+     - ``const_gravity.cpp:59-64`` (lane I); lane R: ``hydro.hpp:273-274, 296-314, 480``, ``hydro.cpp:126-135, 138-145, 287-293, 322-327``, ``hydro_forward.cpp:1416-1417, 1507-1533, 1584-1598, 1608, 1682-1693``; lane X: ``meshblock.hpp:217-222``, ``meshblock.cpp:724-730, 993-1004, 1036-1110, 1336-1337, 1477, 1502``, ``mesh.cpp:363, 384-402`` (section 10, table)
    * - readers of the implicit transfers
      - Coriolis/metric m1 ``hydro_forward.cpp:1637-1653`` (#355); AAM ``:1668-1669``; tracer donor transfer ``meshblock.cpp:786-806``
    * - solid and wall rows
@@ -812,9 +812,9 @@ not counted.
      - 12
      - single-block step-end call (``:992`` stays: it is the ``apply_boundaries`` comment)
    * - X
-     - ``src/mesh/meshblock.cpp:1036-1109``
-     - 74
-     - ``gravity_work_fixer_sums`` and ``apply_gravity_work_fixer``
+     - ``src/mesh/meshblock.cpp:1036-1110``
+     - 75
+     - ``gravity_work_fixer_sums`` and ``apply_gravity_work_fixer``, with the blank line after them (``:1110``, in the set lanes X and O settled)
    * - X
      - ``src/mesh/meshblock.cpp:1336-1337``
      - 2
@@ -829,8 +829,8 @@ not counted.
      - ``defer_gravity_work_fixer``; multi-block sum, reduction and apply
    * - **X total**
      -
-     - **123**
-     - meshblock.hpp 6, meshblock.cpp 97, mesh.cpp 20
+     - **124**
+     - meshblock.hpp 6, meshblock.cpp 98, mesh.cpp 20; the set lanes X and O settled (revision 1 of this table had 123, without the blank ``:1110``)
    * - A
      - ``src/forcing/forcing.hpp:48``
      - 1
