@@ -11,7 +11,7 @@ namespace snap {
 
 class HydroImpl;
 class GravityWork;      // gravity_work.hpp
-class FluxRegister;     // lane R: docs/v3/skeleton/R/flux_register.hpp@543ff84f
+class FluxRegister;     // lane R: docs/v3/skeleton/R/flux_register.hpp@1bc247f9
 
 //! The two VIC matrices; the value is the block size. Replaces the bit test
 //! (scheme >> 3) & 1 of ImplicitOptionsImpl (implicit_hydro.hpp:37).
