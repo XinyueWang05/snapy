@@ -721,7 +721,7 @@ decision, 2026-11-17.**
   ``test_lu_failure.cpp:228`` is deleted, because the option goes.
 
 **Outside-lane deletions (rulings (a), (b)).** These lines are counted in
-lane R's or lane X's table, **not here**. They are exact inclusive ranges at
+lane R's, lane X's or lane A's table, **not here**. They are exact inclusive ranges at
 the pin, one entry per line, with no line in two rows (checked by a script
 over the ranges). "Edited" lines change but are not deleted, and they are
 not counted.
@@ -802,10 +802,30 @@ not counted.
      -
      - **123**
      - meshblock.hpp 6, meshblock.cpp 97, mesh.cpp 20
-   * - not R or X
-     - ``src/forcing/forcing.hpp:48, 56-58, 60-62``; ``python/csrc/pyforcing.cpp:29``; ``python/snapy/forcing.pyi:61-70``
-     - 18
-     - option report, the ``cell`` doc, the ``gravity_work_fixer`` option, its binding and stubs; owner to be named by Cheng (the forcing header and the Python bindings are outside every claimed lane)
+   * - A
+     - ``src/forcing/forcing.hpp:48``
+     - 1
+     - the ``gravity-work-fixer`` line of ``ConstGravityOptionsImpl::report``
+   * - A
+     - ``src/forcing/forcing.hpp:56-58``
+     - 3
+     - the ``"cell"`` entry of the ``gravity_work`` doc comment
+   * - A
+     - ``src/forcing/forcing.hpp:60-62``
+     - 3
+     - the ``gravity_work_fixer`` option and its comment
+   * - A
+     - ``python/csrc/pyforcing.cpp:29``
+     - 1
+     - the ``gravity_work_fixer`` binding
+   * - A
+     - ``python/snapy/forcing.pyi:61-70``
+     - 10
+     - the two ``gravity_work_fixer`` stubs and the blank line before them
+   * - **A total**
+     -
+     - **18**
+     - forcing.hpp 7, pyforcing.cpp 1, forcing.pyi 10; **counted in lane A, not here** (agreed with Jiachen, 2026-11-17)
 
 Edited, not counted:
 
@@ -815,8 +835,8 @@ Edited, not counted:
 - ``hydro_forward.cpp:1412-1414`` (comment), ``:1470`` (``!gw_cell &&``
   goes), ``:1535`` (dedent);
 - ``meshblock.hpp:225``, ``meshblock.cpp:1476`` (comments);
-- ``forcing.hpp:47``, ``pyforcing.cpp:28`` (the line terminator);
-- ``forcing.pyi:54`` (docstring).
+- ``forcing.hpp:47``, ``pyforcing.cpp:28`` (the line terminator) and
+  ``forcing.pyi:54`` (docstring), all lane A's.
 
 ``docs/derivations/curved-gravity-work-weight.md:429, 433, 521, 525`` name
 the fixer and ``cell``; they are docs, not ``src``, and are edited with I-7.
