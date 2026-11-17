@@ -281,9 +281,19 @@ a sealed wall is round-off. If so, energy could become a face transfer too
 **Frame and units.** The two cells across an x1 face share (j, k), so the
 cell frame is the face frame. The solve posts after ``flux2global1_``
 (``implicit_hydro.cpp:561``), in the explicit x1 flux's components. The
-solve's transfers are A·dt-integrated (``vic_redistribute_impl.h:82-89``).
-The explicit flux is per area per time (``hydro_forward.cpp:1641, 1646``).
-The solve converts once, to whatever lane R declares.
+solve computes its transfers A·dt-integrated, in mass per stage
+(``vic_redistribute_impl.h:82-89``), with the stage's full ``dt``: today
+``hydro_forward.cpp:1641, 1646`` adds ``mc[IVZ] / dt`` to ``area * f1``,
+not ``/ dt_corr``. In revision 2 they are posted in lane C's ``riemann``
+convention, **before stage weights**: the x1 face transfers ``vic.mass_*``
+and ``vic.momentum_t`` as flux densities per unit face area per unit time,
+:math:`M_f / (A_f\,\Delta t)`, with ``face_area1`` and the stage ``dt``.
+``vic.cell`` is posted as a rate per unit volume, ``increment / dt``. The
+register applies the integrator's stage weights (R3); lane I applies none.
+This answers Tianhao's note 14 on lane I and lane R's R-3, pending lane R's
+API. **Hypothesis:** no x1 face the solve posts has :math:`A_f = 0`. A
+spherical-polar column with a face at r = 0 would; lane I would post zero
+there and set a status bit, which is unchecked.
 
 **Reads.**
 
@@ -293,6 +303,24 @@ The solve converts once, to whatever lane R declares.
 - Coriolis/metric m1 (lane A) reads the final total.
 - The tracer donor transfer reads ``vic.mass_dry``.
 - ``mass_correction()`` and ``correction()`` stop being public.
+- **Not read by the solve** (Tianhao's note 10). The VIC reads only the
+  cell ``w``, the EOS ``gamma``, the solid mask and the explicit ``du``
+  (``implicit_hydro.cpp:303-322``). It reads neither the Riemann face
+  pressure p* nor the well-balanced reference: ``grep`` for
+  ``face_pressure``, ``pressure_base``, ``rho_grav`` and ``_hydro_ref`` in
+  ``src/implicit`` matches only a comment (``implicit_hydro.cpp:326``). The
+  skeleton keeps that contract: ``VicColumn`` has no p* or reference
+  operand. Changing it needs lane C's and lane I's agreement.
+- **The non-hydrostatic ``rho_grav`` correction** (Tianhao's note 11).
+  It is computed in the x1 sweep (``hydro_forward.cpp:825-832``), shifted by
+  the split reference (``:834-838``) and, under ``SNAP_X1_CENTROID_EXACT``,
+  rebuilt from p* (``:961-983``). It is applied at ``:1539-1545``. All of
+  these lines are in ``hydro_forward.cpp``, outside lane C's moved ranges
+  (C.rst §9: ``:668-820``), so they are lane R's. Lane I's gravity work reads
+  ``rho_grav`` only in the cell work it subtracts when
+  ``non-hydrostatic < 1`` (``:1500-1504``). So p* reaches gravity work
+  indirectly, only on that switch path. The operator itself linearises the
+  full gravity whatever ``non-hydrostatic`` is (``implicit_hydro.cpp:326-329``).
 
 **Corrects.** Only the energy row: the gravity-work remainder after the
 solve. It is the one place a booked energy depends on the registered
@@ -374,7 +402,7 @@ term, the row was edited separately:
    * - requirement
      - where lane I meets it
    * - R1 one owner, frame, area weighting
-     - Lane I owns no face flux. The solve posts its transfers into the register (this section, "Posts") instead of keeping ``_mass_corr``. Frame: global components after ``flux2global1_`` (``implicit_hydro.cpp:561``). Area: the solve converts its A·dt-integrated transfers to the register's declared weighting at the post (question R-3).
+     - Lane I owns no face flux. The solve posts its transfers into the register (this section, "Posts") instead of keeping ``_mass_corr``. Frame: global components after ``flux2global1_`` (``implicit_hydro.cpp:561``). Area: posted per unit face area per unit time, lane C's ``riemann`` convention, before stage weights ("Frame and units").
    * - R2 named increments, declared order, total and parts
      - The six ``vic.*`` names in the declared order above. Parts are reportable: ``vic.mass_total`` = dry + species (a check), and the register total = explicit + ``vic``.
    * - R3 stage weights into the step transfer
@@ -636,9 +664,10 @@ round-off; and why.
    becomes difference-first; and the remainder is computed in another order.
    It should reduce the large-origin cancellation #288 measured (3e-12 at
    r = 7e7 m).
-#. **I-4 posting to the register** (after lane R). Bitwise if the register
-   stores the same A·dt-integrated values that are read today; rounding if
-   it converts units.
+#. **I-4 posting to the register** (after lane R). Rounding
+   (**hypothesis**): the posts are divided by :math:`A_f\,\Delta t` and
+   readers multiply back, where today ``hydro_forward.cpp:1646`` adds
+   ``mc / dt`` directly.
 #. **I-5 device status and the Woodbury 2x2 in the kernel.** Rounding on
    CUDA (**hypothesis**: FMA contraction); bitwise on CPU.
 #. **I-6 per-column FP64 retry.** See (c).
@@ -875,9 +904,9 @@ as proposed)
   ``vic`` parts kept apart?
 - R-2: Do you accept the six ``vic.*`` names in the order of section 4,
   and can the register hold cell increments next to face transfers?
-- R-3: Does the register store A·dt-integrated transfers (kg per stage)
-  or flux densities? Are the momentum components global on the cubed
-  sphere?
+- R-3: Lane I now posts flux densities per unit face area, before stage
+  weights, in lane C's convention (section 4). Does the register's API take
+  them like that? Are the momentum components global on the cubed sphere?
 - R-4: Would you take energy as a face transfer if the wall residual turns
   out to be round-off?
 

@@ -60,7 +60,8 @@ struct ColumnSegments {
 };
 
 //! What one solve posts (I.rst s3). Face transfers are x1 faces [is, ie],
-//! area- and dt-integrated (kg per stage, or momentum per stage), in the
+//! flux densities per unit face area per unit time before stage weights (lane
+//! C riemann convention; vic.cell: rate per volume), in the
 //! frame of the explicit x1 fluxes (after de-projection).
 struct VicIncrement {
   torch::Tensor mass_dry;    //!< [nc3, nc2, nc1+1] clamped dry transfer
