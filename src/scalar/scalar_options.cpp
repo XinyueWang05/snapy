@@ -44,9 +44,8 @@ ScalarOptions ScalarOptionsImpl::from_yaml(std::string const& filename,
   // op->kinetics() = kintera::KineticsOptionsImpl::from_yaml(filename);
 
   if (node["riemann-solver"]) {
-    check_keys(node["riemann-solver"], "scalar/riemann-solver",
-               {"type", "dir"});
-    op->riemann() = RiemannSolverOptionsImpl::from_yaml(node["riemann-solver"]);
+    op->riemann() = RiemannSolverOptionsImpl::from_yaml(
+        node["riemann-solver"], "scalar/riemann-solver");
   } else {
     op->riemann() = RiemannSolverOptionsImpl::create();
     op->riemann()->type() = "upwind";
