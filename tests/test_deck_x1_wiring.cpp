@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 #include <snap/coord/coordinate.hpp>
+#include <snap/coord/x1_centroid.hpp>
 #include <snap/hydro/hydro.hpp>
 #include <snap/mesh/mesh.hpp>
 #include <snap/mesh/meshblock.hpp>
@@ -159,6 +160,38 @@ TEST(DeckX1Wiring, x1rat_deck_installs_the_block_faces_on_recon1) {
 
 TEST(DeckX1Wiring, face_list_deck_installs_the_block_faces_on_recon1) {
   check_stretched(deck("", face_list(1.05)));
+}
+
+// weno5 on a spherical-polar x1: the scalar's x1 rows are hydro's. Without
+// SNAP_X1_CENTROID_EXACT both hold the r^3/3 table; with it (ctest entry
+// test_deck_x1_wiring_x1_centroid) hydro reconstructs plain means and holds
+// none, and so must the scalar
+TEST(DeckX1Wiring, spherical_scalar_x1_faces_follow_hydro) {
+  auto config = deck("");
+  auto at = config.find("type: cartesian");
+  ASSERT_NE(at, std::string::npos);
+  config.replace(at, 15, "type: spherical-polar");
+  at = config.find("x1min: 0, x1max: 16");
+  ASSERT_NE(at, std::string::npos);
+  config.replace(at, 19, "x1min: 1, x1max: 2");
+  auto mesh = make_mesh(config);
+  auto pmb = mesh->blocks.front();
+  ASSERT_EQ(pmb->pcoord->options->type(), "spherical-polar");
+  auto const& hydro = *pmb->phydro->precon1;
+  auto const& scalar = *scalar_x1(pmb->pscalar);
+  for (int k = 0; k < 2; ++k) {
+    auto const& h = k ? hydro.pinterp2 : hydro.pinterp1;
+    auto const& s = k ? scalar.pinterp2 : scalar.pinterp1;
+    ASSERT_EQ(s->has_x1_coeffs(), h->has_x1_coeffs())
+        << h->options->type() << ": the scalar's x1 rows "
+        << (s->has_x1_coeffs() ? "hold" : "lack")
+        << " a table that hydro's do not (SNAP_X1_CENTROID_EXACT="
+        << (x1_centroid_exact_enabled() ? "on" : "off") << ")";
+    if (!h->has_x1_coeffs()) continue;
+    EXPECT_TRUE(torch::equal(s->cm_x1, h->cm_x1)) << h->options->type();
+    EXPECT_TRUE(torch::equal(s->cp_x1, h->cp_x1)) << h->options->type();
+  }
+  expect_forward_runs(pmb);
 }
 
 TEST(DeckX1Wiring, uniform_deck_installs_nothing) {

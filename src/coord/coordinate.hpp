@@ -188,7 +188,9 @@ class CoordinateImpl {
   virtual ~CoordinateImpl() = default;
 
   //! faces for the per-face x1 rows: r^3/3 on a radial x1, whose cells hold
-  //! r^2 dr averages (#280); undefined where the shipped rows are exact
+  //! r^2 dr averages (#280); undefined where the shipped rows are exact.
+  //! Under SNAP_X1_CENTROID_EXACT a spherical-polar x1 reconstruction gets
+  //! plain means (hydro_forward.cpp), so it takes a plain grid's faces.
   torch::Tensor x1_row_faces(std::string const& interp) const;
 
   int il() const { return options->nx1() > 1 ? options->nghost() : 0; }
