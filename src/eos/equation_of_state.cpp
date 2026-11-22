@@ -348,14 +348,10 @@ void EquationOfStateImpl::apply_conserved_limiter_(torch::Tensor const& cons,
   // cons.index(interior).narrow(0, ICY, nvapor) =
   //    pull_neighbors4(cons.index(interior).narrow(0, ICY, nvapor));
 
-  int ny = 0;
-  int nvapor = 0;
-  int ncloud = 0;
-  if (options->thermo()) {
-    nvapor = options->thermo()->vapor_ids().size() - 1;
-    ncloud = options->thermo()->cloud_ids().size();
-    ny = nvapor + ncloud;
-  }
+  auto const& thermo = options->thermo();
+  int nvapor = thermo_vapor_rows(thermo);
+  int ncloud = thermo ? static_cast<int>(thermo->cloud_ids().size()) : 0;
+  int ny = thermo_species_rows(thermo);
 
   if (nvar() > IPR) {
     auto ke = cons_kinetic_energy_(cons, dry_total(cons), ny);
