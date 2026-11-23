@@ -15,12 +15,8 @@ jobs:
       matrix:
         include:
           - {label: v55-diag, sha: 55cb9d0bd939b6a6a69d2459d9bd89ea028e0511, diag: "1", overlay: "", flags: ""}
-          - {label: v55-nocontract, sha: 55cb9d0bd939b6a6a69d2459d9bd89ea028e0511, diag: "", overlay: "", flags: "-ffp-contract=off"}
-          - {label: be018f65, sha: be018f65b9d90b70bac792d2cb95b89266d262a7, diag: "1", overlay: "", flags: ""}
+          - {label: be018f65-diag, sha: be018f65b9d90b70bac792d2cb95b89266d262a7, diag: "1", overlay: "", flags: ""}
           - {label: be018f65-parent-with-test, sha: 2724a51b, diag: "", overlay: be018f65b9d90b70bac792d2cb95b89266d262a7, flags: ""}
-          - {label: 2a54f2ad-before-sqr, sha: 2a54f2ad, diag: "", overlay: "", flags: ""}
-          - {label: ff66651a-sqr, sha: ff66651a, diag: "", overlay: "", flags: ""}
-          - {label: fix1, sha: e6e6811e2c82a5863cd7a1b46afe3dd9aa330398, diag: "", overlay: "", flags: ""}
     name: probe (${{ matrix.label }})
     steps:
       - uses: actions/checkout@v4
@@ -60,7 +56,15 @@ jobs:
           nm -m build/tests/test_aneos_gamma.release | grep -i ANEOSThermoImpl | c++filt | head -20 || true
       - name: test_aneos_gamma
         if: always()
-        run: cd build/tests && ./test_aneos_gamma.release > out.txt 2>&1 && rc=0 || rc=$?; echo "test_aneos_gamma rc=$rc"; grep -vE "^frame #([3-9][0-9]|[1-9][0-9][0-9])" out.txt | head -80
+        run: |
+          cd build/tests
+          ./test_aneos_gamma.release > out.txt 2>&1 && rc=0 || rc=$?
+          echo "test_aneos_gamma rc=$rc"
+          grep -vE '^frame [#]([3-9][0-9]|[1-9][0-9][0-9])' out.txt | head -80
       - name: test_fp32_typed_constants
         if: always()
-        run: cd build/tests && ./test_fp32_typed_constants.release > out2.txt 2>&1 && rc=0 || rc=$?; echo "test_fp32_typed_constants rc=$rc"; grep -E "Failure|Which is|lmars|OK|FAILED|PASSED|fused" out2.txt | head -40
+        run: |
+          cd build/tests
+          ./test_fp32_typed_constants.release > out2.txt 2>&1 && rc=0 || rc=$?
+          echo "test_fp32_typed_constants rc=$rc"
+          grep -E 'Failure|Which is|lmars|OK|FAILED|PASSED|fused' out2.txt | head -40
