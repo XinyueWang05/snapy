@@ -1,0 +1,133 @@
+name: macOS MPS probe
+
+# THROWAWAY platform-only diagnosis (ci/macos-mps-probe, not for merge): one
+# macOS job at 939f7928 that runs only test_mps_matches_cpu_python, with the
+# test patched in the runner workspace to print the full Python and C++ stack
+# of the first failing case, "rest". Build and install steps are the macOS
+# leg of ci.yml at 939f7928, unchanged.
+on:
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.11"
+  BUILD_TYPE: Release
+
+jobs:
+  mps-probe:
+    runs-on: macOS-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Probe commit
+        run: |
+          git log -2 --format='%H %P %s'
+          test "$(git rev-parse HEAD^)" = 939f7928398f302080cc34aee6df059e883e830d
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Python dependencies
+        run: |
+          pip install wheel numpy pyyaml pytest netcdf4
+          pip install 'torch==2.10.0'
+          pip install setuptools-scm 'pyharp>=2.7.17'
+
+      - name: Install NetCDF
+        run: |
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
+          # each hostname lookup on this runner takes 35 s; torchrun makes several
+          sudo scutil --set HostName localhost
+          echo 'import socket; socket.getfqdn = lambda name="": name or "localhost"' \
+            > "$(python -c 'import site; print(site.getsitepackages()[0])')/sitecustomize.py"
+
+      - name: Install kintera 2.6.13
+        run: pip install 'kintera==2.6.13'
+
+      - name: Versions
+        run: |
+          python -c "import torch, kintera; print('torch', torch.__version__, 'kintera', kintera.__version__, 'mps', torch.backends.mps.is_available())"
+
+      - name: Configure CMake
+        run: |
+          cmake -B ${{ github.workspace }}/build \
+                -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+                -DCUDA=OFF \
+                -DNETCDF=ON \
+                -DBUILD_TESTS=ON \
+                -DFULL_TESTS=OFF \
+                -DSNAPY_TEST_PYTHONPATH="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+
+      - name: Build
+        run: cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 3
+
+      - name: Install the project
+        run: pip install --no-build-isolation --no-deps .
+
+      # Patches the runner's copy only: compare() keeps one line of the
+      # exception; for "rest" it now prints traceback.format_exc() in full
+      # (with TORCH_SHOW_CPP_STACKTRACES=1 the C++ stack is in the message),
+      # writes it to mps-probe-traceback.txt and stops the test with exit 3.
+      - name: Probe patch (rest prints its full stack)
+        run: |
+          python - tests/test_mps_matches_cpu.py <<'EOF'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          old = (
+              "    except Exception as e:  # a missing kernel or a float64 on MPS\n"
+              "        return name, math.inf, math.nan, str(e).splitlines()[0][:160], tol\n")
+          new = (
+              "    except Exception as e:  # a missing kernel or a float64 on MPS\n"
+              "        if name == \"rest\":  # PROBE (ci/macos-mps-probe)\n"
+              "            import traceback\n"
+              "            tb = traceback.format_exc()\n"
+              "            sys.stdout.flush()\n"
+              "            print(\"===== PROBE rest traceback begin =====\", file=sys.stderr)\n"
+              "            print(tb, file=sys.stderr)\n"
+              "            print(\"===== PROBE rest traceback end =====\", file=sys.stderr, flush=True)\n"
+              "            with open(os.environ[\"PROBE_TRACE_FILE\"], \"w\") as f:\n"
+              "                f.write(tb)\n"
+              "            sys.exit(3)\n"
+              "        return name, math.inf, math.nan, str(e).splitlines()[0][:160], tol\n")
+          assert src.count(old) == 1, "probe anchor not found exactly once"
+          open(path, "w").write(src.replace(old, new))
+          EOF
+          git diff -- tests/test_mps_matches_cpu.py
+
+      - name: test_mps_matches_cpu_python
+        shell: bash
+        env:
+          TORCH_SHOW_CPP_STACKTRACES: "1"
+          PYTHONUNBUFFERED: "1"
+          PROBE_TRACE_FILE: ${{ github.workspace }}/mps-probe-traceback.txt
+        run: |
+          cd ${{ github.workspace }}/build/tests
+          set +e
+          ctest -V --output-on-failure -R '^test_mps_matches_cpu_python$' 2>&1 \
+            | tee ${{ github.workspace }}/mps-probe.log
+          rc=${PIPESTATUS[0]}
+          echo "ctest rc=$rc"
+          if [[ -f ${{ github.workspace }}/mps-probe-traceback.txt ]]; then
+            echo "----- mps-probe-traceback.txt -----"
+            cat ${{ github.workspace }}/mps-probe-traceback.txt
+          else
+            echo "PROBE: rest raised nothing (no traceback file)"
+          fi
+          exit $rc
+
+      - name: Upload probe log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-mps-probe-log
+          path: |
+            ${{ github.workspace }}/mps-probe.log
+            ${{ github.workspace }}/mps-probe-traceback.txt
+          if-no-files-found: warn
