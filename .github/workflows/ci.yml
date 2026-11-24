@@ -3,6 +3,11 @@ name: Continuous Integration
 # THROWAWAY platform-only diagnosis (ci/macos-mps-bisect): test_mps_matches_cpu_python on macOS at three v3/final shas
 on:
   workflow_dispatch:
+    inputs:
+      shas:
+        description: "JSON list of full commit shas to probe (must be in this branch's history or fetchable from UCzhangxi/snapy)"
+        required: false
+        default: '["833aca420fdbde69b49093e0d2f56fa31eb2ec7f", "6529741a6c6330f1eacf89a13fb147c2ad185253", "70f6e15e44c70f76c1dc180007366a3e7a8d1a18"]'
 
 env:
   PYTHON_VERSION: "3.11"
@@ -13,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sha: [833aca420fdbde69b49093e0d2f56fa31eb2ec7f, 6529741a6c6330f1eacf89a13fb147c2ad185253, 70f6e15e44c70f76c1dc180007366a3e7a8d1a18]
+        sha: ${{ fromJSON(inputs.shas || '["833aca420fdbde69b49093e0d2f56fa31eb2ec7f", "6529741a6c6330f1eacf89a13fb147c2ad185253", "70f6e15e44c70f76c1dc180007366a3e7a8d1a18"]') }}
     name: mps (${{ matrix.sha }})
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +29,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: checkout probe commit
         run: |
+          git cat-file -e ${{ matrix.sha }}^{commit} 2>/dev/null || git fetch -q https://github.com/UCzhangxi/snapy.git ${{ matrix.sha }} || git fetch -q https://github.com/cshsgy/snapy.git ${{ matrix.sha }}
           git checkout -f ${{ matrix.sha }}
           git log -1 --format='probe commit %H %s'
       - name: deps (as the commit's ci.yml macOS job)
