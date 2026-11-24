@@ -1,184 +1,45 @@
 name: Continuous Integration
 
+# THROWAWAY platform-only diagnosis (ci/macos-mps-bisect): test_mps_matches_cpu_python on macOS at three v3/final shas
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
-  push:
-    branches: [main]
 
 env:
   PYTHON_VERSION: "3.11"
-  BUILD_TYPE: Release
 
 jobs:
-  pre-commit:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install style checkers
-        run: pip install --user cpplint cppcheck clang-format==20.1.4
-
-      - name: Cache pre-commit
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pre-commit
-          key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pre-commit-
-
-      - name: Run pre-commit
-        uses: pre-commit/action@v3.0.1
-
-  build-and-test:
-    needs: pre-commit
-    runs-on: ${{ matrix.os }}
+  mps:
+    runs-on: macOS-latest
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macOS-latest]
+        sha: [833aca420fdbde69b49093e0d2f56fa31eb2ec7f, 6529741a6c6330f1eacf89a13fb147c2ad185253, 70f6e15e44c70f76c1dc180007366a3e7a8d1a18]
+    name: mps (${{ matrix.sha }})
     steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: pyproject.toml
-
-      - name: Install Python dependencies
+      - name: checkout probe commit
+        run: |
+          git checkout -f ${{ matrix.sha }}
+          git log -1 --format='probe commit %H %s'
+      - name: deps (as the commit's ci.yml macOS job)
         run: |
           pip install wheel numpy pyyaml pytest netcdf4
           pip install 'torch==2.10.0'
           pip install setuptools-scm 'pyharp>=2.7.17'
-
-      - name: Install NetCDF
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y libnetcdf-dev libucx-dev nco autoconf automake libtool pkg-config
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
-            # each hostname lookup on this runner takes 35 s; torchrun makes several
-            sudo scutil --set HostName localhost
-            echo 'import socket; socket.getfqdn = lambda name="": name or "localhost"' \
-              > "$(python -c 'import site; print(site.getsitepackages()[0])')/sitecustomize.py"
-          fi
-
-      # 2.6.12 prepares the moist column's thermo state on MPS (kintera #158);
-      # 2.6.11 asserts in PyTorch's dispatcher at the step-start prepare() that
-      # S-K2 added, which is what the MPS column cases hit. 2.6.13 (kintera
-      # #159) uses the exact SI Rgas (8.31446261815324 for 8.31446, 3.1e-7):
-      # moist dump fields move by up to 1e-9 relative, and the seam test's
-      # energy flux sum by 7.6e-7 (its reference is re-recorded); pinned
-      # exactly so every leg compares like for like.
-      - name: Install kintera 2.6.13
-        run: pip install 'kintera==2.6.13'
-
-      - name: Install commux UCX backend
-        if: runner.os == 'Linux'
-        run: |
-          pip install 'commux>=0.1.4' 'pinc>=0.2.0'
-          python -c "import commux; commux.register(); print('commux import OK')"
-
-      - name: Configure CMake
-        run: |
-          cmake -B ${{ github.workspace }}/build \
-                -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-                -DCUDA=OFF \
-                -DNETCDF=ON \
-                -DBUILD_TESTS=ON \
-                -DFULL_TESTS=${{ github.event_name != 'pull_request' && runner.os == 'Linux' && 'ON' || 'OFF' }} \
-                -DSNAPY_TEST_PYTHONPATH="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
-
-      - name: Build
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 4
-          elif [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 3
-          else
-            cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 3 \
-                  --target test_eos.release test_plm.release test_gloo_one_tensor.release
-          fi
-
-      - name: Install the project
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
+          pip install 'kintera==2.6.13'
+          python -c "import torch, kintera; print('torch', torch.__version__, 'kintera', kintera.__version__, 'mps', torch.backends.mps.is_available())"
+      - name: install the project
         run: pip install --no-build-isolation --no-deps .
-
-      - name: Run C++ & Pybind tests
+      - name: test_mps_matches_cpu_python
         run: |
-          cd ${{ github.workspace }}/build/tests
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            ctest --output-on-failure -E '^test_shallow_xy_decomp$'
-          elif [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            ctest --output-on-failure -E '^(test_straka|test_shallow_xy|test_shallow_splash|test_shock_cpu|test_run_hydro_cpu|test_mesh_multi_block\.release)$'
-          else
-            ctest --output-on-failure \
-                  -R '^(test_(eos|plm|gloo_one_tensor)\.release|test_python_import_path_python)$'
-          fi
-
-  # The bitwise configuration: no FMA contraction and ATen's portable CPU
-  # kernels, so a sum is formed in the same order on every runner. Results
-  # then depend on the scheme alone, and a refactor that claims "bitwise"
-  # can be checked here. GitHub runners have no GPU; the CUDA half of this
-  # configuration (-DCMAKE_CUDA_FLAGS=--fmad=false) runs on a local or
-  # self-hosted GPU machine.
-  bitwise-cpu:
-    needs: pre-commit
-    runs-on: ubuntu-latest
-    env:
-      ATEN_CPU_CAPABILITY: default
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: pyproject.toml
-
-      - name: Install dependencies
-        run: |
-          pip install wheel numpy pyyaml pytest netcdf4
-          pip install 'torch==2.10.0'
-          pip install setuptools-scm 'pyharp>=2.7.17'
-          sudo apt-get update
-          sudo apt-get install -y libnetcdf-dev libucx-dev nco autoconf automake libtool pkg-config
-          pip install 'commux>=0.1.4' 'pinc>=0.2.0'
-
-      - name: Install kintera 2.6.13
-        run: pip install 'kintera==2.6.13'
-
-      - name: Configure CMake
-        run: |
-          cmake -B ${{ github.workspace }}/build \
-                -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-                -DCMAKE_CXX_FLAGS="-ffp-contract=off" \
-                -DCUDA=OFF \
-                -DNETCDF=ON \
-                -DBUILD_TESTS=ON \
-                -DSNAPY_TEST_PYTHONPATH="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
-
-      - name: Build
-        run: cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 4
-
-      - name: Install the project
-        # the bindings link the library built above; CFLAGS reaches their own glue
-        run: CFLAGS="-ffp-contract=off" pip install --no-build-isolation --no-deps .
-
-      - name: Run C++ & Pybind tests
-        run: |
-          cd ${{ github.workspace }}/build/tests
-          ctest --output-on-failure -E '^test_shallow_xy_decomp$'
+          cd tests
+          python test_mps_matches_cpu.py > out.txt 2>&1 && rc=0 || rc=$?
+          echo "test_mps_matches_cpu rc=$rc"
+          cat out.txt | tail -60
+          exit $rc
