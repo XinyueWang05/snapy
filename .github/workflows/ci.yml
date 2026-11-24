@@ -1,53 +1,31 @@
 name: Continuous Integration
 
+# THROWAWAY platform-only diagnosis (ci/macos-mps-probe, not for merge): this
+# branch's ci.yml is replaced by one
+# macOS job at 939f7928 that runs only test_mps_matches_cpu_python, with the
+# test patched in the runner workspace to print the full Python and C++ stack
+# of the first failing case, "rest". Build and install steps are the macOS
+# leg of ci.yml at 939f7928, unchanged.
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
-  push:
-    branches: [main]
 
 env:
   PYTHON_VERSION: "3.11"
   BUILD_TYPE: Release
 
 jobs:
-  pre-commit:
-    runs-on: ubuntu-latest
+  mps-probe:
+    runs-on: macOS-latest
     steps:
       - name: Check out code
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          fetch-depth: 2
 
-      - name: Install style checkers
-        run: pip install --user cpplint cppcheck clang-format==20.1.4
-
-      - name: Cache pre-commit
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pre-commit
-          key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pre-commit-
-
-      - name: Run pre-commit
-        uses: pre-commit/action@v3.0.1
-
-  build-and-test:
-    needs: pre-commit
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: true
-      matrix:
-        os: [ubuntu-latest, macOS-latest]
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
+      - name: Probe commit
+        run: |
+          git log -2 --format='%H %P %s'
+          test "$(git rev-parse HEAD^)" = 939f7928398f302080cc34aee6df059e883e830d
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -64,32 +42,18 @@ jobs:
 
       - name: Install NetCDF
         run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y libnetcdf-dev libucx-dev nco autoconf automake libtool pkg-config
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
-            # each hostname lookup on this runner takes 35 s; torchrun makes several
-            sudo scutil --set HostName localhost
-            echo 'import socket; socket.getfqdn = lambda name="": name or "localhost"' \
-              > "$(python -c 'import site; print(site.getsitepackages()[0])')/sitecustomize.py"
-          fi
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install netcdf nco
+          # each hostname lookup on this runner takes 35 s; torchrun makes several
+          sudo scutil --set HostName localhost
+          echo 'import socket; socket.getfqdn = lambda name="": name or "localhost"' \
+            > "$(python -c 'import site; print(site.getsitepackages()[0])')/sitecustomize.py"
 
-      # 2.6.12 prepares the moist column's thermo state on MPS (kintera #158);
-      # 2.6.11 asserts in PyTorch's dispatcher at the step-start prepare() that
-      # S-K2 added, which is what the MPS column cases hit. 2.6.13 (kintera
-      # #159) uses the exact SI Rgas (8.31446261815324 for 8.31446, 3.1e-7):
-      # moist dump fields move by up to 1e-9 relative, and the seam test's
-      # energy flux sum by 7.6e-7 (its reference is re-recorded); pinned
-      # exactly so every leg compares like for like.
       - name: Install kintera 2.6.13
         run: pip install 'kintera==2.6.13'
 
-      - name: Install commux UCX backend
-        if: runner.os == 'Linux'
+      - name: Versions
         run: |
-          pip install 'commux>=0.1.4' 'pinc>=0.2.0'
-          python -c "import commux; commux.register(); print('commux import OK')"
+          python -c "import torch, kintera; print('torch', torch.__version__, 'kintera', kintera.__version__, 'mps', torch.backends.mps.is_available())"
 
       - name: Configure CMake
         run: |
@@ -98,87 +62,73 @@ jobs:
                 -DCUDA=OFF \
                 -DNETCDF=ON \
                 -DBUILD_TESTS=ON \
-                -DFULL_TESTS=${{ github.event_name != 'pull_request' && runner.os == 'Linux' && 'ON' || 'OFF' }} \
+                -DFULL_TESTS=OFF \
                 -DSNAPY_TEST_PYTHONPATH="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 
       - name: Build
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 4
-          elif [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 3
-          else
-            cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 3 \
-                  --target test_eos.release test_plm.release test_gloo_one_tensor.release
-          fi
+        run: cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 3
 
       - name: Install the project
         run: pip install --no-build-isolation --no-deps .
 
-      - name: Run C++ & Pybind tests
+      # Patches the runner's copy only: compare() keeps one line of the
+      # exception; for "rest" it now prints traceback.format_exc() in full
+      # (with TORCH_SHOW_CPP_STACKTRACES=1 the C++ stack is in the message),
+      # writes it to mps-probe-traceback.txt and stops the test with exit 3.
+      - name: Probe patch (rest prints its full stack)
+        run: |
+          python - tests/test_mps_matches_cpu.py <<'EOF'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          old = (
+              "    except Exception as e:  # a missing kernel or a float64 on MPS\n"
+              "        return name, math.inf, math.nan, str(e).splitlines()[0][:160], tol\n")
+          new = (
+              "    except Exception as e:  # a missing kernel or a float64 on MPS\n"
+              "        if name == \"rest\":  # PROBE (ci/macos-mps-probe)\n"
+              "            import traceback\n"
+              "            tb = traceback.format_exc()\n"
+              "            sys.stdout.flush()\n"
+              "            print(\"===== PROBE rest traceback begin =====\", file=sys.stderr)\n"
+              "            print(tb, file=sys.stderr)\n"
+              "            print(\"===== PROBE rest traceback end =====\", file=sys.stderr, flush=True)\n"
+              "            with open(os.environ[\"PROBE_TRACE_FILE\"], \"w\") as f:\n"
+              "                f.write(tb)\n"
+              "            sys.exit(3)\n"
+              "        return name, math.inf, math.nan, str(e).splitlines()[0][:160], tol\n")
+          assert src.count(old) == 1, "probe anchor not found exactly once"
+          open(path, "w").write(src.replace(old, new))
+          EOF
+          git diff -- tests/test_mps_matches_cpu.py
+
+      - name: test_mps_matches_cpu_python
+        shell: bash
+        env:
+          TORCH_SHOW_CPP_STACKTRACES: "1"
+          PYTHONUNBUFFERED: "1"
+          PROBE_TRACE_FILE: ${{ github.workspace }}/mps-probe-traceback.txt
         run: |
           cd ${{ github.workspace }}/build/tests
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            ctest --output-on-failure -E '^test_shallow_xy_decomp$'
-          elif [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            ctest --output-on-failure -E '^(test_straka|test_shallow_xy|test_shallow_splash|test_shock_cpu|test_run_hydro_cpu|test_mesh_multi_block\.release)$'
+          set +e
+          ctest -V --output-on-failure -R '^test_mps_matches_cpu_python$' 2>&1 \
+            | tee ${{ github.workspace }}/mps-probe.log
+          rc=${PIPESTATUS[0]}
+          echo "ctest rc=$rc"
+          if [[ -f ${{ github.workspace }}/mps-probe-traceback.txt ]]; then
+            echo "----- mps-probe-traceback.txt -----"
+            cat ${{ github.workspace }}/mps-probe-traceback.txt
           else
-            ctest --output-on-failure \
-                  -R '^(test_(eos|plm|gloo_one_tensor)\.release|test_python_import_path_python)$'
+            echo "PROBE: rest raised nothing (no traceback file)"
           fi
+          exit $rc
 
-  # The bitwise configuration: no FMA contraction and ATen's portable CPU
-  # kernels, so a sum is formed in the same order on every runner. Results
-  # then depend on the scheme alone, and a refactor that claims "bitwise"
-  # can be checked here. GitHub runners have no GPU; the CUDA half of this
-  # configuration (-DCMAKE_CUDA_FLAGS=--fmad=false) runs on a local or
-  # self-hosted GPU machine.
-  bitwise-cpu:
-    needs: pre-commit
-    runs-on: ubuntu-latest
-    env:
-      ATEN_CPU_CAPABILITY: default
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Upload probe log
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: "pip"
-          cache-dependency-path: pyproject.toml
-
-      - name: Install dependencies
-        run: |
-          pip install wheel numpy pyyaml pytest netcdf4
-          pip install 'torch==2.10.0'
-          pip install setuptools-scm 'pyharp>=2.7.17'
-          sudo apt-get update
-          sudo apt-get install -y libnetcdf-dev libucx-dev nco autoconf automake libtool pkg-config
-          pip install 'commux>=0.1.4' 'pinc>=0.2.0'
-
-      - name: Install kintera 2.6.13
-        run: pip install 'kintera==2.6.13'
-
-      - name: Configure CMake
-        run: |
-          cmake -B ${{ github.workspace }}/build \
-                -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-                -DCMAKE_CXX_FLAGS="-ffp-contract=off" \
-                -DCUDA=OFF \
-                -DNETCDF=ON \
-                -DBUILD_TESTS=ON \
-                -DSNAPY_TEST_PYTHONPATH="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
-
-      - name: Build
-        run: cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel 4
-
-      - name: Install the project
-        # the bindings link the library built above; CFLAGS reaches their own glue
-        run: CFLAGS="-ffp-contract=off" pip install --no-build-isolation --no-deps .
-
-      - name: Run C++ & Pybind tests
-        run: |
-          cd ${{ github.workspace }}/build/tests
-          ctest --output-on-failure -E '^test_shallow_xy_decomp$'
+          name: macos-mps-probe-log
+          path: |
+            ${{ github.workspace }}/mps-probe.log
+            ${{ github.workspace }}/mps-probe-traceback.txt
+          if-no-files-found: warn
